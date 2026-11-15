@@ -36,7 +36,8 @@ Create freely; **tag immediately** — an untagged qube is what policy refuses, 
 | `qvm-pool info` | **PASS** | `qvm-pool info vm-pool` reports current usage and free space |
 | Start/Shutdown/Kill guests | **PASS** | ACPI `qvm-shutdown` recovers a headless-but-running guest; a hard kill mid-driver-transition can leave it unbootable |
 | Screenshots per window | **PASS** | `tools/qtest shot` → tar of `win-N.png`. An EMPTY tar ≠ "no windows" |
-| Whole-desktop capture | PASS but **restricted** | `qtest fullshot` photographs every qube. Only for override-redirect surfaces / dom0 compositing |
+| Override-redirect windows + dom0 bubbles, each its own rectangle | **PASS** (dom0/19 installed 2026-11-15, check PASSED; `qtest popups` rc 0 from here) | `tools/qtest popups` → `pop-N.png` + manifest (rule per capture: `vm-override`, `dom0-notification`). The route for toasts, menus, tooltips, the drag image |
+| Whole-desktop capture | PASS but **restricted** | `qtest fullshot` photographs every qube. Only for dom0 compositing; override-redirect surfaces go through `qtest popups` |
 | netvm attach/detach (live) | **PASS** | Templates stay `netvm=''`; AppVMs/StandaloneVMs get one for network tests |
 | `gh` CLI: run list / download | **PASS** | CI packages come from `gh run download -n qwt-improved-setup` |
 | `git push origin` | **PASS** | Public repo `arkenoi/qubes-win-idd-driver` |
