@@ -5134,6 +5134,9 @@ function Invoke-Stage2 {
                     Copy-Item -LiteralPath $qSink -Destination $qSinkBin -Force
                 }
                 Copy-Item -LiteralPath $quiet -Destination $qBin -Force
+                # PT2H, the update tasks' bound: the guard's work takes seconds, so only a hang reaches the limit, and
+                # its stop (event 329) is what the death reporter tells dom0. PT5M was reached by PowerShell's own start
+                # on a slow boot.
                 $qXml = @"
 <?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
@@ -5143,7 +5146,7 @@ function Invoke-Stage2 {
   <Settings>
     <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
     <StartWhenAvailable>true</StartWhenAvailable>
-    <ExecutionTimeLimit>PT5M</ExecutionTimeLimit>
+    <ExecutionTimeLimit>PT2H</ExecutionTimeLimit>
     <AllowHardTerminate>true</AllowHardTerminate>
     <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
     <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
