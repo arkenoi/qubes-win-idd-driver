@@ -67,6 +67,7 @@ on:
       - 'packaging/patch-installer-drop-prepareprivateimg.ps1'
       - 'packaging/patch-installer-serialize-services.ps1'
       - 'packaging/patch-installer-keep-pv-drivers.ps1'
+      - 'packaging/patch-installer-remove-netsetup.ps1'
       - '.github/workflows/qwt-full.yml'
       # The user-session helpers are BUILT here and staged into the setup tree's bin\ - a
       # source change to either must rebuild them or the shipped helper goes stale (the
@@ -246,6 +247,18 @@ jobs:
           $ws = $env:GITHUB_WORKSPACE
           & "$ws\packaging\patch-installer-keep-pv-drivers.ps1" -WxsPath "$ws\installer-src\vs2022\installer\Package.wxs"
           Select-String -Path "$ws\installer-src\vs2022\installer\Package.wxs" -Pattern 'QWTNG_PVDISKUNPLUG|QwtngPvDiskUnplug' | ForEach-Object { "  $($_.Line.Trim())" }
+
+      # A REMOVAL STOPS AND DELETES QwtngNetSetup BEFORE windows-utils.dll GOES (GWECK-STATUS row 53). The service is created
+      # by Install-QwtImproved.ps1 after msiexec, so stock's removal left it registered, restarting into DllNotFoundException
+      # and reported to dom0 at every death. One ServiceControl row beside stock's QdbDaemon control; the script FAILS the
+      # build if it does not apply.
+      - name: "Stop and delete QwtngNetSetup on removal - a ServiceControl row"
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ws = $env:GITHUB_WORKSPACE
+          & "$ws\packaging\patch-installer-remove-netsetup.ps1" -WxsPath "$ws\installer-src\vs2022\installer\CoreComponents.wxs"
+          Select-String -Path "$ws\installer-src\vs2022\installer\CoreComponents.wxs" -Pattern 'QwtngNetSetup' | ForEach-Object { "  $($_.Line.Trim())" }
       - name: Shadow every set-version script with the QWT-NG stamper; wire one version into every shipped binary
         shell: pwsh
         run: |
