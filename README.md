@@ -21,82 +21,65 @@ Anywhere this README says "stock", it means unmodified upstream QWT 4.2.2 as shi
 
 ## Download
 
-Release **[v4.3.43-agent414cbd1](https://github.com/arkenoi/qubes-win-idd-driver/releases/tag/v4.3.43-agent414cbd1)** — agent `414cbd1`, package `4.3.43`, built from commit `512c2952`. See
-[`docs/RELEASE-NOTES-4.3.43.md`](docs/RELEASE-NOTES-4.3.43.md) for what changed and what was
+Release **[v4.3.44-agentf08d652](https://github.com/arkenoi/qubes-win-idd-driver/releases/tag/v4.3.44-agentf08d652)** — agent `f08d652`, package `4.3.44`, built from commit `889c21aa`. See
+[`docs/RELEASE-NOTES-4.3.44.md`](docs/RELEASE-NOTES-4.3.44.md) for what changed and what was
 verified.
 
 > **Published with no override, on a CLEAN acceptance record and a met change-scoped gate.** On these
 > exact bytes the full eight-cell matrix ran — clean install, same-version reinstall, in-place upgrade
-> and template→AppVM derivation, on both Windows 10 and Windows 11 — **89 checks passed, 1 failed,
-> 0 invalid**. The one failure was the build being replaced: in the Windows 10 upgrade cell the 4.3.35
-> GUI agent crashed just before the 4.3.43 installer started. All six feature tests passed, two of them
-> only on the re-run, and every remainder suite ran and passed. **The 19 modules this diff
-> requires were covered, 21 in all**
-> ([`docs/ADR-acceptance.md`](docs/ADR-acceptance.md)). Three modules passed only on a re-run from a
-> later harness commit: that upgrade cell (all 15 checks, no crash), and two feature tests whose guest
-> had not come back from a restart while our rig's storage pool stood near its metadata limit. The
-> acceptance record keeps the three first-run failures.
+> and template→AppVM derivation, on both Windows 10 and Windows 11 — **89 checks passed, 0 failed,
+> 0 invalid**, every cell's log sweep clean. All six feature tests and every remainder suite passed.
+> **The 19 modules this diff requires were covered, 21 in all**
+> ([`docs/ADR-acceptance.md`](docs/ADR-acceptance.md)). One module, the notification-hold test, failed a
+> row in the full run because its grader mis-read the log; the grader was fixed and that module re-run
+> on this build, 21 rows, 0 failed.
 
 **The changes you will notice.**
 
-* **Windows 11 24H2 and later: a stripped window that stops painting is repaired.** In seamless mode,
-  a window that stopped painting right after QWT removed its Windows title bar could keep showing dom0
-  its picture from before, old title bar included, shifted under a white band. The agent no longer
-  waits for a second rejected frame, which a window that stops painting never sends: 750 ms after the
-  first, a tracking pass flags the mismatch and the agent re-registers the window with the capture
-  helper, even when nothing else on the desktop moves. The repair itself has not yet been seen on a
-  guest.
-* **A StandaloneVM keeps Windows' own updates, without automatic restarts.** On a StandaloneVM with
-  direct internet, the updater writes `AUOptions=4` and `NoAutoRebootWithLoggedOnUsers=1` before it
-  turns automatic updates on, so Windows does not restart the qube while a user is signed in; if
-  either write fails, automatic updates stay off. Templates and AppVMs keep them off, as before. On
-  every kind of qube, the update pass then reads the Windows Update policy actually in force and, if
-  it lets Windows install an update and restart the qube by itself, logs `WUAUTORESTART possible` at
-  ERROR and sends dom0 the notice *"Windows may restart this qube by itself"*.
+* **Uninstalling from Control Panel leaves a guest that boots.** Stock QWT's removal took the Xen PV
+  drivers away while Xen was still set to unplug the emulated disk, so a PV-booted guest died at its next
+  boot with INACCESSIBLE_BOOT_DEVICE. The removal now keeps the PV drivers when that unplug is armed;
+  measured on a clone of a German 25H2 setup, the removal succeeded and the next boot came up on the PV
+  disk. It also deletes the `QwtngNetSetup` service, which outlived its library and died into dom0
+  notices after every uninstall.
+* **Windows 11 24H2 and later: dialogs and Explorer are no longer withheld on a busy guest.** A dialog
+  resized right after it opens — the Open-Shell installer's — sent the capture helper one frame of the
+  wrong size and nothing more, so dom0 never got it; Explorer painting late on a loaded guest was
+  declared deaf. Both are fixed, and *"a window could not be shown"* is sent only for a definitive fault.
+  At 67% CPU steal, 4.3.43 withheld the dialog and held Explorer deaf in 5 of 10 runs each; the fixed
+  builds did neither in 10 of 10.
+* **A file drag no longer draws a black box in dom0.**
 
 Also in this release:
 
-* **The notification bridge obeys an explicit Deny.** On Windows 11 25H2, Windows granted the bridge
-  notification access over a user's or the device's Deny. The bridge now reads both before asking; on
-  a Deny it sends that setting's notice once and stands down, and the agent does not relaunch it.
-  Turning either toggle off in Settings writes that Deny.
-* **Nothing is started into an ending seamless session.** While the session is ending, the bridge
-  starts nothing of its own, and the agent refuses its helper launches.
-* **Death notices no longer promise a restart.** When the capture helper or the notification bridge
-  died, the dom0 notice said Task Scheduler restarts it up to three times; that never happens to a
-  helper that ran. The notices now say the helper is not relaunched until the GUI agent next starts,
-  and that restarting the qube does that.
-* **Quieter, clearer logs.** The updates relay logs an idle or discarded connection cut at the end of
-  a pass at info, not warning; a window whose desktop-composition bounds stay inverted is warned about
-  once, not on every polling pass; and a scheduled update scan that ends early now says so in the pass
-  log.
+* **The installer's restart notice is sent.** It failed before sending in 4.3.41 to 4.3.43, so a
+  manual install with a restart pending told nobody. A manual upgrade that leaves the guest with no
+  display path now says so in dom0 and powers the guest off.
+* **Defender definitions are not counted** in dom0's updates-available (section below), and a restart
+  that did not clear 0x8024402C is said and not requested again on every boot.
+* **A StandaloneVM made from a template without its private volume** gets a dom0 notice naming
+  `qvm-clone --class StandaloneVM`, instead of a desktop that dies with no explanation.
+* **Smaller fixes:** a crash in the agent's permit worker; the Windows key no longer opens an invisible
+  Start when nothing replaces it; the boot guards are not stopped as hung on a slow boot; dom0-call
+  rings released after logon go out one at a time instead of in a burst.
 
-The release's new privileged writes are the updater's two Windows Update policy values above, on a
-StandaloneVM with direct internet, and the agent's end-of-session state, which it now copies into the hold header it already
-shares with the notification bridge because the bridge runs as the user and cannot open the agent's SYSTEM-only latch. Apart from log lines, everything else it adds is
-reads: the Windows Update policy in force (Group Policy and device management's
-`PolicyManager\current\device\Update`) and the user's and the device's notification consent.
+The release's new privileged actions: the uninstall stops and deletes the `QwtngNetSetup` service and
+skips the PV driver removal while Xen's disk unplug is armed; a manual upgrade with no display path
+powers the guest off; the updater writes one marker value beside its existing restart stamp. Everything
+else it adds is log lines and dom0 notices.
 
-Everything 4.3.42 and earlier brought is carried forward — among it the dom0 failure notices that say
-why, the notification fixes for a guest with UAC on, the vchan send path that let one slow dom0 reader
-freeze a qube, the fix that stopped a Windows qube losing its whole desktop, and Defender definitions
-no longer raising dom0's update flag; see the history below.
+Everything 4.3.43 and earlier brought is carried forward — among it Windows' own updates on a
+StandaloneVM without automatic restarts, the dom0 failure notices that say why, the notification fixes
+for a guest with UAC on, and the vchan send path that let one slow dom0 reader freeze a qube; see the
+history below.
 
 **What was verified, and what was not.** The matrix ran against this exact package: per cell, on each
 OS, 16 clean install, 12 same-version reinstall, 13 in-place upgrade from 4.3.35 and 3 AppVM
-derivation checks. Three feature tests upgraded a rig guest matching the reporter's German 25H2 setup
-from 4.3.29 to 4.3.43 from the release package, and all 8 updater gates passed; drove three dom0
-update passes on a TemplateVM in that environment, each judged PASS, the pending count going 2, 1, 0;
-and, on the re-run, ran the UAC-on checks on a clone of that environment, all 8 passing. The supervision test's two clean shutdown/boot cycles had one agent per boot and zero dom0
-notifications, and a death injected during a shutdown was reported once, at the next boot. The
-remainder suites proved the full-screen and capture checks able to fail, one clause at a time.
-**Not measured:** the stripped-window repair itself, and whether Windows restarts a StandaloneVM by
-itself under the values this release writes. **Still open:** a capture helper or notification bridge
-that dies stays down until the GUI agent next starts (restart the qube), and a Group Policy or
-device-management Deny of notification access still logs its 60 s "not ready" ERROR. **Still
-unknown:** what stalls the broker for 2 s in the field, and the cause of the reporter's 4.3.37/4.3.38
-scan-task failures. For the reporter's problems, the retest of 4.3.43 comes first; if a problem
-persists, we will ask for specific logs. Full detail in [`docs/RELEASE-NOTES-4.3.43.md`](docs/RELEASE-NOTES-4.3.43.md).
+derivation checks. Feature tests in a rig guest matching the reporter's German 25H2 setup passed all 8
+updater gates, drove three dom0 update passes on a TemplateVM, and ran the UAC-on checks, all 8
+passing. **Not proven:** what causes the withheld dialogs and the deaf Explorer — the numbers above
+count runs. **Still open:** a capture helper or notification bridge that dies stays down until the GUI
+agent next starts (restart the qube). Full detail in [`docs/RELEASE-NOTES-4.3.44.md`](docs/RELEASE-NOTES-4.3.44.md).
 
 **On "updates available" reappearing right after an update — this is Windows Defender, and dom0 is telling you the truth.**
 On a freshly updated guest, dom0's updates-available can go back to "available" within a minute of clearing. We chased this as a
@@ -106,31 +89,26 @@ by the time a scan runs there genuinely is a new one. A Windows qube with Defend
 available" again shortly after you update it, indefinitely, and that is correct rather than a bug — the definitions are real
 updates, they are simply published faster than anyone installs them.
 
-**Up to and including 4.3.37 the product did nothing about it, by omission.** The guest scanned with
-`IsInstalled=0 and IsHidden=0` and no category filter, so Defender Security Intelligence definitions
-were offered, counted and reported to dom0 exactly like a cumulative update, and raised
-`updates-available` like one. Nothing suppressed, filtered or deferred them. On those releases the
-only lever is Defender itself.
+**Up to and including 4.3.43 dom0 was told about every definition.** 4.3.38 narrowed the guest's own
+count but never the number it sent to dom0, and 4.3.40 removed even that, so a Windows qube with
+Defender enabled raised `updates-available` again within a minute of every update. Earlier README text
+said this was fixed in 4.3.38; it was not.
 
-> **Fixed in 4.3.38, and carried forward unchanged.** Definition updates no longer raise dom0's `updates-available`. The
-> flag now means *servicing work is pending*, which is a thing an operator can act on. Three
-> properties of that change are worth stating, because each is a way it could have been done wrong:
+> **Fixed in 4.3.44.** Definition updates no longer count in the number dom0 is told, at any of the
+> three places the guest reports it. Three properties are worth stating, because each is a way it could
+> have been done wrong:
 >
-> * **Definitions are identified structurally, never by title.** WU classifies every offer, and
->   "Definition Updates" is a fixed classification GUID carried in `Categories`. A title match would
->   have been locale-dependent — the field reporter runs a German edition, where the same offer reads
->   *"Definitionsupdate für Microsoft Defender Antivirus"* — and would have stopped excluding
->   anything the day a product name changed.
-> * **The Defender platform update still counts.** The antimalware engine/platform updates are
->   classified as ordinary servicing, not definitions, and they remain real work an operator should
->   see. Neither a KB number nor a title can separate those two; the classification can.
-> * **An offer we cannot classify still counts.** If the categories are unreadable, the update is
->   reported. An exclusion that swallowed what it failed to classify would hide real servicing.
->
-> Definitions are still *installed* — only the count dom0 reads is narrowed, and the excluded offers
-> are counted and named in the guest log rather than silently vanishing. Because installs here are
-> dom0-driven, the practical consequence is that definitions now install on whatever pass runs
-> instead of prompting one.
+> * **Windows Update's classification alone decides, never a title or a KB number.** "Definition
+>   Updates" is a fixed classification GUID carried in `Categories`. A title match would be
+>   locale-dependent — the field reporter runs a German edition, where the same offer reads
+>   *"Definitionsupdate für Microsoft Defender Antivirus"* — and KB numbers can change. Windows Update
+>   files the Defender and Windows Security platform updates under the same classification, so they
+>   leave the count too.
+> * **An offer we cannot classify still counts.** If its categories are unreadable, the update is
+>   reported, even when another offer of the same KB is a definition.
+> * **Definitions are still offered, installed and recorded** — the scan log and the dom0 summary line
+>   say they are not counted. Because installs here are dom0-driven, on a template or AppVM they install
+>   with the next pass dom0 runs for another reason.
 
 What the agent carries is each offer's **identity** — `UpdateID` plus `RevisionNumber`, taken
 straight off the COM object rather than parsed out of a localised title — which is what makes "the
@@ -138,20 +116,20 @@ offer the last pass already resolved" distinguishable from "a genuinely new one"
 2026-11-08 our acceptance uses it in one direction: updater gate U8 fails a pass that counts to dom0
 an offer whose identity the guest has already proved installed. It watches only that direction —
 offers the updater leaves out of the count are judged separately, item by item — and in both of
-4.3.43's updater runs it passed with no such identity among the offers. That means the situation did
+4.3.44's updater runs it passed with no such identity among the offers. That means the situation did
 not arise, not that the path was exercised.
 
 | file | use it for |
 |---|---|
-| [`qubes-windows-tools-ng-4.3.43-1.agent414cbd1b87a0.noarch.rpm`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.43-agent414cbd1/qubes-windows-tools-ng-4.3.43-1.agent414cbd1b87a0.noarch.rpm) | **dom0** — installs the ISO at `/usr/lib/qubes/qubes-windows-tools.iso`, auto-patches `qvm-create-windows-qube` to use it, and runs nothing in dom0 |
-| [`qwt-improved-setup.iso`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.43-agent414cbd1/qwt-improved-setup.iso) | attach to a running Windows qube as a CD and run `install.cmd` elevated |
-| [`qubes-tools-4.3.43.exe`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.43-agent414cbd1/qubes-tools-4.3.43.exe) | the installer on its own, if you already have a way to get a file into the guest |
-| [`SHA256SUMS.txt`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.43-agent414cbd1/SHA256SUMS.txt) | checksums for all of them |
+| [`qubes-windows-tools-ng-4.3.44-1.agentf08d65295dc7.noarch.rpm`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.44-agentf08d652/qubes-windows-tools-ng-4.3.44-1.agentf08d65295dc7.noarch.rpm) | **dom0** — installs the ISO at `/usr/lib/qubes/qubes-windows-tools.iso`, auto-patches `qvm-create-windows-qube` to use it, and runs nothing in dom0 |
+| [`qwt-improved-setup.iso`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.44-agentf08d652/qwt-improved-setup.iso) | attach to a running Windows qube as a CD and run `install.cmd` elevated |
+| [`qubes-tools-4.3.44.exe`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.44-agentf08d652/qubes-tools-4.3.44.exe) | the installer on its own, if you already have a way to get a file into the guest |
+| [`SHA256SUMS.txt`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.44-agentf08d652/SHA256SUMS.txt) | checksums for all of them |
 
 The dom0 RPM is unsigned, so `qubes-dom0-update` will refuse it; install it directly:
 
 ```
-sudo rpm -i qubes-windows-tools-ng-4.3.43-1.agent414cbd1b87a0.noarch.rpm
+sudo rpm -i qubes-windows-tools-ng-4.3.44-1.agentf08d65295dc7.noarch.rpm
 ```
 
 With the RPM in place, dom0 can attach the media itself — `qvm-start <vm> --install-windows-tools`
@@ -160,18 +138,23 @@ hands the guest exactly this ISO as a CD.
 Upgrading a guest that already runs stock QWT or an older build of this package is a
 plain in-place upgrade — run the installer, it detects the older version and lets the
 MSI replace it in one transaction. Validated end to end for an upgrade **from an older
-build of this package** — 4.3.43's acceptance ran the in-place upgrade cell from 4.3.35 on
-both Windows 10 and Windows 11, **13 checks each passed**, and its three tests in the reporter's
-German 25H2 environment upgraded from 4.3.29 to 4.3.43 from the release package. On Windows 10 that
-cell's log sweep failed: the 4.3.35 GUI agent crashed just before the installer started, and dom0 was
-sent *"The GUI agent crashed"*; the upgrade completed regardless, and the cell's re-run passed all 15
-of its checks with no crash. An
+build of this package** — 4.3.44's acceptance ran the in-place upgrade cell from 4.3.35 on
+both Windows 10 and Windows 11, **13 checks each passed** and both log sweeps clean, and its tests in
+the reporter's German 25H2 environment upgraded a guest there to the release package. An
 upgrade from **stock QWT 4.2.2** uses the same unchanged
 MSI machinery but has not been exercised on our testbed since August 2026, because the
 test images themselves carry a newer build.
 
 **Hand-created qube?** Run `qvm-features <qube> vmexec 1` and `qvm-prefs <qube> qrexec_timeout 1800`
 in dom0 (on the template; AppVMs inherit), or the Qubes Update tool fails against it.
+
+**What changed in 4.3.44 — an uninstall leaves a guest that boots, and dialogs show on a slow Windows 11.**
+Control Panel's uninstall keeps the Xen PV drivers while Xen will unplug the emulated disk, so a
+PV-booted guest boots after it, and it no longer leaves a service that dies into dom0 notices. On
+Windows 11 24H2 and later a dialog resized right after it opens is no longer withheld, Explorer is no
+longer declared deaf for painting late, and a file drag no longer draws a black box. The installer's
+restart notice is sent at last, and Defender definitions no longer count in dom0's updates-available.
+Full story, and what was not measured, in [`docs/RELEASE-NOTES-4.3.44.md`](docs/RELEASE-NOTES-4.3.44.md).
 
 **What changed in 4.3.43 — a stripped window is repaired, a StandaloneVM is told not to restart while a user is signed in.** On
 Windows 11 24H2 and later the agent now repairs a window that stopped painting right after QWT removed
@@ -204,7 +187,7 @@ the session helpers run at normal priority. Full story in
 **Correction:** 4.3.41 also said that a manual install says when it has finished. It did not, in
 4.3.41, 4.3.42 or 4.3.43: the notice failed before it was sent, so a manual upgrade still ended with
 no windows and nothing telling you to restart the qube. Measured on a German 25H2 clone installed by
-hand, and in a field reporter's install log. The fix is in the next release, measured sending the
+hand, and in a field reporter's install log. The fix is in 4.3.44, measured sending the
 notice on the same clone.
 
 **What changed in 4.3.40 — one wait, four defects, three components.**
