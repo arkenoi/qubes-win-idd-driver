@@ -587,7 +587,11 @@ the user on again at once from the fresh store - AutoAdminLogon=1 with no AutoLo
 time the current user logs off" (MSGina.dll features) - in the same boot (Jev logoff_session 0.90, against
 power off 0.04). Nothing is sent to dom0 on success (Jev log_only 0.80). Seed: the
 installer copies `C:\Users\Default` and `Public` to `%ProgramData%\Qubes\profile-seed` at every install and
-upgrade, data, attributes and timestamps, junctions excluded - the measured shape (Jev 0.92). Disk: the
+upgrade, data, attributes and timestamps, junctions excluded - the measured shape (Jev 0.92). The boot guard
+(part 6, boot task only) re-mirrors the live `Q:\Users\Default` and `Public` into it at every boot, so updates
+and machine-wide installs made in a template reach it as `/etc/skel` changes do on a template's root (Jev
+every_boot 0.95, over a racing shutdown-event copy 0.02 and install-only 0.02); a template's last session
+reaches it at that template's next boot. Disk: the
 installer's two calls with its re-read at the write and its verify, repeated in the guard; a failure before
 the seed is in clears the disk back to RAW so the next boot tries again (Jev 0.66, no verdict). ProfileList:
 every `S-1-5-21-*` key whose `ProfileImagePath` does not exist once Q: is made, never the service profiles

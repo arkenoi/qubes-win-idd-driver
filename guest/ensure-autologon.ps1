@@ -364,6 +364,27 @@ if (-not $AtBoot) {
     Write-Output 'WARN   resize-disk.ps1 is not beside this script - volumes extended in dom0 do not grow at boot'
 }
 
+# 6. The profile seed follows the live Default and Public, as /etc/skel on a template's root is always
+#    current: updates and machine-wide installs change both on Q:, and a standalone made from this qube's
+#    root would otherwise be seeded from the install-time copy. Same copy as the installer's (data,
+#    attributes, timestamps, junctions excluded), at boot only, and only where C:\Users is Q:\Users.
+if ($AtBoot) {
+    $seedRoot = Join-Path $env:ProgramData 'Qubes\profile-seed'
+    if ($cuTarget -match '^[Qq]:\\Users\\?$' -and (Test-Path -LiteralPath 'Q:\Users\Default\NTUSER.DAT')) {
+        foreach ($sp in 'Default', 'Public') {
+            $src = Join-Path 'Q:\Users' $sp
+            if (-not (Test-Path -LiteralPath $src)) { Write-Output "WARN   profile seed: $src is absent"; continue }
+            $null = & robocopy.exe $src (Join-Path $seedRoot $sp) /MIR /COPY:DAT /DCOPY:DAT /XJ /R:0 /W:0 /NP /NFL /NDL /NJH /NJS 2>&1
+            $rc = $LASTEXITCODE
+            if ($rc -ge 8) { Write-Output "WARN   profile seed: copying $src failed (robocopy rc=$rc)" }
+            elseif ($rc -gt 0) { Write-Output "SET    profile seed: $sp refreshed (robocopy rc=$rc)" }
+            else { Write-Output "ok     profile seed: $sp current" }
+        }
+    } else {
+        Write-Output "note   profile seed not refreshed: C:\Users links to '$cuTarget' or Q:\Users\Default has no NTUSER.DAT"
+    }
+}
+
 $lsaState = if (-not $lsaKnown) { 'unknown' } elseif ($lsa) { 'present' } else { 'absent' }
 # reason= names the ONE thing to repair, in the same token form set-autologon.ps1 uses, so a caller
 # reading only the trailer can record it instead of guessing. Before this token every warning was

@@ -5031,7 +5031,8 @@ function Invoke-Stage2 {
     # made with `qvm-create --template` gets this root with a blank private volume, and the boot guard
     # (ensure-autologon.ps1 part 4) rebuilds Q:\Users from this copy (docs/ADR-windows.md section 14).
     # Data, attributes and timestamps, junctions excluded: the shape measured to give a working profile.
-    # Refreshed at every install and upgrade; a failed copy leaves such a standalone notice-only.
+    # Refreshed at every install and upgrade, and by the boot guard at every boot (part 6); a failed copy
+    # leaves such a standalone notice-only.
     $seedRoot = Join-Path $env:ProgramData 'Qubes\profile-seed'
     $seedOut = @()
     foreach ($sp in 'Default', 'Public') {
