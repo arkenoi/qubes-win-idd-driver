@@ -89,7 +89,12 @@ $db = $wi.GetType().InvokeMember('OpenDatabase', 'InvokeMethod', $null, $wi, @($
 $before = & $query $db $conditionSql
 if ($before.Count -ne 1) { throw "InstallExecuteSequence has $($before.Count) MsiProcessDrivers row(s) in $MsiPath, expected 1" }
 if ($before[0][0] -ne $stockCondition) { throw "MsiProcessDrivers condition is '$($before[0][0])', expected the DIFxApp extension's '$stockCondition' - the pinned WiX changed shape or the MSI was patched already" }
-[void](& $query $db "UPDATE ``InstallExecuteSequence`` SET ``Condition``='$keepCondition' WHERE ``Action``='MsiProcessDrivers'")
+Write-Host "MsiProcessDrivers condition read before the edit: '$($before[0][0])'"
+# An UPDATE view creates no result set, so it is executed and closed, never fetched.
+$update = $db.GetType().InvokeMember('OpenView', 'InvokeMethod', $null, $db, @("UPDATE ``InstallExecuteSequence`` SET ``Condition``='$keepCondition' WHERE ``Action``='MsiProcessDrivers'"))
+[void]$update.GetType().InvokeMember('Execute', 'InvokeMethod', $null, $update, $null)
+[void]$update.GetType().InvokeMember('Close', 'InvokeMethod', $null, $update, $null)
+[void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($update)
 [void]$db.GetType().InvokeMember('Commit', 'InvokeMethod', $null, $db, $null)
 [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($db)
 
