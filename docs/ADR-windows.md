@@ -572,6 +572,14 @@ runs `mkfs.ext4` on a private volume whose first 10 MiB are zero and that carrie
 power off, no notice, stderr lines only. Here `Default` plays `/etc/skel`, Q: plays `/rw`, and a
 ProfileList entry whose folder is gone plays a missing home.
 
+**Why only this standalone meets it.** For a template-based qube of a Windows template, dom0 clones the
+template's private volume at creation (qubes-core-admin `qubes/ext/windows.py`, `domain-create-on-disk`:
+"until windows tools get ability to prepare private.img on its own, copy one from the template"). A
+StandaloneVM has no `template`, so that handler returns early, and `qvm-create --class StandaloneVM
+--template` skips the private volume on purpose (qubes-core-admin-client 759fafea63, "to preserve
+behaviour of TemplateBasedVMs which do not inherit private volume either"). This repair is the guest-side
+preparation that comment waits for.
+
 **As built.** Where: the §10 guard's part 4, which already detects the state (Jev 0.84). Linux runs before
 the login manager; Windows has no client hook that holds the autologon back, so the guard usually finishes
 after the autologon put the user on a temporary profile. It then signs that session out, and Winlogon logs
