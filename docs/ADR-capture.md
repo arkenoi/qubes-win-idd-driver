@@ -98,6 +98,7 @@ flowchart TD
 | 31 | Alt-nav key-tip badges are dropped fully | ACCEPTED (owner) | 2026-10-02 |
 | 32 | Liveness from input and Windows' own events only; the damage-comparison detector goes | ACCEPTED (owner) | 2026-10-02 |
 | 33 | Desktop duplication is a window-0 engine, created on demand - not the capture path | TARGET STATE (owner 2026-10-18) | 2026-10-18 |
+| 35 | The shell's drag image is shown by the windows beneath it, never as a window of its own | ACCEPTED (Jev) | 2026-11-15 |
 
 Status words and the section format are defined in `docs/ADR-README.md`.
 
@@ -1174,3 +1175,36 @@ event-driven like §32's closed-item reopen, not a liveness check. At most once 
 size): a window that drops again at that size stays on the recreated pool, which delivers on its next change.
 No RedrawWindow: an action on another program's window, and unmeasured from the broker's medium integrity
 against an elevated one. The reopen counts in `Reroutes`, next to `dropsize`; no ABI change.
+
+## 35. The shell's drag image is shown by the windows beneath it, never as a window of its own
+
+**Status:** ACCEPTED (Jev), 2026-11-15, agent (this commit). Jev: suppress 0.85 (conf 0.82); distinct from the
+owner's 2026-08-16 popup decision 0.85 (conf 0.77). The end-state measurement below was chosen under the floor
+(log and per-window shot 0.70, conf 0.60) - not a verdict. Proven on the rig: not yet.
+
+**Context.** A file drag in Explorer shows a `SysDragImage` window: ownerless, WS_POPUP, ex-style
+LAYERED|TOOLWINDOW|TRANSPARENT|TOPMOST, per-pixel alpha. The agent announced it override-redirect, held it until
+its first frame, and mapped it. Read from the broker on the German 25H2 clone (build 1319): a 390x130 frame, 71%
+of its pixels alpha 0 over a folder and 78% elsewhere, every one of them RGB 0 - transparency arrives
+premultiplied - and only a 100x100 thumbnail and the drop tip opaque. dom0 has no alpha, so it drew a black box
+around every drag: field 42717 #158 ("small black frames are shown around this operation", 4.3.22), not seen on
+4.3.18 (#161), whose windows came from the composited desktop, already blended. At the same five moments the
+Explorer window's own WGC frame held the thumbnail and the drop tip, blended over its list, at their current
+position, and its frames kept arriving while the image moved. Microsoft documents IncludeSecondaryWindows (24H2+,
+set by the broker on every session) as drawing any WS_POPUP or WS_EX_TOOLWINDOW window that intersects the
+captured window, with only such windows between them, into its frames, clipped to its bounds.
+
+**Decision.** While the broker is active (`WgcBrokerActive()`, which carries the direct floor), as for the
+owned popup that lies inside its owner, `ShouldAcceptWindow` refuses `SysDragImage`: it is never announced, and
+the captured windows it passes over show it. Below the direct floor nothing changes. This is not the 2026-08-16 rule that a popup reaching outside its
+owner keeps its own window: that rule is about an owned menu that would be clipped to one owner, while the drag
+image has no owner and is drawn into every captured window it overlaps.
+
+**Cost.** The drag image is not shown where no captured guest window lies beneath it (in seamless mode, another
+qube or dom0's desktop), nor over a window on the relay or PrintWindow route, nor over a window that has an
+ordinary window between it and the image in z-order.
+
+**Evidence.** The frames and owner reads above (scratchpad repro row41-filedrag.ps1, runs row41b and row41c).
+The fixed build is proven by the agent log showing no CREATE or MAP for the drag image during the same scripted
+drag, and a dom0 per-window capture of the Explorer window taken during it showing the thumbnail inside; dom0's
+override-redirect layer is not photographed (local.WinPopupShot is not installed).
