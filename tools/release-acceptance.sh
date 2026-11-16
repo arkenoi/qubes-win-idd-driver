@@ -426,6 +426,26 @@ for _arm in --no-attach ""; do
 done
 # RASMOKE-B
 
+# ---- 3d. THE CELL SMOKE: the matrix's own win11-clean cell, alone, before the full matrix ---------
+# The bind smoke above boots an INSTALLED golden with one stick. What it cannot reach is the clean
+# cell's path: a fresh install under the priming sticks, its first PV-bound boot, the bind, and the
+# boundary halt. So the matrix runs that one cell first, through the identical code (a second copy of
+# the cell's logic would drift from the cell), into its own directory, and a non-PASS stops the
+# campaign before the other cells are spent. The full matrix below runs every cell as before, so the
+# record and the receipt still come from one complete matrix. A run whose cells are only this one
+# skips it: its matrix IS the smoke.
+if [[ " $CELLS " == *" win11-clean "* ]] && [ "$(wc -w <<<"$CELLS")" -gt 1 ]; then
+  ACC_PHASE=cell-smoke; _acc_json running
+  say "cell smoke: win11-clean alone (fresh install, priming sticks, first PV boot, bind, boundary halt) before the full matrix"
+  MATRIX_WORK="$WORK" RELEASE_SETUP="$SETUP" RELEASE_ISO="$ISO" RELEASE_COMMIT="$HEAD" \
+    CELLS="win11-clean" G10="$G10" G11="$G11" B10="$B10" B11="$B11" MATRIX_OUT="$CAMP/smoke-win11-clean" \
+    POOL_SPACE_RUN="$ACCEPT_ATTEMPT" \
+    ./mgmt/harness/matrix.sh >>"$CAMP/smoke-win11-clean.log" 2>&1
+  _csrc=$?
+  [ "$_csrc" = 0 ] || die "cell smoke FAILED (matrix rc=$_csrc): $(tail -1 "$CAMP/smoke-win11-clean.log"). The clean cell's path is broken; the full matrix would spend hours to find the same. Artefacts: $CAMP/smoke-win11-clean"
+  say "cell smoke PASS - $(tail -1 "$CAMP/smoke-win11-clean.log")"
+fi
+
 ACC_PHASE=matrix; _acc_json running
 say "matrix: while it runs its state is $CAMP/matrix/matrix-result.json (the cell running, counts by class) and its verdicts are rows in $CAMP/matrix/checks.jsonl"
 # The campaign's stdout lands in $CAMP/full.out FOR A READER (acceptance.json names it as
