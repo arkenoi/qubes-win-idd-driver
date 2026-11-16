@@ -521,7 +521,7 @@ reaches the user 70 s before the window notice; whether that pair reports one fa
 ## 13. A guest whose profiles live on an empty private volume says so, with the remedy
 
 **Status:** ACCEPTED (Jev 0.75), 2026-11-15. Built as part 4 of `guest/ensure-autologon.ps1`, the §10 guard.
-The repair is §14, PROPOSED.
+The repair is §14, ACCEPTED: this notice remains for a guest it cannot repair.
 
 **Context.** MoveUsers keeps every profile, Default and Public included, on the private volume: `C:\Users`
 is a link to `Q:\Users`. `qvm-create --class StandaloneVM --template T` gives the new qube a copy of T's root
@@ -539,6 +539,7 @@ reporter met an older form on 4.3.2x (`docs/GWECK-STATUS.md` row 37).
 2. A link to any other missing drive, or to a missing Q: while the private disk is not blank, is a WARN line
    only: the cause is unknown.
 3. Nothing on disk is changed, and the guard's exit contract (§10, rule 6) is untouched: autologon happens.
+   Superseded where §14 applies: a guest that carries the profile seed is repaired instead.
 
 **Why.** Jev: A_now_B_proposed 0.75 (conf 0.70), against detection alone 0.21 and building the repair now
 0.03; severity P1 1.00. Nothing inside the guest can bring the template's profiles back, and moving user data
@@ -558,19 +559,54 @@ hung: delivery to dom0 is owed.
 **Open.** The reporter's Downloads and Documents links to Q: on 4.3.2x, whose profiles stayed on C:, are
 not explained; relocate-dir did not ship before 2026-09-08.
 
-## 14. Repairing such a guest: a fresh private volume, then power off
+## 14. Repairing such a guest: a fresh profile store, as Linux gives a fresh home
 
-**Status:** PROPOSED (Jev 0.75), 2026-11-15. Not built: the owner decides; the measurement it waited for is below.
+**Status:** ACCEPTED, 2026-11-15, by the owner ("Build the repair"; then «we should act exactly as linux
+counterpart»). Built in `guest/ensure-autologon.ps1` part 4 (the repair) and
+`packaging/setup/Install-QwtImproved.ps1` stage 2 (the seed).
+
+**The Linux counterpart, read from core-agent-linux.** At every boot, before any login: `setup-rwdev.sh`
+runs `mkfs.ext4` on a private volume whose first 10 MiB are zero and that carries no signature;
+`setup-rw.sh` fills `/rw/config` and `/rw/usrlocal` (from `/usr/local.orig` on root); `initialize_home
+/rw/home ifneeded` copies `/etc/skel`, on root, into every missing home. The boot goes on - no reboot, no
+power off, no notice, stderr lines only. Here `Default` plays `/etc/skel`, Q: plays `/rw`, and a
+ProfileList entry whose folder is gone plays a missing home.
+
+**Why only this standalone meets it.** For a template-based qube of a Windows template, dom0 clones the
+template's private volume at creation (qubes-core-admin `qubes/ext/windows.py`, `domain-create-on-disk`:
+"until windows tools get ability to prepare private.img on its own, copy one from the template"). A
+StandaloneVM has no `template`, so that handler returns early, and `qvm-create --class StandaloneVM
+--template` skips the private volume on purpose (qubes-core-admin-client 759fafea63, "to preserve
+behaviour of TemplateBasedVMs which do not inherit private volume either"). This repair is the guest-side
+preparation that comment waits for.
+
+**As built.** Where: the §10 guard's part 4, which already detects the state (Jev 0.84). Linux runs before
+the login manager; Windows has no client hook that holds the autologon back, so the guard usually finishes
+after the autologon put the user on a temporary profile. It then signs that session out, and Winlogon logs
+the user on again at once from the fresh store - AutoAdminLogon=1 with no AutoLogonCount logs on "every
+time the current user logs off" (MSGina.dll features) - in the same boot (Jev logoff_session 0.90, against
+power off 0.04). Nothing is sent to dom0 on success (Jev log_only 0.80). Seed: the
+installer copies `C:\Users\Default` and `Public` to `%ProgramData%\Qubes\profile-seed` at every install and
+upgrade, data, attributes and timestamps, junctions excluded - the measured shape (Jev 0.92). The boot guard
+(part 6, boot task only) re-mirrors the live `Q:\Users\Default` and `Public` into it at every boot, so updates
+and machine-wide installs made in a template reach it as `/etc/skel` changes do on a template's root (Jev
+every_boot 0.95, over a racing shutdown-event copy 0.02 and install-only 0.02); a template's last session
+reaches it at that template's next boot. Disk: the
+installer's two calls with its re-read at the write and its verify, repeated in the guard; a failure before
+the seed is in clears the disk back to RAW so the next boot tries again (Jev 0.66, no verdict). ProfileList:
+every `S-1-5-21-*` key whose `ProfileImagePath` does not exist once Q: is made, never the service profiles
+(Jev 0.49, no verdict). A guest without the seed, or whose repair fails, gets §13's notice, naming why.
 
 **Context.** §13. A Linux qube made the same way starts with a fresh home: its agent formats an all-zero
 private volume at the first boot ("Virgin boot", core-agent-linux `setup-rwdev.sh`) and the template's
 per-user data is not carried.
 
-**Decision (proposed).**
+**Decision.**
 1. The installer keeps a copy of `C:\Users\Default` and `Public` on the root volume.
 2. At boot, before logon, a guest in §13's state formats the blank private disk (by serial) as Q:, seeds
    `Q:\Users` from that copy, and removes the stale ProfileList entries so that Windows builds fresh profiles.
-3. It tells dom0 and powers off; the user starts the qube. No restart is taken (`ADR-updater` §10).
+3. The boot goes on; a session the autologon already opened is signed out so the user is logged on again
+   with the new profile. No restart is taken (`ADR-updater` §10) and nothing is sent to dom0.
 
 **Cost.** The template's per-user data (desktop files, settings) is not carried, as on Linux. Partitioning
 and formatting from boot code would be new here. The autologon comes about 5 s after the profile service
@@ -588,3 +624,45 @@ not temporary, with no User Profile Service error; explorer, sihost and ctfmon k
 to 3 minutes after it, and nothing crashed. The boot before showed 1515, 1501, 1505 and 1544 three times
 each. Not measured: that desktop in pixels; a copy made by the installer itself, with ACLs; a repair run
 from boot code, which races the logon.
+
+## 15. A volume extended in dom0 grows inside the guest, as on Linux
+
+**Status:** ACCEPTED, built on the test branch; not measured on a guest.
+
+**Owner, 2026-11-15**, after the Linux paths were laid out: «yes, implement the guard» and «and ResizeDisk too».
+In the same message: «the copy behavior we keep for a while, unless we find a way to speed up populating the
+volume in most radical way» - dom0's clone of a Windows template's private volume for template-based qubes
+(section 14) stays.
+
+**Linux counterpart.** Two paths. dom0's `Storage.resize` (qubes-core-admin `qubes/storage/__init__.py`)
+grows the volume and, on a running qube, calls `qubes.ResizeDisk` as root with the volume name on stdin;
+core-agent-linux answers with `resize2fs /dev/xvdb` (private) or `resize-rootfs` (root). A failure there
+reaches the user as "Online resize of volume ... failed (you need to resize filesystem manually): <stderr>".
+At every boot `setup-rw.sh` runs `resize2fs` on `/rw` and `resize-rootfs-if-needed.sh` grows root, so a
+volume extended while the qube was halted grows at the next start.
+
+**What Windows had.** Neither: no `qubes.ResizeDisk` in core-agent, nothing in the guest grows a partition.
+An online extend reported the failure above; an offline one left unallocated space after Q:.
+
+**Decision.** One handler, two callers. `guest/resize-disk.ps1` reads `private` or `root` (stdin from qrexec,
+`-Disk` from the boot guard), rescans, and grows Q: (only on the private disk by serial) or the system drive
+to the largest contiguous size. Windows extends a partition only into unallocated space directly after it,
+so when a partition lies between the volume and the free space (on C:, usually the recovery partition) it
+names that partition and exits non-zero rather than moving anything. On the online path, "nothing to grow"
+is reported as an error, since dom0 calls it only after growing the volume: Windows not yet seeing the new
+size is said, with "grows at the next boot". `qubes.ResizeDisk` runs it as LocalSystem (qrexec-agent maps
+root to its own account). The boot guard (`ensure-autologon.ps1` part 5) runs it for both volumes when the
+boot task calls it with `-AtBoot`; the installer and the updater, which run the guard for its autologon
+verdict, do not resize. Its outcome never changes the guard's exit code. The two files ship through the
+payload overlay from `guest/` and are listed in `packaging/ours-wins.psd1`: in the core-agent rpc sweep they
+would also be mirrored into the MSI, where a file with no wxs component fails that guard.
+
+**Shrinking is never automatic, as on Linux.** dom0 calls `qubes.ResizeDisk` only after it has resized the
+volume, and the client refuses a shrink unless forced, telling the user to shrink the filesystem first
+(qubes-core-admin-client `qubesadmin/storage.py`). So a shrink is: shrink Q: in the guest, then
+`qvm-volume resize --force`; the handler then fits Q: to the smaller disk. A forced shrink without the first
+step leaves Q: ending past the disk; the handler says so and names `qvm-volume revert`, never "nothing to grow".
+
+**Not measured:** whether the PV disk driver shows a new size to a running guest without a reboot (if not,
+the online path says so and the boot path grows it); a GPT disk whose backup header has to move; C: with a
+recovery partition after it.

@@ -218,14 +218,18 @@ ever saw, with no Default → secure transition observed, and dom0 was notified 
 
 **Decision.** `QGADESKSTUCK` reports the PATH with the evidence it used, and reads back the
 `PromptOnSecureDesktop` actually in force:
-- `consent.exe` present → a UAC prompt is on the secure desktop. §1 writes the value that is supposed to
+Which process is meant is decided by WHO OWNS THE VISIBLE WINDOWS ON THE INPUT DESKTOP: each owner's full image
+path is compared with `%SystemRoot%\System32\consent.exe` / `LogonUI.exe` - the process drawing what the user
+would see, never a process of that name found in the process list (`ADR-supervision` §8; 2026-11-15).
+- `consent.exe` owns a window there → a UAC prompt is on the secure desktop. §1 writes the value that is supposed to
   prevent exactly this, so being here means it was not honoured: a template policy, or admin-approval-mode.
   That is OUR defect, it gets its own `QGAUACSECURE` ERROR, and the autologon advice is suppressed for it.
-- `LogonUI.exe` present **and this agent instance has not seen a shell window since it started** → the fourth
+- `LogonUI.exe` owns it **and nobody is logged on** (an empty WTS user name) → the sign-in screen.
+- `LogonUI.exe` owns it **and this agent instance has not seen a shell window since it started** → the fourth
   arm: the secure desktop is current before the main desktop owns the session. Named as exactly that in the
   PATH, LOGGED with its facts, and never asserted as a lock. (2026-10-10.)
-- `LogonUI.exe` present → the sign-in or lock screen, which the existing advice is for.
-- neither → `unclassified`, stated as such rather than guessed.
+- `LogonUI.exe` owns it with a user logged on → the lock or security screen, which the existing advice is for.
+- neither, or the desktop could not be enumerated → `unclassified`, stated as such rather than guessed.
 
 **The immediate lock report, and what it may rest on (2026-10-09, v2 2026-10-10).** A locked session is reported
 at once, not at the 30 s warn point (owner, 2026-10-09: "if it is locked it should be detected fast"), and once
@@ -236,9 +240,14 @@ a shutdown, a credential prompt after a session ended, and the reattach case). T
 `QGA_LIFECYCLE_DEFECT_PRESHELLLOCK` restoring the measured defect, and it has five arms: `NO_FACT` (the query
 failed, a level the union does not document, a flags value that is neither LOCK nor UNLOCK - `WTS_SESSIONSTATE_LOCK`
 is 0, so a zeroed buffer reads as a lock unless the level is checked - or, on the path below, an unreadable
-process list), `TEARDOWN` (the session is ending), `UNLOCKED`, `PRE_SHELL` (LOCK read, and the session has not
-reached a shell: no window seen by this instance and no shell process) and `LOCKED` (LOCK read, and a shell
+Default-desktop probe), `TEARDOWN` (the session is ending), `UNLOCKED`, `PRE_SHELL` (LOCK read, and the session has
+not reached a shell: no window seen by this instance and no shell on Default) and `LOCKED` (LOCK read, and a shell
 either SEEN or FOUND). Only `LOCKED` reports.
+**Read on events (2026-11-15).** The facts are read on the first secure frame of an episode and again only after
+the session has said something: the agent's lifecycle window registers for this session's WTS notifications (lock,
+unlock, logon, logoff), counts them with the end-session messages, and the verdict re-reads when the count moved
+(`QGASESSIONEVT` lines). The 1 s re-read is gone; a failed read is said once and re-read on the next event, never
+re-asked in hope. Jev `event_driven_reread` 0.63 - not a verdict, chosen on the push-over-poll and no-retry rules.
 The shell-seen latch is set by the `GetShellWindow()` consults the agent already makes at its phase gates
 (routed through `ShellWindowNow()`), not by a new poll; `GetShellWindow()` is per desktop, so it is NULL on the
 Winlogon desktop and on Default until Explorer registers, which is what "the main desktop owns the session"
@@ -250,20 +259,22 @@ Because `GetShellWindow()` is per desktop and the agent sits on the Winlogon des
 a fresh agent whose first frame is secure never latches - and on the window alone a guest that really IS locked
 at that moment would be graded `PRE_SHELL` and degrade to the 30 s path's ten-minute backstop: the "report it,
 ONCE" half of the owner's rule traded for the "never assume" half, which he stated in one sentence. So when the
-reading says LOCK and no window was seen, the verdict turns on one desktop-independent fact: whether a shell
-process (`explorer.exe`) runs in the console session, read from the same Toolhelp pass that finds
-`LogonUI.exe`/`consent.exe` and matched to the console session by `ProcessIdToSessionId`. Present → a real lock
-met by a fresh agent, reported at once with `shell-by=process` on the line; absent → `PRE_SHELL`; unreadable →
-`NO_FACT` at WARNING with the error, never silently "absent" (knob `QGA_LIFECYCLE_DEFECT_SHELLPROCSILENT`). A
-user-name read would not do: `WTSUserName` is set at logon success, before any shell exists. The fact is read
-only on that one path, and once per secure-desktop episode after it says "no shell" (a shell starting switches
-the input desktop to Default, which ends the episode and latches the window on the next enumeration, so
-re-reading every second could only repeat the answer; an unreadable list is retried on the next tick), so the
-process list is not snapshotted per tick anywhere.
+reading says LOCK and no window was seen, the verdict turns on one desktop-independent fact: whether the session's
+shell is up on its Default desktop, asked FROM Default - a short-lived thread attached to Default calls
+`GetShellWindow()`, and when that is NULL looks for a visible window on Default owned by the configured
+`Winlogon\Shell` image (a kiosk shell registers no shell window). Until 2026-11-15 this was a Toolhelp scan for the
+shell's image name; the probe replaced it (`ADR-supervision` §8; Jev `shell_window_on_default` 0.45, not a
+verdict). Present → a real lock met by a fresh agent, reported at once with `shell-by=default-probe` on the line;
+absent → `PRE_SHELL`; unreadable → `NO_FACT` at WARNING with the error, never silently "absent" (knob
+`QGA_LIFECYCLE_DEFECT_SHELLPROCSILENT`). A user-name read would not do: `WTSUserName` is set at logon success,
+before any shell exists. The fact is read only on that one path, and once per secure-desktop episode after it says
+"no shell" (a shell starting switches the input desktop to Default, which ends the episode and latches the window
+on the next enumeration, so asking again could only repeat the answer).
 
 Every arm is said once per secure-desktop episode with the facts it rests on - the `SessionFlags` value read,
-the `Level`, the input desktop's name, `LogonUI.exe`/`consent.exe` presence; the arm's own tag says whether the
-session had a shell, the `LOCKED` line says which fact established it (`shell-by=window|process`), and the 30 s
+the `Level`, the input desktop's name, whether LogonUI or consent owns a window on it (`logonui-window=`,
+`consent-window=`); the arm's own tag says whether the session had a shell, the `LOCKED` line says which fact
+established it (`shell-by=window|default-probe`), and the 30 s
 line carries `shell-seen=` beside `console-user=` - so
 a report that did not go out can be found with the reason it was refused (`QGADESKPRESHELL`), a read that
 failed is a WARNING rather than a silent "not locked" (`QGADESKLOCKREAD`), and the `LOCKED` line itself
@@ -272,15 +283,17 @@ inaccurate measurements" expressed in code, and it is also this fix's first meas
 proved the branch was taken, not which fact made it true, and the next capture will.
 
 **Cost / the trap this rests on.** `findings/autologon.md` line 26: a RUNNING `consent.exe` is NOT evidence a
-prompt is shown - it also runs under `ConsentPromptBehaviorAdmin=0` and exits by itself after about 4 s. The
-valid signals are that the process PERSISTS, or that a consent window is mapped in dom0. The classification is
-therefore evaluated only on the 30 s re-warn tick, by which point a 4 s `consent.exe` is gone; a snapshot
-failure returns FALSE so the message degrades to `unclassified` rather than asserting what it did not observe.
-The pre-shell gate's own cost is now bounded by the process fact: a lock that predates this agent instance (the
-guest locked, the agent restarted) is reported at once through `shell-by=process`. What remains: a locked
-session whose shell has died (no `explorer.exe`) reads `PRE_SHELL` until the 30 s path's console-user arm names
-it; and if the owner's reattach state can arise on a logged-on session with WTS reading LOCK, that case reports
-again - `wts-flags=` and `shell-by=` on the line are what will show it, and it is not measured yet.
+prompt is shown - it also runs under `ConsentPromptBehaviorAdmin=0` and exits by itself after about 4 s. Owning
+a visible window on the input desktop is the valid signal, which is what the classification now reads; it is
+still evaluated only on the 30 s re-warn tick, and a desktop that cannot be enumerated degrades the message to
+`unclassified` rather than asserting what it did not observe.
+The pre-shell gate's own cost is bounded by the Default probe: a lock that predates this agent instance (the
+guest locked, the agent restarted) is reported at once through `shell-by=default-probe`. What remains: a locked
+session whose shell has died (no shell window, no window of the configured shell) reads `PRE_SHELL` until the
+30 s path's console-user arm names it; and if the owner's reattach state can arise on a logged-on session with WTS
+reading LOCK, that case reports again - `wts-flags=` and `shell-by=` on the line are what will show it, and it is
+not measured yet. Reading on events depends on frames: the verdict runs on the frame path, so an event is acted on
+at the next frame, as the 1 s re-read was.
 
 **Open.** 25H2 runs `TypeOfAdminApprovalMode=1` with `ConsentPromptBehaviorEnhancedAdmin=1`. If Administrator
 protection (`TypeOfAdminApprovalMode=2`) is ever enabled, `ConsentPromptBehaviorAdmin` stops governing and
@@ -334,7 +347,8 @@ the resume path's full re-enumeration was read and does exist.
 
 **Decision.** Stop depending on the taskbar and go to the prompt itself.
 1. The agent locates the top-level windows owned by `consent.exe` - which under §1 are on the Default desktop -
-   and ensures they are admitted and announced whether or not Windows raised them.
+   and ensures they are admitted and announced whether or not Windows raised them. The consent process is the
+   owner of the stand-in window itself (§6), confirmed by its full image path - never looked up by name.
 2. The stand-in stays hidden (§6). The taskbar remedy stays as it is for everything else it covers.
 3. It is announced, not activated: see §8. The user is given a window; the decision stays theirs.
 4. A pending elevation that cannot be announced is reported, because dom0 showing nothing while a program
