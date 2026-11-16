@@ -42,6 +42,10 @@ declare -A ALLOW=(
   # override_redirect flag, cuts that rect out, and DELETES the desktop capture in the same
   # function; only the toast PNG survives, in gitignored scratchpad/.
   ["mgmt/harness/toast-black-witness.sh"]="dom0 render witness: a guest toast is override-redirect"
+  # The S3iii in-place swap: only dom0's pixels show the second toast reached the shown banner. Same
+  # cut as toast-black-witness (mgmt/harness/toast-cut-lib.sh cut_toast): the toast is kept, the
+  # desktop capture is deleted in the same call.
+  ["mgmt/harness/toast-hold-test.sh"]="dom0 render witness: a guest toast is override-redirect"
 )
 
 bad=0; n=0

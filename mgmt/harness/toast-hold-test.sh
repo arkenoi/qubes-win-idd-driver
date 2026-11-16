@@ -132,6 +132,8 @@ source .claude/skills/win-guest-e2e/e2e-lib.sh      # qrun/_q (rc + stderr kept)
 source mgmt/harness/e2e-wait.sh                       # w_usersession w_alive w_state g_reboot_proven
 source mgmt/harness/shutdown-lib.sh                   # qwt_shutdown (asks and polls, never kills)
 source mgmt/harness/a0-lib.sh                         # raspush blog_len hb_state dismiss_toasts (INCOMING re-pointed below)
+source mgmt/harness/desktop-visible-lib.sh            # desktop_visible - the S3iii dom0 witness refuses a locked screen
+source mgmt/harness/toast-cut-lib.sh                  # cut_toast - the S3iii witness keeps the toast, deletes the desktop
 
 finish(){ # $1=rc $2...=message; every exit says which exit it took (the EXIT trap tears the tree down)
   local rc=$1; shift
@@ -476,17 +478,48 @@ p, labels, s, c, seen = sys.argv[1:]
 open(p, "a").write(json.dumps({"labels": labels.split(","), "settled_rc": int(s), "cycle_rc": int(c), "guest_banner_seen": seen == "1"}) + "\n")
 PY
 }
+# DOM0 RENDER WITNESS for the in-place swap: the agent's QGATOASTSWAP/QGATOASTREPAINT lines are its own claim that dom0
+# was sent the second toast's pixels; only dom0's pixels show they arrived. The banner is override-redirect, absent from
+# _NET_CLIENT_LIST, so the whole-desktop capture is the only one that sees it. Back to back (~4 s each) from before the
+# fire until the banner wait ends. Each capture is checked for a visible desktop, the toast is cut out of it (cut_toast
+# deletes the desktop image), and one line per capture goes to <tag>.times: dom0 start/end time, visibility, the cut.
+witness_start(){ # <tag>
+  local d="$OUT/witness"
+  mkdir -p "$d"; rm -f "$d/$1.stop"
+  ( n=0
+    while [ ! -e "$d/$1.stop" ] && [ "$n" -lt 15 ]; do
+      n=$((n + 1)); s=$(date -u +%H:%M:%S.%3N)
+      QTEST_VM=$VM timeout -k 8 45 ./tools/qtest fullshot "$d/$1-$n.tar" >/dev/null 2>&1; r=$?
+      e=$(date -u +%H:%M:%S.%3N)
+      desktop_visible "$d/$1-$n.tar" && v=1 || v=0
+      c=$(cut_toast "$d/$1-$n.tar" "witness/$1-$n")
+      printf '%s start=%s end=%s rc=%s visible=%s cut=%s\n' "$n" "$s" "$e" "$r" "$v" "$c" >> "$d/$1.times"
+    done ) >/dev/null 2>&1 &
+  WITNESS_PID=$!
+}
+witness_stop(){ # <tag> <row label>: a cut counts only from a visible desktop (a locked screen is not a witness)
+  local d="$OUT/witness" n shot
+  touch "$d/$1.stop"; wait "$WITNESS_PID" 2>/dev/null
+  shot=$(grep -c ' rc=0 ' "$d/$1.times" 2>/dev/null); n=$(grep -E ' visible=1 cut=[0-9]' "$d/$1.times" 2>/dev/null | wc -l)
+  if [ "${n:-0}" -ge 1 ]; then
+    verdict "$2" "ATTENDED-PENDING dom0 render witness: $n toast cut(s) from ${shot:-0} visible-desktop capture(s), witness/$1-*-toast.png (per capture: witness/$1.times) - READ THEM against the agent's QGATOASTSWAP/QGATOASTREPAINT: after the swap the banner in dom0 must show the second toast's title"
+  else
+    verdict "$2" "INSTRUMENT dom0 render witness: no toast cut from a visible desktop in ${shot:-0} capture(s) (witness/$1.times) - the swap's pixel half is ungraded"
+  fi
+}
 # scenario <labels csv> <mode> <aumids to dismiss csv> <token template>
 scenario(){
   local labels=$1 mode=$2 dism=$3 tpl=$4 n bm src crc a
   n=$(awk -F, '{print NF}' <<<"$labels")
   bm=$(th_bmark); [ -n "$bm" ] || { verdict "$labels" "INSTRUMENT could not read the bridge.log line count before firing"; return; }
   log "--- $labels ($mode): firing $n toast(s)"
+  [ "$labels" = "S3iii-1,S3iii-2" ] && witness_start s3iii
   if ! fire_steps "$labels" "$mode" "$tpl"; then
     verdict "${labels%%,*}-STIM" "INSTRUMENT the stimulus for $labels did not fully fire (see $OUT/fires/) - rows graded on whatever fired"
   fi
   wait_settled "$n" "$bm" 90; src=$?
   wait_banner_cycle 25; crc=$?
+  [ "$labels" = "S3iii-1,S3iii-2" ] && witness_stop s3iii S3iii-W
   record_wait "$labels" "$src" "$crc"
   IFS=, read -ra DA <<<"$dism"
   for a in "${DA[@]}"; do dismiss_toasts "$a"; done
