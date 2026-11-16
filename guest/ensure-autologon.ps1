@@ -234,6 +234,21 @@ if ($lsa) {
     $warn++
 }
 
+# The profile repair below signs out a temporary-profile session with ForceAutoLogon=1 set, which is what
+# makes Winlogon log the user on again (docs/ADR-windows.md decision 4). It marks that it set the value,
+# and the next boot removes both, so a later manual sign-out behaves as it did before the repair.
+$qtKey = 'HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools'
+$forceMark = 'ProfileRepairForceAutoLogon'
+if ($AtBoot -and (Get-ItemProperty -Path $qtKey -Name $forceMark -ErrorAction SilentlyContinue)) {
+    try {
+        Remove-ItemProperty -Path $WL -Name 'ForceAutoLogon' -Force -ErrorAction SilentlyContinue
+        Remove-ItemProperty -Path $qtKey -Name $forceMark -Force -ErrorAction Stop
+        Write-Output 'SET    ForceAutoLogon removed: the profile repair set it on the previous boot'
+    } catch {
+        Write-Output "WARN   ForceAutoLogon set by the profile repair could not be removed: $($_.Exception.Message.Split([char]10)[0])"
+    }
+}
+
 # 4. A profile store that was never filled. MoveUsers keeps every profile on the private volume
 #    (C:\Users is a link to Q:\Users), and `qvm-create --class StandaloneVM --template T` gives the new
 #    qube a copy of T's root with a NEW, EMPTY private volume: the link dangles, the autologon user
@@ -312,16 +327,28 @@ try {
             }
             if ($repaired) {
                 # As on Linux, the boot goes on and nothing is sent to dom0. An autologon that already ran got a
-                # temporary profile; signing it out makes Winlogon log the user on again (AutoAdminLogon=1 with
-                # no AutoLogonCount), now from the fresh store.
+                # temporary profile. A sign-out alone leaves the guest at the sign-in screen; with ForceAutoLogon=1
+                # Winlogon logs the user on again, now from the fresh store.
                 $sids = @(Get-Process -IncludeUserName -ErrorAction SilentlyContinue |
                           Where-Object { $_.SessionId -gt 0 -and $user -and ([string]$_.UserName).EndsWith("\$user", [StringComparison]::OrdinalIgnoreCase) } |
                           Select-Object -ExpandProperty SessionId -Unique)
+                if ($sids.Count -and [string](Get-WL 'ForceAutoLogon') -ne '1') {
+                    try {
+                        # The marker first: if the second write fails, the next boot still removes what was set.
+                        if (-not (Test-Path -LiteralPath $qtKey)) { New-Item -Path $qtKey -Force -ErrorAction Stop | Out-Null }
+                        New-ItemProperty -Path $qtKey -Name $forceMark -Value 1 -PropertyType DWord -Force -ErrorAction Stop | Out-Null
+                        New-ItemProperty -Path $WL -Name 'ForceAutoLogon' -Value '1' -PropertyType String -Force -ErrorAction Stop | Out-Null
+                        Write-Output 'SET    ForceAutoLogon=1 for the sign-out below; the next boot removes it'
+                    } catch {
+                        Write-Output "WARN   could not set ForceAutoLogon, so the session is not signed out - the new profile is used from the next restart: $($_.Exception.Message.Split([char]10)[0])"
+                        $sids = $null
+                    }
+                }
                 foreach ($sid in $sids) {
                     & logoff.exe $sid 2>&1 | Out-Null
                     Write-Output "SET    signed out session $sid of $user (rc=$LASTEXITCODE) - autologon logs on again with the new profile"
                 }
-                if (-not $sids.Count) { Write-Output "ok     no session of $user yet - its first logon builds the new profile" }
+                if ($null -ne $sids -and -not $sids.Count) { Write-Output "ok     no session of $user yet - its first logon builds the new profile" }
             } else {
                 $sent = 'unavailable:helper-absent'
                 $nh = @((Join-Path $PSScriptRoot 'qwt-notify-error.ps1'), (Join-Path (Split-Path -Parent $PSScriptRoot) 'bin\qwt-notify-error.ps1')) |
