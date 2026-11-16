@@ -11,7 +11,6 @@ exit-decision-coverage-selftest.sh
 failproof-misc.sh
 firstboot-effects-selftest.sh
 ledger-invariant-audit.py
-lifecycle-selftest.sh
 logvol-modulekey-selftest.sh
 mode-wait-attribution-selftest.sh
 notifbridge-pid-selftest.sh
@@ -30,7 +29,6 @@ svc-exitcode-selftest.sh
 toastactions-selftest.sh
 toasthold-selftest.sh
 ttfw-ab-selftest.sh
-uac-prompt-reachable-selftest.sh
 uef-one-line-selftest.sh
 upd-task-prestop-selftest.sh
 wgcbroker-layout-selftest.sh

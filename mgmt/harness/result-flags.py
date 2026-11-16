@@ -209,6 +209,8 @@ ERROR_FLAGS = [
     ('clock_sync',              lambda v: _s(v) not in ('unregistered', 'absent'),
                                                                           'the obsolete boot-time clock pull (QwtClockSync) is STILL registered after /Delete - remove it by hand (schtasks /Delete /TN QwtClockSync /F). Success is \'unregistered\' (this install removed it) or \'absent\' (the guest never had it); a guest that keeps stepping its clock at boot is the wedge docs/ADR-clock.md removes.'),
     ('svc_recovery_rearm_failed', nonempty,                               'Resume-QubesServiceRecovery ERROR: "<svc>: NO actions|unreadable (prior: ...)" - the recovery could not be put BACK, so the service would leave the installer with no SCM recovery at all while the log said "re-armed". The readback catches it; sc.exe returning 0 does not.'),
+    ('profile_seed',            lambda v: any(int(rc) >= 8 for rc in re.findall(r':rc(\d+)', _s(v))),
+                                                                          'robocopy rc>=8 copying C:\\Users\\Default or Public into ProgramData\\Qubes\\profile-seed - a standalone made from this template without its private volume gets only the notice, not the repair (ADR-windows section 14)'),
     ('autologon',               lambda v: _s(v) not in ('armed', 'skipped', 'not in payload'),
                                                                           'L1278 not-armed / L1285 error / L3384,L3416 unverified / L3409 no trailer / L3412 verify-error'),
 ]
