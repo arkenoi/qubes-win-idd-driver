@@ -673,6 +673,10 @@ volume, and the client refuses a shrink unless forced, telling the user to shrin
 `qvm-volume resize --force`; the handler then fits Q: to the smaller disk. A forced shrink without the first
 step leaves Q: ending past the disk; the handler says so and names `qvm-volume revert`, never "nothing to grow".
 
-**Not measured:** whether the PV disk driver shows a new size to a running guest without a reboot (if not,
-the online path says so and the boot path grows it); a GPT disk whose backup header has to move; C: with a
-recovery partition after it.
+**Measured 2026-11-16** on win11de-sa37g (German 25H2 standalone, package of 45a2eb77): the PV disk driver
+shows a new size to a running guest - `qvm-volume extend private 3GiB` rc=0 and Q: grew 2130640896 ->
+3204431360 bytes with no reboot; Q:'s GPT disk grew live (2 -> 3 GiB) and halted (3 -> 4 GiB, filled at the
+next boot by the guard), so the backup header moves. C: does not grow: Windows setup puts its 796 MiB
+recovery partition right after C:, and both the live extend (rc=1, "C: cannot grow: ... partition #2
+(Unknown, 796 MiB) lies between C: and that space") and the boot guard after a halted extend refuse, as
+decided above. Growing C: therefore needs that partition moved or removed - not done here.
