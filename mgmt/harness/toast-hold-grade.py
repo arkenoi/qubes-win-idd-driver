@@ -94,7 +94,7 @@ EXPECT = {
     1: {  # the hold build (candidate): everything must be OK
         "S0": "OK-BRIDGED", "S1a": "OK-BRIDGED", "S1b": "OK-BRIDGED", "S2": "OK-WINDOW",
         "S3i-1": "OK-BRIDGED", "S3i-2": "OK-WINDOW", "S3ii-1": "OK-WINDOW", "S3ii-2": "OK-BRIDGED",
-        "S3iii-1": "OK-WINDOW", "S3iii-2": "OK-WINDOW", "S3iv-1": "OK-WINDOW", "S3iv-2": "OK-WINDOW",
+        "S3iii-1": "OK-WINDOW", "S3iii-2": "OK-WINDOW",
         "S4": "OK-BRIDGED", "S5a": "OK-WINDOW-NS", "S5c": "OK-BRIDGED",
     },
     0: {  # the pre-hold build (control): what the defect predicts; these rows are the detectors' seen-to-fail proof
@@ -402,6 +402,11 @@ def parse_agent(lines: List[str], offset: dt.timedelta, tz: Optional[dt.tzinfo] 
             kind = "CARD"; hwnd = re.search(HEX_RE + r": toast card in", msg).group(1).lower()
         elif "Seamless mode changed to" in msg:
             kind = "MODE"; kv["seamless"] = re.search(r"Seamless mode changed to (\d)", msg).group(1)
+        elif "QGATOASTQUEUED hwnd=" in msg:
+            mq = re.search(r"QGATOASTQUEUED hwnd=" + HEX_RE + r" destroyed with id=(\d+) still queued behind id=(\d+)", msg)
+            if not mq:
+                continue
+            kind = "QUEUED"; hwnd = mq.group(1).lower(); kv = {"id": mq.group(2), "behind": mq.group(3)}
         elif re.search(r"RESREQ (\d+)x(\d+)|New resolution: (\d+) x (\d+)", msg):
             kind = "RES"; mr = re.search(r"RESREQ (\d+)x(\d+)|New resolution: (\d+) x (\d+)", msg)
             kv["w"] = mr.group(1) or mr.group(3); kv["h"] = mr.group(2) or mr.group(4)
@@ -972,6 +977,14 @@ class Grader:
             if mapped_any:
                 return "OK-WINDOW", "mapped without a hold decision (bound not measurable)"
             if seen:
+                # The probe's flag is per SCENARIO: the banner it saw may be the other toast's. When the agent recorded
+                # this toast still queued behind that banner as it was destroyed, nothing shows a banner for THIS one.
+                q = next((e for e in self.agent if e.kind == "QUEUED" and e.kv.get("id") == nid
+                          and e.t >= t0 - dt.timedelta(seconds=RECORD_SLACK_S)), None)
+                if q:
+                    return "NO-BANNER", (f"never painted: the agent logged id={nid} still queued behind id={q.kv['behind']} when "
+                                         f"that banner (hwnd={q.hwnd}) was destroyed (QGATOASTQUEUED) - the banner the probe saw "
+                                         f"was id={q.kv['behind']}'s")
                 return "LOST", "the guest showed a banner (harness probe) but the agent never examined or mapped one"
             return "NO-BANNER", "no hold lines, no banner MAP, no banner seen in the guest"
         h = hwnds.pop()

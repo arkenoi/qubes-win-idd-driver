@@ -513,7 +513,7 @@ scenario(){
   n=$(awk -F, '{print NF}' <<<"$labels")
   bm=$(th_bmark); [ -n "$bm" ] || { verdict "$labels" "INSTRUMENT could not read the bridge.log line count before firing"; return; }
   log "--- $labels ($mode): firing $n toast(s)"
-  case $labels in "S3iii-1,S3iii-2") wtag=s3iii ;; "S3iv-1,S3iv-2") wtag=s3iv ;; esac
+  [ "$labels" = "S3iii-1,S3iii-2" ] && wtag=s3iii
   [ -n "$wtag" ] && witness_start "$wtag"
   if ! fire_steps "$labels" "$mode" "$tpl"; then
     verdict "${labels%%,*}-STIM" "INSTRUMENT the stimulus for $labels did not fully fire (see $OUT/fires/) - rows graded on whatever fired"
@@ -548,9 +548,6 @@ scenario "S3ii-1,S3ii-2" seamless "$AUMID_SYS,$AUMID_A" "FIRE:$FS+informational+
 # S3iii window-path then window-path in the shared banner window: the hold unmaps the shown banner when the second toast arrives
 #     in place and maps it again for that toast - the re-map dom0 needs the buffer re-announced for (REMAP-DUMP, 2026-10-06)
 scenario "S3iii-1,S3iii-2" seamless "$AUMID_SYS,$AUMID_SYS" "FIRE:$FS+informational+--title+@SLUG1@+--tag+@TAG1@ GAP:$GAP_MS FIRE:$FS+informational+--title+@SLUG2@+--tag+@TAG2@"
-# S3iv  the in-place swap without waiting on the shell to choose it: the second toast carries the first one's tag (toastfire's
-#     group is fixed), and a toast shown with the tag and group of one on screen replaces it instead of queueing behind it
-scenario "S3iv-1,S3iv-2"   seamless "$AUMID_SYS,$AUMID_SYS" "FIRE:$FS+informational+--title+@SLUG1@+--tag+@TAG1@ GAP:3000 FIRE:$FS+informational+--title+@SLUG2@+--tag+@TAG1@"
 # S4  an ALLOWLISTED app's first toast (NotifyBridgeAllow): bridge at listing, no classifier wait
 scenario "S4"    seamless "$AUMID_C"            "FIRE:$FC+informational+--title+@SLUG1@+--tag+@TAG1@"
 

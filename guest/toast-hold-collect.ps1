@@ -18,7 +18,7 @@
 #   agentgrep  THC L|<line> for every line of the named agent log past -Skip that matches the decoded pattern;
 #              THC END n=<matches> scanned=<lines read>
 #   bridgegrep the same over bridge.log past -BridgeSkip
-#   bannervis  THC bannervis known=<k> visible=<v> list=<hwnd:iswindow:visible:w:h;...> now=<...>
+#   bannervis  THC bannervis known=<k> visible=<v> list=<hwnd:iswindow:shown:w:h:cloaked;...> (shown = visible and not DWM-cloaked) now=<...>
 #              hwnds from -HwndsB64 (comma-separated hex), else every CoreWindow hwnd the agent's own QGAHELDDEFER /
 #              QGATOASTHOLD lines name in the named agent log. The shell's banner window lives in a z-band EnumWindows
 #              does not reach (measured 2026-10-04), but a handle the agent logged can be asked directly.
@@ -129,6 +129,7 @@ public static class ThcWin {
     [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc p, IntPtr l);
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
     [DllImport("user32.dll")] public static extern IntPtr GetWindow(IntPtr h, uint cmd);
+    [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr h, int attr, out int value, int size);
     public static IntPtr FindTopForPid(uint pid) {
         IntPtr found = IntPtr.Zero;
         EnumWindows(delegate(IntPtr h, IntPtr l) {
@@ -138,14 +139,19 @@ public static class ThcWin {
         }, IntPtr.Zero);
         return found;
     }
+    // <hwnd>:<IsWindow>:<shown>:<w>:<h>:<cloaked>. Shown = IsWindowVisible and NOT DWM-cloaked: the shell hides
+    // a toast banner by cloaking it, and a cloaked window still answers IsWindowVisible while drawn nowhere. The
+    // agent folds DWMWA_CLOAKED (14) into visibility the same way (gui-agent/main.c GetWindowData), so the two agree.
     public static string Describe(long hwnd) {
         IntPtr h = new IntPtr(hwnd);
         bool isw = IsWindow(h);
-        bool vis = isw && IsWindowVisible(h);
+        int cloaked = 0;
+        if (isw && DwmGetWindowAttribute(h, 14, out cloaked, 4) != 0) cloaked = 0;
+        bool vis = isw && IsWindowVisible(h) && cloaked == 0;
         int w = 0, ht = 0;
         RECT r;
         if (isw && GetWindowRect(h, out r)) { w = r.R - r.L; ht = r.B - r.T; }
-        return string.Format("0x{0:x}:{1}:{2}:{3}:{4}", hwnd, isw ? 1 : 0, vis ? 1 : 0, w, ht);
+        return string.Format("0x{0:x}:{1}:{2}:{3}:{4}:{5}", hwnd, isw ? 1 : 0, vis ? 1 : 0, w, ht, cloaked);
     }
 }
 '@
