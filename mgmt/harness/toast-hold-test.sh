@@ -509,17 +509,18 @@ witness_stop(){ # <tag> <row label>: a cut counts only from a visible desktop (a
 }
 # scenario <labels csv> <mode> <aumids to dismiss csv> <token template>
 scenario(){
-  local labels=$1 mode=$2 dism=$3 tpl=$4 n bm src crc a
+  local labels=$1 mode=$2 dism=$3 tpl=$4 n bm src crc a wtag=
   n=$(awk -F, '{print NF}' <<<"$labels")
   bm=$(th_bmark); [ -n "$bm" ] || { verdict "$labels" "INSTRUMENT could not read the bridge.log line count before firing"; return; }
   log "--- $labels ($mode): firing $n toast(s)"
-  [ "$labels" = "S3iii-1,S3iii-2" ] && witness_start s3iii
+  case $labels in "S3iii-1,S3iii-2") wtag=s3iii ;; "S3iv-1,S3iv-2") wtag=s3iv ;; esac
+  [ -n "$wtag" ] && witness_start "$wtag"
   if ! fire_steps "$labels" "$mode" "$tpl"; then
     verdict "${labels%%,*}-STIM" "INSTRUMENT the stimulus for $labels did not fully fire (see $OUT/fires/) - rows graded on whatever fired"
   fi
   wait_settled "$n" "$bm" 90; src=$?
   wait_banner_cycle 25; crc=$?
-  [ "$labels" = "S3iii-1,S3iii-2" ] && witness_stop s3iii S3iii-W
+  [ -n "$wtag" ] && witness_stop "$wtag" "${labels%%-*}-W"
   record_wait "$labels" "$src" "$crc"
   IFS=, read -ra DA <<<"$dism"
   for a in "${DA[@]}"; do dismiss_toasts "$a"; done
@@ -547,6 +548,9 @@ scenario "S3ii-1,S3ii-2" seamless "$AUMID_SYS,$AUMID_A" "FIRE:$FS+informational+
 # S3iii window-path then window-path in the shared banner window: the hold unmaps the shown banner when the second toast arrives
 #     in place and maps it again for that toast - the re-map dom0 needs the buffer re-announced for (REMAP-DUMP, 2026-10-06)
 scenario "S3iii-1,S3iii-2" seamless "$AUMID_SYS,$AUMID_SYS" "FIRE:$FS+informational+--title+@SLUG1@+--tag+@TAG1@ GAP:$GAP_MS FIRE:$FS+informational+--title+@SLUG2@+--tag+@TAG2@"
+# S3iv  the in-place swap without waiting on the shell to choose it: the second toast carries the first one's tag (toastfire's
+#     group is fixed), and a toast shown with the tag and group of one on screen replaces it instead of queueing behind it
+scenario "S3iv-1,S3iv-2"   seamless "$AUMID_SYS,$AUMID_SYS" "FIRE:$FS+informational+--title+@SLUG1@+--tag+@TAG1@ GAP:3000 FIRE:$FS+informational+--title+@SLUG2@+--tag+@TAG1@"
 # S4  an ALLOWLISTED app's first toast (NotifyBridgeAllow): bridge at listing, no classifier wait
 scenario "S4"    seamless "$AUMID_C"            "FIRE:$FC+informational+--title+@SLUG1@+--tag+@TAG1@"
 
