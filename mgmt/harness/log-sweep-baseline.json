@@ -410,6 +410,54 @@
    "status": "unsettled",
    "max_per_boot": null,
    "reason": "NEVER OBSERVED, AND DELIBERATELY NOT SILENCED. agent/gui-agent/main.c BrokerHangConfirm (agent e0bd28f): written only after the 'has not answered slot' warning, when an acknowledgement, progress or stage change ended the suspicion within 6 s - the broker was slow, not hung, and is kept; it carries the time since the warning. Jev on the canonical log-sweep rubric (floor 0.5): expected 0.84 conf [expected=0.88 defect=0.06 insufficient-evidence=0.06 noise=0.00]; keep_armed noul=0.85, so it is armed rather than expected: the first occurrence is flagged and decided with that run's evidence. CEILING UNMEASURED."
+  },
+  {
+   "regex": "^agent\\|E\\|[^|]*: QGASESSIONEVT session notifications unavailable ",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "NEVER OBSERVED (0 in 85 agent/watchdog logs of the 2026-11-16 rig runs of this agent), AND DELIBERATELY NOT SILENCED. agent/gui-agent/lifecycle.c LifecycleWindowThread (agent f93d7ef): WTSRegisterSessionNotification failed for the end-session window, so a lock that follows within one secure-desktop episode is not re-read (the verdict still reads at each episode's start). Jev on the canonical log-sweep rubric (floor 0.5): insufficient-evidence 0.27 conf [insufficient-evidence=0.45 expected=0.28 defect=0.25 noise=0.02]; keep_armed noul=0.68, so it is armed: the first occurrence is flagged and decided with that run's evidence. CEILING UNMEASURED."
+  },
+  {
+   "regex": "^agent\\|E\\|[^|]*: QGALIFECYCLE another agent holds( Global\\\\QGA_AGENT_ALIVE |$)",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "NEVER OBSERVED (0 in 85 agent/watchdog logs of the 2026-11-16 rig runs of this agent), AND DELIBERATELY NOT SILENCED. agent/gui-agent/lifecycle.c LifecycleStart (agent f93d7ef): the agent's liveness mutex was already owned at start - a second agent instance is running beside one that holds the record. Jev on the canonical log-sweep rubric (floor 0.5): expected 0.31 conf [expected=0.48 insufficient-evidence=0.26 defect=0.25 noise=0.01]; keep_armed noul=0.72, so it is armed: the first occurrence is flagged and decided with that run's evidence. CEILING UNMEASURED."
+  },
+  {
+   "regex": "^agent\\|E\\|[^|]*: CreateMutex\\((Global\\\\QGA_AGENT_ALIVE\\) failed with error |$)",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "NEVER OBSERVED (0 in 85 agent/watchdog logs of the 2026-11-16 rig runs of this agent), AND DELIBERATELY NOT SILENCED. agent/gui-agent/lifecycle.c LifecycleStart (agent f93d7ef), win_perror: the liveness mutex could not be created, so the watchdog service cannot see this agent. Jev on the canonical log-sweep rubric (floor 0.5): insufficient-evidence 0.35 conf [insufficient-evidence=0.51 defect=0.26 expected=0.22 noise=0.01]; keep_armed noul=0.72, so it is armed: the first occurrence is flagged and decided with that run's evidence. CEILING UNMEASURED."
+  },
+  {
+   "regex": "^agent\\|E\\|[^|]*: ConvertStringSecurityDescriptorToSecurityDescriptor\\(agent liveness record\\)( failed with error |$)",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "NEVER OBSERVED (0 in 85 agent/watchdog logs of the 2026-11-16 rig runs of this agent), AND DELIBERATELY NOT SILENCED. agent/gui-agent/lifecycle.c LifecycleStart (agent f93d7ef), win_perror: the liveness mutex's security descriptor could not be built, so the record is not created. Jev on the canonical log-sweep rubric (floor 0.5): insufficient-evidence 0.39 conf [insufficient-evidence=0.54 defect=0.36 expected=0.09 noise=0.01]; keep_armed noul=0.77, so it is armed: the first occurrence is flagged and decided with that run's evidence. CEILING UNMEASURED."
+  },
+  {
+   "regex": "^watchdog\\|E\\|[^|]*: OpenMutex\\((Global\\\\QGA_AGENT_ALIVE\\) failed with error |$)",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "NEVER OBSERVED (0 in 85 agent/watchdog logs of the 2026-11-16 rig runs of this agent), AND DELIBERATELY NOT SILENCED. agent/watchdog/watchdog.c WatchdogThread (agent f93d7ef), win_perror: the liveness record exists but cannot be opened; always followed by the QGAWDFOREIGN 'not launched' line, and the service ends with a failure code. Jev on the canonical log-sweep rubric (floor 0.5): insufficient-evidence 0.48 conf [insufficient-evidence=0.61 defect=0.20 expected=0.18 noise=0.01]; keep_armed noul=0.73, so it is armed: the first occurrence is flagged and decided with that run's evidence. CEILING UNMEASURED."
+  },
+  {
+   "regex": "^watchdog\\|E\\|[^|]*: QGAWDFOREIGN '[^']*' not launched: the agent liveness record cannot be opened",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "NEVER OBSERVED (0 in 85 agent/watchdog logs of the 2026-11-16 rig runs of this agent), AND DELIBERATELY NOT SILENCED. agent/watchdog/watchdog.c WatchdogThread (agent f93d7ef): no agent is launched and the service exits QGA_SVC_EXIT_LAUNCH_FAILED so the SCM's recovery looks again. Jev on the canonical log-sweep rubric (floor 0.5): expected 0.48 conf [expected=0.61 insufficient-evidence=0.22 defect=0.16 noise=0.01]; keep_armed noul=0.74, so it is armed: the first occurrence is flagged and decided with that run's evidence. CEILING UNMEASURED."
+  },
+  {
+   "regex": "^watchdog\\|E\\|[^|]*: QGAWDFOREIGN an agent this service did not start holds( Global\\\\QGA_AGENT_ALIVE |$)",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "NEVER OBSERVED (0 in 85 agent/watchdog logs of the 2026-11-16 rig runs of this agent), AND DELIBERATELY NOT SILENCED. agent/watchdog/watchdog.c WatchdogThread (agent f93d7ef): an agent the service did not start is alive; reported once per episode, the launch waits for it to end. An agent started by hand outside the service produces it. Jev on the canonical log-sweep rubric (floor 0.5): expected 0.65 conf [expected=0.74 insufficient-evidence=0.19 defect=0.05 noise=0.02]; keep_armed noul=0.76, so it is armed: the first occurrence is flagged and decided with that run's evidence. CEILING UNMEASURED."
+  },
+  {
+   "regex": "^watchdog\\|E\\|[^|]*: QGAWDFOREIGN service stopping while a ",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "NEVER OBSERVED (0 in 85 agent/watchdog logs of the 2026-11-16 rig runs of this agent), AND DELIBERATELY NOT SILENCED. agent/watchdog/watchdog.c WatchdogThread (agent f93d7ef): written at service stop only while the foreign agent of the 'did not start holds' line is still alive. Jev on the canonical log-sweep rubric (floor 0.5): expected 0.47 conf [expected=0.60 insufficient-evidence=0.24 defect=0.15 noise=0.01]; keep_armed noul=0.77, so it is armed: the first occurrence is flagged and decided with that run's evidence. CEILING UNMEASURED."
   }
  ],
  "signatures": {
@@ -4434,5 +4482,5 @@
   }
  },
  "version": 1,
- "preaccounted_at": "b10b20c36ed978eeef426fe8c1f48062d1cfaca8"
+ "preaccounted_at": "b2c75a7edc939e599a11c1a3e788585a40ea02f0"
 }
