@@ -48,6 +48,43 @@ $warn = 0
 
 function Get-WL($n) { (Get-ItemProperty -Path $WL -Name $n -ErrorAction SilentlyContinue).$n }
 
+# 'zero' only when all $Size bytes of disk $Number were read and every one is zero; otherwise why not.
+# .NET Framework's FileStream refuses a \\.\ device path, so the handle comes from CreateFileW.
+function Test-QwtDiskAllZero {
+    param([Parameter(Mandatory)][int]$Number, [Parameter(Mandatory)][int64]$Size)
+    try {
+        if (-not ('QwtBlankDisk' -as [type])) {
+            Add-Type @'
+using System; using System.IO; using System.Runtime.InteropServices; using Microsoft.Win32.SafeHandles;
+public static class QwtBlankDisk {
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    static extern SafeFileHandle CreateFileW(string name, uint access, uint share, IntPtr sa, uint disposition, uint flags, IntPtr template);
+    public static string Check(int number, long size) {
+        if (size <= 0) return "size " + size;
+        // GENERIC_READ, FILE_SHARE_READ|FILE_SHARE_WRITE, OPEN_EXISTING
+        using (SafeFileHandle h = CreateFileW(@"\\.\PhysicalDrive" + number, 0x80000000u, 3u, IntPtr.Zero, 3u, 0u, IntPtr.Zero)) {
+            if (h.IsInvalid) return "open failed, error " + Marshal.GetLastWin32Error();
+            using (FileStream fs = new FileStream(h, FileAccess.Read, 4096, false)) {
+                byte[] buf = new byte[4 << 20];
+                long done = 0;
+                while (done < size) {
+                    int want = (int)Math.Min(buf.Length, size - done);
+                    int got = fs.Read(buf, 0, want);
+                    if (got <= 0) return "read ended at byte " + done + " of " + size;
+                    for (int i = 0; i < got; i++) if (buf[i] != 0) return "non-zero byte at offset " + (done + i);
+                    done += got;
+                }
+                return "zero";
+            }
+        }
+    }
+}
+'@
+        }
+        return [QwtBlankDisk]::Check($Number, $Size)
+    } catch { return "read failed: $($_.Exception.Message.Split([char]10)[0])" }
+}
+
 # 1. AutoLogonCount must be ABSENT. Its presence is what makes Windows eat the password.
 if ($null -ne (Get-WL 'AutoLogonCount')) {
     Remove-ItemProperty -Path $WL -Name 'AutoLogonCount' -Force -ErrorAction SilentlyContinue
@@ -288,6 +325,11 @@ try {
                     if (([string]$now.SerialNumber).Trim() -ne $pSn -or [string]$now.PartitionStyle -ne 'RAW') {
                         throw "disk #$($p.Number) changed: now sn '$(([string]$now.SerialNumber).Trim())' style $($now.PartitionStyle) - not writing"
                     }
+                    # RAW says only that Windows found no partition table; a damaged table or a disk that reads
+                    # badly at boot looks the same while holding data. Blank means every byte is zero, as
+                    # core-agent-linux setup-rwdev.sh requires before it formats a private volume.
+                    $blank = Test-QwtDiskAllZero -Number $p.Number -Size ([int64]$now.Size)
+                    if ($blank -ne 'zero') { throw "disk #$($p.Number) is not blank ($blank) - not writing" }
                     if ($now.IsOffline)  { Set-Disk -Number $p.Number -IsOffline $false -ErrorAction Stop }
                     if ($now.IsReadOnly) { Set-Disk -Number $p.Number -IsReadOnly $false -ErrorAction Stop }
                     $touched = $true

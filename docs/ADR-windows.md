@@ -607,7 +607,9 @@ per-user data is not carried.
 
 **Decision.**
 1. The installer keeps a copy of `C:\Users\Default` and `Public` on the root volume.
-2. At boot, before logon, a guest in §13's state formats the blank private disk (by serial) as Q:, seeds
+2. At boot, before logon, a guest in §13's state formats the blank private disk (by serial; blank = no
+   partition table AND every byte reads zero, as core-agent-linux `setup-rwdev.sh` requires; owner
+   2026-11-16: «make sure appvm private volume wont get overwritten by accident») as Q:, seeds
    `Q:\Users` from that copy, and removes the stale ProfileList entries so that Windows builds fresh profiles.
 3. The boot goes on; a session the autologon already opened is signed out so the user is logged on again
    with the new profile. No restart is taken (`ADR-updater` §10) and nothing is sent to dom0.
