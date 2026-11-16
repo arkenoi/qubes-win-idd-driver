@@ -14,10 +14,11 @@
 # Usage:  . <path>\qubesdb-read.ps1 ; $cls = Get-QubesVmClass ; $ip = Get-QubesDbValue '/qubes-ip'
 # Run directly for a self-test.
 #
-# NOTE: the updater (guest/qubes-windows-update.ps1), the installer (Install-QwtImproved.ps1) and
-# the error-notification helper (guest/qwt-notify-error.ps1, Get-QwtNotifyQubesDbValue) carry
-# INLINE mirrors of Get-QubesDbValue rather than dot-sourcing this file - they must stay
-# self-contained on the deployed medium. Keep the four in sync.
+# NOTE: the updater (guest/qubes-windows-update.ps1), the installer (Install-QwtImproved.ps1),
+# the error-notification helper (guest/qwt-notify-error.ps1, Get-QwtNotifyQubesDbValue) and the
+# boot guard's class read (guest/ensure-autologon.ps1 part 6, QwtGuardQdb) carry INLINE mirrors of
+# Get-QubesDbValue rather than dot-sourcing this file - they must stay self-contained on the
+# deployed medium. Keep the five in sync.
 
 function Get-QubesDbValue {
     param([Parameter(Mandatory)][string]$Path)

@@ -441,16 +441,35 @@ if (-not $AtBoot) {
 #    AppVM's root writes are discarded at shutdown. A class QubesDB cannot answer keeps the refresh.
 if ($AtBoot) {
     $seedRoot = Join-Path $env:ProgramData 'Qubes\profile-seed'
+    # Inline mirror of guest/qubesdb-read.ps1's Get-QubesDbValue: this file runs installed and alone.
     $vmClass = $null
-    $qdbRead = Join-Path (Split-Path -Parent $PSScriptRoot) 'bin\qubesdb-read.exe'
-    if (Test-Path -LiteralPath $qdbRead) {
-        $qdbOut = & $qdbRead /type 2>$null
-        if ($LASTEXITCODE -eq 0) { $vmClass = "$qdbOut".Trim() }
-    }
+    try {
+        if (-not ('QwtGuardQdb' -as [type])) {
+            Add-Type @'
+using System; using System.Runtime.InteropServices;
+public static class QwtGuardQdb {
+    [DllImport("qubesdb-client.dll", CallingConvention=CallingConvention.Cdecl)]
+    public static extern IntPtr qdb_open(IntPtr vmname);
+    [DllImport("qubesdb-client.dll", CallingConvention=CallingConvention.Cdecl, CharSet=CharSet.Ansi)]
+    public static extern IntPtr qdb_read(IntPtr h, string path, out uint value_len);
+    [DllImport("qubesdb-client.dll", CallingConvention=CallingConvention.Cdecl)]
+    public static extern void qdb_close(IntPtr h);
+}
+'@
+        }
+        $qh = [QwtGuardQdb]::qdb_open([IntPtr]::Zero)
+        if ($qh -ne [IntPtr]::Zero) {
+            try {
+                $qlen = [uint32]0
+                $qp = [QwtGuardQdb]::qdb_read($qh, '/type', [ref]$qlen)
+                if ($qp -ne [IntPtr]::Zero) { $vmClass = [Runtime.InteropServices.Marshal]::PtrToStringAnsi($qp, [int]$qlen).Trim() }
+            } finally { [QwtGuardQdb]::qdb_close($qh) }
+        }
+    } catch { $vmClass = $null }
     if ($vmClass -and $vmClass -ne 'TemplateVM') {
         Write-Output "ok     profile seed: not kept on a $vmClass - only a template's seed is read"
     } elseif ($cuTarget -match '^[Qq]:\\Users\\?$' -and (Test-Path -LiteralPath 'Q:\Users\Default\NTUSER.DAT')) {
-        if (-not $vmClass) { Write-Output "note   profile seed: the qube class is unreadable ($qdbRead) - refreshing as on a template" }
+        if (-not $vmClass) { Write-Output "note   profile seed: the qube class is unreadable from QubesDB - refreshing as on a template" }
         foreach ($sp in 'Default', 'Public') {
             $src = Join-Path 'Q:\Users' $sp
             if (-not (Test-Path -LiteralPath $src)) { Write-Output "WARN   profile seed: $src is absent"; continue }
