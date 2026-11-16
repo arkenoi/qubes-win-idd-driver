@@ -1042,7 +1042,7 @@
    "reason": "Jev: expected 0.64 on the corpus [carried from 2026-10-07T06:29:25Z, not seen in these reports]",
    "status": "expected"
   },
-  "agent|W|SecureDesktopLockedNow: QGADESKLOCKREAD lock state unreadable, no lock asserted: wts-query=N wts-err=N level=N wts-flags=0xH shell-seen=N shell-process=unread shell-process-err=N": {
+  "agent|W|SecureDesktopLockedNow: QGADESKLOCKREAD lock state unreadable, no lock asserted: wts-query=N wts-err=N level=N wts-flags=0xH shell-seen=N shell-on-default=unread shell-probe-err=N": {
    "family": "agent",
    "jev": {
     "choice": "expected",
@@ -1050,7 +1050,7 @@
    },
    "level": "W",
    "max_per_boot": 1,
-   "reason": "Jev: expected 0.64 on the corpus",
+   "reason": "Jev: expected 0.64 on the corpus. Key renamed with the line: agent 52b9275 changed the fields shell-process=/shell-process-err= to shell-on-default=/shell-probe-err= (same condition, same arm, QGA_LOCK_NO_FACT), so the old key could no longer match and the build-4.3.45.1342 acceptance's win10-appvm cell reported it as unclassified (one occurrence, wts-flags=0xffffffff before any shell, within max_per_boot 1; the sweep's own Jev on that run: insufficient-evidence 0.44).",
    "status": "expected"
   },
   "agent|W|SetVideoModeExact: RESSETTLE N<HEX> applied on attempt N after N ms - first refused <HEX>, the mode set was not live yet": {
