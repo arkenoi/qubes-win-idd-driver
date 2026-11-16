@@ -467,7 +467,7 @@ public static class QwtGuardQdb {
         }
     } catch { $vmClass = $null }
     if ($vmClass -and $vmClass -ne 'TemplateVM') {
-        Write-Output "ok     profile seed: not kept on a $vmClass - only a template's seed is read"
+        Write-Output "ok     profile seed: not kept on this $vmClass - only a template's seed is read"
     } elseif ($cuTarget -match '^[Qq]:\\Users\\?$' -and (Test-Path -LiteralPath 'Q:\Users\Default\NTUSER.DAT')) {
         if (-not $vmClass) { Write-Output "note   profile seed: the qube class is unreadable from QubesDB - refreshing as on a template" }
         foreach ($sp in 'Default', 'Public') {
