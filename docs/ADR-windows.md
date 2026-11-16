@@ -595,7 +595,11 @@ reaches it at that template's next boot. Both the write and the refresh run on a
 from QubesDB `/type` (owner 2026-11-16, option 2 of three: "i think our option is 2"): `qvm-create
 --template` takes a TemplateVM, so no other qube's seed is read, and an AppVM's root writes are discarded
 at shutdown. A class QubesDB cannot answer keeps the copy, since a template without its seed would give
-its standalones the notice only. Measured size: 2.5 MiB (Default, 55 files) and 5 KB (Public). Disk: the
+its standalones the notice only. Measured size: 2.5 MiB (Default, 55 files) and 5 KB (Public). Why a
+refresh and not one write, measured 2026-11-16 (template-update-test on win11de-seedp, build-4.3.45.1338,
+German 25H2 TemplateVM): the three boots before the update logged "profile seed: Default current"; the boot
+after cumulative KB5132061 (26200.9974, round 2) logged "Default refreshed (robocopy rc=3)" - files in
+Default changed and others went. Which files is not recorded (the copy runs with /NFL). Disk: the
 installer's two calls with its re-read at the write and its verify, repeated in the guard; a failure before
 the seed is in clears the disk back to RAW so the next boot tries again (Jev 0.66, no verdict). ProfileList:
 every `S-1-5-21-*` key whose `ProfileImagePath` does not exist once Q: is made, never the service profiles
