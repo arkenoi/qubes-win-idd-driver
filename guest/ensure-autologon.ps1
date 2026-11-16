@@ -395,9 +395,20 @@ if (-not $AtBoot) {
 #    current: updates and machine-wide installs change both on Q:, and a standalone made from this qube's
 #    root would otherwise be seeded from the install-time copy. Same copy as the installer's (data,
 #    attributes, timestamps, junctions excluded), at boot only, and only where C:\Users is Q:\Users.
+#    Templates only: `qvm-create --template` takes a TemplateVM, so no other qube's seed is ever read, and an
+#    AppVM's root writes are discarded at shutdown. A class QubesDB cannot answer keeps the refresh.
 if ($AtBoot) {
     $seedRoot = Join-Path $env:ProgramData 'Qubes\profile-seed'
-    if ($cuTarget -match '^[Qq]:\\Users\\?$' -and (Test-Path -LiteralPath 'Q:\Users\Default\NTUSER.DAT')) {
+    $vmClass = $null
+    $qdbRead = Join-Path (Split-Path -Parent $PSScriptRoot) 'bin\qubesdb-read.exe'
+    if (Test-Path -LiteralPath $qdbRead) {
+        $qdbOut = & $qdbRead /type 2>$null
+        if ($LASTEXITCODE -eq 0) { $vmClass = "$qdbOut".Trim() }
+    }
+    if ($vmClass -and $vmClass -ne 'TemplateVM') {
+        Write-Output "ok     profile seed: not kept on a $vmClass - only a template's seed is read"
+    } elseif ($cuTarget -match '^[Qq]:\\Users\\?$' -and (Test-Path -LiteralPath 'Q:\Users\Default\NTUSER.DAT')) {
+        if (-not $vmClass) { Write-Output "note   profile seed: the qube class is unreadable ($qdbRead) - refreshing as on a template" }
         foreach ($sp in 'Default', 'Public') {
             $src = Join-Path 'Q:\Users' $sp
             if (-not (Test-Path -LiteralPath $src)) { Write-Output "WARN   profile seed: $src is absent"; continue }

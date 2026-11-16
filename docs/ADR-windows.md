@@ -591,7 +591,11 @@ upgrade, data, attributes and timestamps, junctions excluded - the measured shap
 (part 6, boot task only) re-mirrors the live `Q:\Users\Default` and `Public` into it at every boot, so updates
 and machine-wide installs made in a template reach it as `/etc/skel` changes do on a template's root (Jev
 every_boot 0.95, over a racing shutdown-event copy 0.02 and install-only 0.02); a template's last session
-reaches it at that template's next boot. Disk: the
+reaches it at that template's next boot. Both the write and the refresh run on a TemplateVM only, read
+from QubesDB `/type` (owner 2026-11-16, option 2 of three: "i think our option is 2"): `qvm-create
+--template` takes a TemplateVM, so no other qube's seed is read, and an AppVM's root writes are discarded
+at shutdown. A class QubesDB cannot answer keeps the copy, since a template without its seed would give
+its standalones the notice only. Measured size: 2.5 MiB (Default, 55 files) and 5 KB (Public). Disk: the
 installer's two calls with its re-read at the write and its verify, repeated in the guard; a failure before
 the seed is in clears the disk back to RAW so the next boot tries again (Jev 0.66, no verdict). ProfileList:
 every `S-1-5-21-*` key whose `ProfileImagePath` does not exist once Q: is made, never the service profiles

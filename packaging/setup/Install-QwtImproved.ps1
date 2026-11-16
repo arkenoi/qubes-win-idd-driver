@@ -5033,16 +5033,20 @@ function Invoke-Stage2 {
     # Data, attributes and timestamps, junctions excluded: the shape measured to give a working profile.
     # Refreshed at every install and upgrade, and by the boot guard at every boot (part 6); a failed copy
     # leaves such a standalone notice-only.
+    # Templates only: `qvm-create --template` takes a TemplateVM, so no other qube's seed is ever read. A
+    # class QubesDB cannot answer keeps the copy.
     $seedRoot = Join-Path $env:ProgramData 'Qubes\profile-seed'
     $seedOut = @()
-    foreach ($sp in 'Default', 'Public') {
+    $seedClass = Read-QwtQubesDbValue '/type'
+    if ($seedClass -and $seedClass -ne 'TemplateVM') { $seedOut += "skipped:$seedClass" }
+    else { foreach ($sp in 'Default', 'Public') {
         $src = Join-Path 'C:\Users' $sp
         if (-not (Test-Path -LiteralPath $src)) { $seedOut += "${sp}:absent"; continue }
         $null = & robocopy.exe $src (Join-Path $seedRoot $sp) /MIR /COPY:DAT /DCOPY:DAT /XJ /R:0 /W:0 /NP /NFL /NDL /NJH /NJS 2>&1
         $rc = $LASTEXITCODE
         $seedOut += "${sp}:rc$rc"
         if ($rc -ge 8) { Write-Log "profile seed: robocopy $src -> $seedRoot failed (rc=$rc) - a standalone made from this template without its private volume will only be told the remedy" 'WARN' }
-    }
+    } }
     $script:Result.detail.profile_seed = ($seedOut -join ' ')
     Write-Log "profile seed: $($seedOut -join ' ') in $seedRoot"
 
