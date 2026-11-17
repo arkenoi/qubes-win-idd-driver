@@ -74,6 +74,7 @@ flowchart TD
 | 12 | A withheld window is reported to the user only for a fault that waiting cannot resolve | ACCEPTED (owner, Jev) | 2026-11-14 |
 | 13 | A guest whose profiles live on an empty private volume says so, with the remedy | ACCEPTED (Jev 0.75) | 2026-11-15 |
 | 14 | Repairing such a guest: a fresh private volume, then power off | PROPOSED (Jev 0.75) | 2026-11-15 |
+| 15 | A volume extended in dom0 grows inside the guest, as on Linux | ACCEPTED (owner) | 2026-11-15 |
 | 16 | `qubes.WaitForSession` waits for the qube's own qubesdb `/default-user`, as on Linux; a different name from the caller is reported through the existing route | ACCEPTED (owner) | 2026-11-17 |
 
 Status words and the section format are defined in `docs/ADR-README.md`.
@@ -684,8 +685,8 @@ decided above. Growing C: therefore needs that partition moved or removed - not 
 
 ## 16. `qubes.WaitForSession` waits for the qube's own qubesdb `/default-user`, as on Linux
 
-**Status:** ACCEPTED (owner), 2026-11-17. Built in core-agent 1697352 (`wait-for-logon.c`); not verified on
-a guest.
+**Status:** ACCEPTED (owner), 2026-11-17. Built in core-agent 1697352 (`wait-for-logon.c`); measured on a
+guest 2026-11-17 (Evidence).
 
 **Owner, 2026-11-17:** «did you implement the plan for matching linux core-agent to read qubesdb entries? or
 was it postponed to SLS work? workflow it in background»; «yes keep in mind multiplexing/combining vchan load
@@ -736,11 +737,36 @@ the resume (core-agent `src/qrexec-agent/qrexec-agent.c`, the comment above `Wai
 without a bound by the owner's no-timeout rule; this is not a Jev verdict. Every call opens the local pipe
 once and makes one read on it.
 
-**Evidence.** Owed: a rig run of the built exe - a caller name equal to `/default-user`, one that differs (the
-W line, the notification, the duplicate suppressed), and qubesdb unreadable.
+**Evidence.** 2026-11-17 on win11de26-t54 (German 26H2 TemplateVM, QWT 4.3.44.1322 installed, signed-in
+account `user`) with the CI build of 1697352 (release-package 44102776322; the guest copy's sha256 equal to the
+artifact's at every boot, `1d59043b5a7d0da6...`), fed a name on stdin as dom0 feeds it:
+- qubesdb `user`, caller `user`: exit 0, 585 ms round trip from the dev qube (run12 A).
+- qubesdb `user`, caller `weck`: the W line naming both; `default-user-changed` sent (#1 this boot), and its
+  bubble photographed in dom0 and read - "App menu entries wait for a different account than dom0 named", the
+  restart remedy, QWTUSERCHANGED; the wait was for `user` and ended (run12 B). A second such call that boot:
+  its own W line, and the route answered `suppressed:duplicate` (run12 D).
+- qubesdb `user`, the caller sent an empty line: exit 0 (run12 C).
+- `default_user` `weck` set before the start (qubesdb `weck`), caller `weck`, `user` signed in: the session
+  check's W line; `default-user-mismatch` sent (#1 this boot), and its bubble photographed and read - "App menu
+  entries start nothing in this qube", the qvm-prefs remedy, QWTUSERMISMATCH; the wait stays (one process 35 s
+  later, two after a second call) (run12 E; the bubble in run13 - run12's witness photographed before the send).
+- `default_user` changed in dom0 while the qube runs: qubesdb `/default-user` keeps the name it had at the
+  start. Every read returned `user` after dom0 held `weck` - for 51 s, 2 s apart, a fresh `qdb_open` each
+  (run12 D), and for 25 s (run14) - and the next start read `weck`. In the same run14 boot a service feature
+  set and then unset in dom0 reached the guest's qubesdb within 5 s each way (`/qubes-service/r54live` `[1]`,
+  then absent), so this guest applies dom0's live writes and dom0 wrote no `/default-user`: the name changes
+  at the next start. A Linux qube's `qubes.WaitForSession` reads the same key, so it is inferred to wait for
+  the start-time name too (dom0's side is not in our upstream tree). The call made during the change waited
+  for `user` and returned 0 within 2 s (run12 D); the `default-user-changed` remedy is the restart.
+- The read this decision adds holds nothing it was measured against: in run15, 48.7 s after boot, a fresh
+  `qdb_open` and read of `/default-user` took under 0.5 s (a PowerShell type compile included), and the CI
+  exe's second run, its own read included, took 95 ms from cmd start to exit.
+- Not run: qubesdb unreadable (rule 4).
 
 **Open.**
-- Whether qubesdb `/default-user` follows a `default_user` change made in dom0 while the qube runs is NOT
-  measured; a rig read is pending, and this section claims neither way.
+- The guest held a boot's first run of the side-loaded CI exe ~16 s (run12 E, run13; run15: 16.3 s from cmd
+  start to exit), while the installed 4.3.44 exe, started in the same second, ran in 235 ms. Both binaries
+  carry a signature; the cause is not identified. Not measured: the first call after a boot to the exe as the
+  package installs it.
 - A zero-byte stdin still ends the call with an error before qubesdb is read, as before; only a name that
   trims to empty reaches the fallback in rule 4.

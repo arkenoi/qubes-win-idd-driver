@@ -9,7 +9,7 @@ in `docs/DESIGN-*.md` and `docs/design/DESIGN-*.md` and in the code headers (sup
 | file | scope | sections |
 |---|---|---|
 | `ADR-graphics.md` | the INDEX of the graphics decisions across the ADRs below - each row names the section that decides it; not a second contract | G1–G22, P1–P3 |
-| `ADR-windows.md` | which guest surfaces become dom0 windows: the screens never shown, the fullscreen window that needs dom0's consent, the secure desktop, the non-seamless desktop window, chrome fragments, popups, autologon, the hidden Start menu, the withheld-window notice, a profile store on an empty private volume | 14 |
+| `ADR-windows.md` | which guest surfaces become dom0 windows: the screens never shown, the fullscreen window that needs dom0's consent, the secure desktop, the non-seamless desktop window, chrome fragments, popups, autologon, the hidden Start menu, the withheld-window notice, a profile store on an empty private volume, a volume extended in dom0 growing inside the guest, the session wait on qubesdb `/default-user` | 16 |
 | `ADR-capture.md` | where a guest window's pixels come from: the PrintWindow engine, the WGC broker, liveness at rest | 33 |
 | `ADR-gui.md` | window geometry between the guest and dom0's gui-daemon: placement after a restart, resizes | 2 |
 | `ADR-toasts.md` | how a guest's Windows notifications reach dom0 (the toast bridge), how each toast is routed, and how a toast's buttons round-trip as dom0 actions | 11 |
