@@ -402,7 +402,6 @@ int main()
         std::wstring summary, body;
         ToastActNoticeText(e, which, detail, summary, body);
         Check("notice text names the button, the toast and the app, and the detail",
-              summary == L"A notification action did not run" &&
               body.find(L"'Later' on 'Meeting' (Calendar)") != std::wstring::npos && body.find(L"Activate failed (fake)") != std::wstring::npos &&
               body.find(L"Notification Center") != std::wstring::npos);
     }

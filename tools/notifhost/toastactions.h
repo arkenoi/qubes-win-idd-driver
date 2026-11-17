@@ -851,10 +851,11 @@ inline ToastActAfterFail ToastActFailChoice(bool recordFound, long agentState, b
 inline void ToastActNoticeText(ToastActEntry const& e, ToastAct const* act, std::wstring const& detail,
                                std::wstring& summary, std::wstring& body)
 {
-    summary = L"A notification action did not run";
+    // short and precise, a system message (owner 2026-11-17): what failed, why, where the notification is now
+    summary = L"Notification action failed";
     body = L"'" + (act ? act->label : std::wstring(L"?")) + L"' on '" + e.title + L"'";
     if (!e.app.empty()) body += L" (" + e.app + L")";
-    body += L" could not be carried out in the guest";
+    body += L" did not run in the guest";
     if (!detail.empty()) body += L": " + detail;
-    body += L". The notification is still in the guest's Notification Center.";
+    body += L". The notification stays in the guest's Notification Center.";
 }
