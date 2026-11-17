@@ -99,9 +99,11 @@ qvm-tags "$VM" add win-idd-testbed
 MARKIMG="${MARKIMG:-/home/user/win-iso/rebuild-marker.img}"
 MARKLOOP=""
 if [ "${PRISTINE:-0}" = 1 ]; then
-    [ -f "$MARKIMG" ] || { truncate -s 8M "$MARKIMG" && mkfs.fat -F 16 -n DIAG "$MARKIMG" >/dev/null 2>&1; }
-    # fresh every run: a stale PRIMED-OK.TXT from the previous build would end this one instantly
-    mkfs.fat -F 16 -n DIAG "$MARKIMG" >/dev/null 2>&1
+    [ -f "$MARKIMG" ] || truncate -s 8M "$MARKIMG"
+    # fresh every run: a stale PRIMED-OK.TXT from the previous build would end this one instantly.
+    # -s 1: at the default cluster size mkfs.fat 4.2 refuses FAT16 on 8 MiB ("too small or too
+    # large filesystem"), and with its output discarded the image kept whatever it held before.
+    _mkfs=$(mkfs.fat -F 16 -s 1 -n DIAG "$MARKIMG" 2>&1) || { log "FAIL: mkfs.fat on $MARKIMG: $_mkfs"; exit 1; }
     MARKLOOP=$(losetup -l 2>/dev/null | awk -v f="$MARKIMG" '$6==f{sub("/dev/","",$1);print $1;exit}')
     [ -n "$MARKLOOP" ] || { udisksctl loop-setup -f "$MARKIMG" >/dev/null 2>&1; MARKLOOP=$(losetup -l 2>/dev/null | awk -v f="$MARKIMG" '$6==f{sub("/dev/","",$1);print $1;exit}'); }
     [ -n "$MARKLOOP" ] || { log "FAIL: no loop for the completion-marker volume $MARKIMG"; exit 1; }
