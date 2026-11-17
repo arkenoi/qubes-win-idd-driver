@@ -189,6 +189,8 @@
         # the signed xeniface/xenbus driver packages - permanently stock).
         @{ Package = 'msi-image/System64/relocate-dir.exe';    Stock = 'relocate-dir.exe';    Required = $true }
         @{ Package = 'msi-image/PFiles64/Qubes Tools/bin/advertise-tools.exe'; Stock = 'advertise-tools.exe'; Required = $true }
+        # qubes.WaitForSession's handler; ships from the fork since 2026-11-17 (GWeck row 54).
+        @{ Package = 'msi-image/PFiles64/Qubes Tools/qubes-rpc-services/wait-for-logon.exe'; Stock = 'wait-for-logon.exe'; Required = $true }
         @{ Package = 'msi-image/System64/windows-utils.dll';   Stock = 'windows-utils.dll';   Required = $true }
         @{ Package = 'msi-image/System64/libvchan.dll';        Stock = 'libvchan.dll';        Required = $true }
         @{ Package = 'msi-image/System64/libxenvchan.dll';     Stock = 'libxenvchan.dll';     Required = $true }
@@ -291,6 +293,9 @@
             # 'advertise-tools.exe 1', and CreateProcess searches the calling process's own
             # directory first - which is the only way that launch resolves today.
             'src/advertise-tools'  = 'msi-image/PFiles64/Qubes Tools/bin/advertise-tools.exe'
+            # qubes.WaitForSession holds the bare command 'wait-for-logon.exe'; the MSI substitution
+            # (stage-qwt-repo.ps1) replaces every wxs ref of that leaf, so no stock copy remains.
+            'src/qubes-rpc-services/wait-for-logon' = 'msi-image/PFiles64/Qubes Tools/qubes-rpc-services/wait-for-logon.exe'
             # SHARED version resource (packaging/version-stamp): included by every core-agent
             # project so each exe carries FILEVERSION == the release. It is not a per-binary
             # directory like the entries above, so DirBinaries - which is 1:1 by construction -

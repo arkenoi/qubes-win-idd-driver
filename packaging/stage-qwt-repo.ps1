@@ -95,13 +95,17 @@ $subst = @(
         # runner lacked the WDK - now installed - so the exclusion was a gap, not a policy.
         # advertise-tools.exe joins them too: it is what writes /qubes-tools/* so dom0 ever sees
         # qrexec=1 for the guest, and its fix replaces a poll with the session-logon event.
+        # wait-for-logon.exe joins them 2026-11-17: it answers qubes.WaitForSession, which dom0's
+        # menu (qvm-run --service) waits on before qubes.StartApp, and its fix ends the wait on the
+        # session that exists when dom0's default_user is not the guest's account (GWeck row 54).
         Match  = { param($comp, $leaf) $comp -eq 'core-agent-windows' -and
                                        ($leaf -eq 'qrexec-wrapper.exe' -or $leaf -eq 'qrexec-agent.exe' -or
                                         $leaf -eq 'qrexec-client-vm.exe' -or
-                                        $leaf -eq 'relocate-dir.exe'   -or $leaf -eq 'advertise-tools.exe') }
+                                        $leaf -eq 'relocate-dir.exe'   -or $leaf -eq 'advertise-tools.exe' -or
+                                        $leaf -eq 'wait-for-logon.exe') }
         Source = { param($leaf) Join-Path $CoreAgentBins $leaf }
         Binary = $true
-        Min    = 5
+        Min    = 6
     }
     @{  Name   = 'VMExec.ps1 (maintained, guest/)'
         # MUST precede the rpc rule below. guest/VMExec.ps1 is the maintained handler
