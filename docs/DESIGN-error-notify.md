@@ -146,48 +146,46 @@ for log-visibility reasons — so severity is stated explicitly at each call sit
 ## 8. Message content and redaction
 
 The notification has ONE shape for every sender (the agent's `notifyerr.h`, notifhost,
-`guest/qwt-notify-error.ps1` and the death reporter through it; rz39, 2026-10-03):
+`guest/qwt-notify-error.ps1` and the death reporter through it). Owner 2026-11-17: the style of a
+system message, "short and precise, no need for long sentences and detailed explanations".
 
-- **header** (line 1 of the notify file): WHAT happened to WHICH component, in human names —
-  "The GUI agent crashed", "The notification and menu capture helper stopped answering", "The PV NIC setup task
-  failed". No codes, no file names, no counts, no product prefix: dom0 prefixes the qube name and
-  colour itself (origin marking is the proxy's and unforgeable). At most ~60 characters.
-- **line 1**: what it means for the user and what the system does next (relaunch, Windows'
-  recovery, nothing), and what the user can do — only when there is something.
-- **line 2**: the cause in words: `Cause: an access violation.` The meaning comes from the table of
-  the code's SOURCE — a process exit or exception code, a Windows error the SCM reports (7023), a
-  service-specific code (7024; the service defines it, no table of ours), a task result (201/203), and
-  NO code at all for a task Task Scheduler killed for overrunning (329 carries none; the event is the
-  cause: "it was still running when its time limit ran out, so Task Scheduler stopped it") —
-  never the process table for the others. The code itself is NOT on this line (2026-10-10): the
-  technical line carries it, and a fact appears once.
-- **line 3**, the technical line: `<executable>[ pid <n>][; <code>][; ran <h:mm:ss>]; death <n>
-  this boot | reported once per boot; build <m.m.p.b>. Evidence: <one pointer>.`
-  The death reporter says `death n this boot` (each death has its own id, up to the cap); the
-  agent, notifhost and the scripts say `reported once per boot` (one per (component, id) per boot).
-  `build` is the sender's own image version (the agent and notifhost: `VS_FIXEDFILEINFO` of the
+- **header** (line 1 of the notify file): a short title, no article - the component's human name
+  and what happened: "Notification bridge crashed", "Display driver reboot refused", "Window stopped
+  updating: chrome". No codes, no file names, no counts, no product prefix: dom0 prefixes the qube
+  name and colour itself (origin marking is the proxy's and unforgeable). At most ~60 characters.
+- **line 1**: the effect and the action, in one or two short sentences: "Notifications show as
+  plain windows. Restart the qube."
+- **an optional line**, only for a fact the sender recorded: the update pass's own error
+  (`Pass error: ...`) or why a repair did not happen (`Not repaired: ...`). There is no cause
+  sentence: a code's meaning stands in brackets beside the code, on the technical line.
+- **the technical line**: `<subject>[ pid <n>][; <code> (<meaning>)][; ran <h:mm:ss>][; death <n>
+  this boot]; build <m.m.p.b>; log: <one pointer>`. The meaning comes from the table of the code's
+  SOURCE - a process exit or exception code, a Windows error the SCM reports (7023), a
+  service-specific code (7024; the service defines it, no table of ours), a task result (201/203) -
+  never the process table for the others; a task Task Scheduler stopped at its time limit (329)
+  carries no code, and the line says that in its place. Only the death reporter counts (`death n
+  this boot`: each death has its own id, up to the cap); every other sender sends a (component, id)
+  once per boot and does not say so. `build` is the sender's own image version (the agent and notifhost: `VS_FIXEDFILEINFO` of the
   running image, `agent/gui-agent/modver.h`; the scripts and the death reporter: the installed
   `gui-agent.exe`, `Get-QwtNotifyBuild`), spelled exactly as the agent log's `LogInit: Module version`
   line, so a toast can be matched to the build that produced it (owner 2026-10-10: a toast with no
   build could not be told from a control run's; a guest TIMESTAMP would mislead, the clock being ~3 h
   off until a boot task corrects it). `build unknown` when the version cannot be read - never an
-  empty field. The evidence is ONE pointer: the deaths log (whose own line carries the WER folder
+  empty field. The log pointer is ONE file: the deaths log (whose own line carries the WER folder
   prefix, the program's log and the event id under `detail:`) or the sender's log.
 
-**Terse by rule** (owner 2026-10-09 "way too many words", 2026-10-10 "too much prose"): one short
-clause for the condition (the header), one for the consequence (line 1), then the facts. No line
-restates the header, no line reassures ("not by a fault of its own"), no line carries a retry
-schedule or a packaging explanation - that knowledge lives in the comment beside the string. The
-render tests pin it: line 1 at most 120 characters, the cause at most 100, the code once, one
-pointer, and a list of struck phrases.
+**Terse by rule** (owner 2026-10-09 "way too many words", 2026-10-10 "too much prose",
+2026-11-17 "short and precise"): the header names the condition, line 1 the effect and the action,
+then the facts. No line restates the header, no line reassures, no line carries a retry schedule or
+a packaging explanation - that knowledge lives in the comment beside the string.
 
-The agent's and notifhost's texts are rows of `agent/gui-agent/notifytexts.h`, rendered offline by
-`notifyrender_test.c`; the deaths and the scripts' texts are rendered by
-`tools/tests/notify-render-test.ps1`. Neither runs automatically: `notify-render-selftest.sh`, which
-ran both by hand, was deleted on 2026-11-12 when a row change broke its shape check (a selftest that
-needs a quick fix is deleted, not fixed); `notifyrender_test.c` still builds with gcc on any host.
-Callers pass templated text — never an exception message,
-never a file's contents, never a value read from the system.
+The agent's and notifhost's texts are rows of `agent/gui-agent/notifytexts.h`; `QerrRenderText`
+renders any row with no agent running. No suite pins the wording: the suites hold the route's rules
+(severity, dedupe, cap, redaction, fail-open, the error window), and the checks that pinned a text
+went when the texts were rewritten (2026-11-17), with the two render suites that no gate ran.
+Callers pass templated text — never an exception message, never a file's contents, never a value
+read from the system - save the update pass's own recorded error, which the death reporter carries
+on its optional line and the redaction rules below still screen.
 
 Redaction **refuses** (does not mask) a payload that is longer than 600 bytes, has more than 6
 lines or a control character, contains a credential keyword (`password`, `passwd`, `pwd=`,

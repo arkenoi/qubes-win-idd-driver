@@ -2,28 +2,27 @@
 # (agent/gui-agent/notifyerr.h is the C policy core; docs/DESIGN-error-notify.md is the design).
 #
 # Dot-source it, then:   Send-QwtError -Component 'activate-idd' -Id 'reboot-refused' `
-#                            -Header 'The display driver needs a reboot that was refused' `
-#                            -Next 'The new display driver is not primary until this qube is rebooted by hand.' `
-#                            -Cause 'Cause: Windows refused the reboot request (shutdown.exe exit code 1190).' `
-#                            -Tech (Format-QwtNotifyTechLine -Subject 'activate-idd.ps1' -Count 'reported once per boot' `
-#                                     -Evidence (Join-Path (Get-QwtLogDir) "activate-idd.ps1-$(Get-Date -Format yyyyMMdd).log"))
+#                            -Header 'Display driver reboot refused' `
+#                            -Next 'The new display driver is not active. Restart the qube from dom0.' `
+#                            -Tech (Format-QwtNotifyTechLine -Subject 'activate-idd.ps1' -Code 'shutdown.exe exit 1190' `
+#                                     -Evidence 'qwt-idd-activate.log')
 #
 # It reports a guest error to dom0 as a notification IN ADDITION TO the caller's own log line -
 # never instead of it. The caller logs first, exactly as before, then calls this. The transport
 # is the toast bridge's proven one-shot: `notifhost.exe --notify-file <file>` over
 # qubes.Notifications, started and NOT waited for.
 #
-# THE TEXT - ONE shape for every sender (this file, the agent's notifyerr.h, notifhost; rz39):
+# THE TEXT - ONE shape for every sender (this file, the agent's notifyerr.h, notifhost; rz39), in a
+# system message's style (owner 2026-11-17: "short and precise, no need for long sentences and detailed
+# explanations"):
 #   header   line 1 of the notify file: WHAT happened to WHICH component, in human names - no codes,
-#            no file names, no counts, no product prefix (dom0 shows the source qube); <= ~60 chars
-#   -Next    what it means for the user and what the system does next; what the user can do, only
-#            when there is something
-#   -Cause   the cause in words (optional) - WITHOUT the code: the technical line carries it, and a
-#            fact appears once (owner 2026-10-10, "too much prose": one short clause for the
-#            condition, one for the consequence, then the facts; explanation goes in a source comment)
-#   -Tech    ONE technical line, Format-QwtNotifyTechLine: the executable, pid, code, how long it
-#            ran, "death n this boot" or "reported once per boot", the BUILD that produced it, and
-#            ONE pointer to where the detail is
+#            no file names, no counts, no product prefix (dom0 shows the source qube); a short title
+#   -Next    the effect and the action, in one or two short clauses; no reasons, no reassurance
+#   -Cause   optional, for a recorded fact that does not fit the technical line (the update pass's own
+#            error); never an explanation - that goes in a source comment and the log
+#   -Tech    ONE technical line, Format-QwtNotifyTechLine: the executable, pid, code with its meaning,
+#            how long it ran, "death n this boot" for a death, the BUILD that produced it, and ONE
+#            pointer to the log that has the detail
 # A code's meaning comes from the table of the code's SOURCE (a process exit or exception code, a
 # Windows error the SCM reports, a service-specific code, a task result) - the death reporter holds
 # those tables; never the process table for the others.
@@ -331,29 +330,29 @@ function Get-QwtNotifyBuild {
     return $b
 }
 # The technical line (mirrors QerrFormatTechLine):
-#   "<subject>[ pid <n>][; <code>][; ran <h:mm:ss>]; <count>; build <m.m.p.b>. Evidence: <where>."
-# Subject = the executable, script or task; Code = "exit code 2" / "exception 0xC0000409" / ... already
-# phrased by the source's table; Count = "death 3 this boot" or "reported once per boot"; the build is the
-# installed one (Get-QwtNotifyBuild), "build unknown" when none could be read; Evidence = ONE pointer to
-# where the detail is.
+#   "<subject>[ pid <n>][; <code>][; ran <h:mm:ss>][; <count>]; build <m.m.p.b>; log: <where>"
+# Subject = the executable, script or task; Code = "exit code 2" / "exception 0xC0000409 (access violation)"
+# / ... already phrased by the source's table; Count = "death 3 this boot" for a death, empty otherwise (the
+# once-per-boot rule is the route's, not news to the reader); the build is the installed one
+# (Get-QwtNotifyBuild), "build unknown" when none could be read; Evidence = ONE pointer to the log that has
+# the detail.
 function Format-QwtNotifyTechLine {
     param(
         [Parameter(Mandatory)][string]$Subject,
         [long]$ProcessId = 0,
         [string]$Code = '',
         [string]$Ran = '',
-        [Parameter(Mandatory)][string]$Count,
+        [string]$Count = '',
         [Parameter(Mandatory)][string]$Evidence
     )
     $t = $Subject
     if ($ProcessId -gt 0) { $t += " pid $ProcessId" }
     if ($Code) { $t += "; $Code" }
     if ($Ran) { $t += "; ran $Ran" }
-    $t += "; $Count"
+    if ($Count) { $t += "; $Count" }
     $b = Get-QwtNotifyBuild
     if (-not $b) { $b = 'unknown' }
-    $t += "; build $b"   # GUARD:build
-    return "$t. Evidence: $Evidence."
+    return "$t; build $b; log: $Evidence"
 }
 
 # --- the error window: ONE place it is shown from (mirrors notifyerr.c ShowWindowFallback) -------
@@ -388,8 +387,8 @@ function Send-QwtError {
         [Parameter(Mandatory)][string]$Id,
         [ValidateSet('INFO', 'DEGRADED', 'ACTION')][string]$Severity = 'ACTION',
         [string]$Header = '',    # line 1 of the notify file (see the head of this file)
-        [string]$Next = '',      # line 2: what it means, what happens next
-        [string]$Cause = '',     # line 3: the cause with the code (optional)
+        [string]$Next = '',      # line 2: the effect and the action
+        [string]$Cause = '',     # optional: a recorded fact that does not fit the technical line
         [string]$Tech = ''       # the technical line, Format-QwtNotifyTechLine
     )
     try {

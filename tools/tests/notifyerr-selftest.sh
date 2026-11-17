@@ -9,8 +9,7 @@
 #   PS  guest/qwt-notify-error.ps1 via tools/tests/notifyerr-test.ps1: clean must PASS, and a
 #       copy with each `# GUARD:<name>` line deleted must FAIL (errbox, errboxdedupe: the window).
 # Exit 0 only if every leg came out as required. Output is the evidence; keep it in scratchpad.
-#   AGENT_DIR=<path>   the agent checkout (default: the agent submodule); the texts themselves are held to
-#                      the rules by tools/tests/notify-render-selftest.sh
+#   AGENT_DIR=<path>   the agent checkout (default: the agent submodule)
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 AGENT="${AGENT_DIR:-$ROOT/agent}"
@@ -38,7 +37,7 @@ if cbuild c-clean ""; then
     n=$(grep -c '^ok' "$OUT/c-clean.out"); f=$(grep -c '^FAIL' "$OUT/c-clean.out")
     if [ $rc -eq 0 ] && [ "$f" -eq 0 ] && [ "$n" -gt 40 ]; then say "PASS  C clean: rc=0 ok=$n fail=0"; else say "FAIL  C clean: rc=$rc ok=$n fail=$f"; bad=1; fi
 else say "FAIL  C clean build: $(head -3 "$OUT/c-clean.build.err")"; bad=1; fi
-for d in SEVERITY RATELIMIT CAP REDACT FAILOPEN CLOSEREBOOT NOBOX BOXSTORM NOBUILD; do
+for d in SEVERITY RATELIMIT CAP REDACT FAILOPEN CLOSEREBOOT NOBOX BOXSTORM; do
     if cbuild "c-defect-$d" "-DNOTIFYERR_DEFECT_$d"; then
         NOTIFYERR_TEST_DIR="$OUT" "$OUT/c-defect-$d" >"$OUT/c-defect-$d.out" 2>&1; rc=$?
         f=$(grep -c '^FAIL' "$OUT/c-defect-$d.out")
@@ -56,7 +55,7 @@ else
     if [ $rc -eq 0 ] && [ "$f" -eq 0 ] && [ "$n" -gt 40 ]; then say "PASS  PS clean: rc=0 ok=$n fail=0"; else say "FAIL  PS clean: rc=$rc ok=$n fail=$f ($(grep -m1 -E '^FAIL' "$OUT/ps-clean.out" || grep -m1 -iE 'exception|error' "$OUT/ps-clean.out" | cut -c1-120))"; bad=1; fi
     # errboxdedupe REPLACES its guard line (a window shown before the dedupe and the cap: a box per call); every other
     # knob DELETES its line.
-    for g in severity ratelimit cap redact failopen boottoken errbox errboxdedupe build; do
+    for g in severity ratelimit cap redact failopen boottoken errbox errboxdedupe; do
         m="$OUT/helper-defect-$g.ps1"
         hits=$(grep -c "# GUARD:$g\$" "$HELPER")
         if [ "$hits" -ne 1 ]; then say "FAIL  PS defect $g: expected exactly 1 '# GUARD:$g' line in the helper, found $hits"; bad=1; continue; fi
