@@ -12,7 +12,6 @@ PWSH="$("$(dirname "$0")/pwsh-path.sh" || true)"
 OUT="${DEATHREPORTER_OUT:-$(mktemp -d "${TMPDIR:-/tmp}/death-reporter-selftest-XXXXXX")}"
 SUITE="$ROOT/tools/tests/death-reporter-test.ps1"
 REPORTER="$ROOT/guest/qwt-report-death.ps1"
-HELPER="$ROOT/guest/qwt-notify-error.ps1"
 mkdir -p "$OUT"
 say() { printf '%s\n' "$*"; }
 if [ ! -x "$PWSH" ]; then say "FAIL  pwsh not found at $PWSH - nothing ran"; exit 2; fi
@@ -34,20 +33,13 @@ knob_line() {
         endedbyshutdown) printf '%s' '                $ended = '"'"'not-ended'"'"'   # DEFECT: a task instance ended BY A SHUTDOWN is reported as a death anyway' ;;
         timeoutdup) printf '%s' '                if ($false) {   # DEFECT: the 201 of a time-limit kill opens a SECOND death beside its 329 - one hang, two notifications' ;;
         wdjoin)    printf '%s' '                    $r.rec = '"'"'scm-agentdied'"'"'   # DEFECT: the watchdog'"'"'s agent-died exit opens a death of its own (a second notification per agent death)' ;;
-        sysendtext) printf '%s' '            $sysEnd = $false   # DEFECT: a child Windows ended with its session gets the family'"'"'s header and advice (exited unexpectedly, a Task Scheduler restart)' ;;
         sysendisdeath) printf '%s' '                if ($false) {   # DEFECT: a child Windows ended with its session during a shutdown is escalated as a death (the measured five)' ;;
         scmshutdown) printf '%s' '                if ($false) {   # DEFECT: a service the SHUTDOWN stopped is escalated as a failing service (the SCM class had no shutdown test at all)' ;;
         launchshutdown) printf '%s' '                if ($false) {   # DEFECT: a task launch Windows refused because it is shutting down is escalated as a task that could not start' ;;
-        build)     printf '%s' '    # DEFECT: the technical line does not name the build that produced it' ;;
-        shortbuild) printf '%s' '    $techShort = (Format-QwtNotifyTechLine -Subject $subject -ProcessId $procId -Code $codeText -Ran $ran -Count "death $Number this boot" -Evidence '"'"'qwt-deaths.log'"'"') -replace '"'"'; build [^ ]+'"'"', '"'"''"'"'   # DEFECT: the short form drops the build' ;;
     esac
 }
-# which file a knob lives in: the route for build, the reporter for every other
-knob_file() { case "$1" in build) printf '%s' "$HELPER" ;; *) printf '%s' "$REPORTER" ;; esac; }
 knob_target() {
     case "$1" in
-        build)     printf '%s' 'build: the technical line names the build that produced it, after the count' ;;
-        shortbuild) printf '%s' 'short form: the over-length fallback line still carries the build' ;;
         ours)      printf '%s' 'ours: a notepad.exe crash is not ours' ;;
         deathid)   printf '%s' 'e2e: death 2 - a SECOND gui-agent crash 30 s later (another pid) is a second death (want send' ;;
         anchorpid) printf '%s' 'pid identity: a crash of ANOTHER pid right after the watchdog'"'"'s record of the first is a second death' ;;
@@ -62,7 +54,6 @@ knob_target() {
         endedbyshutdown) printf '%s' 'ended by shutdown: a 201 whose instance Task Scheduler ended while the system went down' ;;
         timeoutdup) printf '%s' 'one kill one death: the 201 of an instance that has a 329 is ignored' ;;
         wdjoin)    printf '%s' 'wd exit: the watchdog'"'"'s 7024 with QGA_SVC_EXIT_AGENT_DIED attaches to the agent'"'"'s death' ;;
-        sysendtext) printf '%s' 'teardown text: the header says Windows ended it, not that it exited unexpectedly or crashed' ;;
         sysendisdeath) printf '%s' 'shutdown teardown: a 4003 carrying 0x40010004 near a shutdown is ignored - nothing launched, ledger empty' ;;
         scmshutdown) printf '%s' 'purge: a service the shutdown stopped is ignored - no toast for the stop the shutdown asked for' ;;
         launchshutdown) printf '%s' 'purge: a launch refused because a shutdown is in progress is ignored - a launch that did not happen is not a death' ;;
@@ -70,7 +61,7 @@ knob_target() {
 }
 make_copy() { # $1 knob -> the copy's path on stdout
     local knob=$1 copy="$OUT/reporter-defect-$1.ps1" hits src
-    src=$(knob_file "$knob")
+    src=$REPORTER
     hits=$(grep -c "# GUARD:$knob\$" "$src")
     if [ "$hits" -ne 1 ]; then say "FAIL  knob $knob: expected exactly 1 '# GUARD:$knob' line in $(basename "$src"), found $hits"; return 1; fi
     REPL="$(knob_line "$knob")" python3 - "$src" "$copy" "$knob" <<'EOF'
@@ -85,11 +76,10 @@ EOF
     printf '%s' "$copy"
 }
 
-KNOBS="ours deathid anchorpid logfirst onerec werjoin helperjoin pidreuse managedonly installdir wdjoin endedbyshutdown timeoutdup sysendtext sysendisdeath build shortbuild scmshutdown launchshutdown bootbacklog"
-# the suite against a copy with one knob applied: the route's knobs go in through -HelperPath, the reporter's through -ReporterPath
+KNOBS="ours deathid anchorpid logfirst onerec werjoin helperjoin pidreuse managedonly installdir wdjoin endedbyshutdown timeoutdup sysendisdeath scmshutdown launchshutdown bootbacklog"
+# the suite against a copy of the reporter with one knob applied
 run_knob() { # $1 knob, $2 copy, $3 output file
-    if [ "$(knob_file "$1")" = "$HELPER" ]; then "$PWSH" -NoProfile -File "$SUITE" -HelperPath "$2" >"$3" 2>&1
-    else "$PWSH" -NoProfile -File "$SUITE" -ReporterPath "$2" >"$3" 2>&1; fi
+    "$PWSH" -NoProfile -File "$SUITE" -ReporterPath "$2" >"$3" 2>&1
 }
 if [ -n "${DEATHREPORTER_DEFECT:-}" ]; then
     case " $KNOBS " in *" $DEATHREPORTER_DEFECT "*) ;; *) say "FAIL  unknown DEATHREPORTER_DEFECT='$DEATHREPORTER_DEFECT' ($KNOBS)"; exit 2 ;; esac
