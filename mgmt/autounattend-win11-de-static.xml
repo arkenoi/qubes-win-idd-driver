@@ -45,10 +45,9 @@
      setting — Store auto-update, idle maintenance, the Store Notepad banner — is kept
      unchanged, because none of them touches the on-demand update path.
 
-     TIME ZONE is W. Europe Standard Time, not UTC: a German install from German media sits in
-     a German time zone, and the standing rule is to never assume an environment is
-     "diagnostically similar". tools/qtest synctime pushes an absolute ISO timestamp with an
-     explicit +0000 offset, so it is time-zone agnostic and unaffected.
+     TIME ZONE is FLE Standard Time, the host's zone, as in autounattend-win11-static.xml. What
+     matters in the reporter's environment is that his guest's zone matches his host, not that it
+     differs from ours; a guest zone that differs from the host is not part of reproducing it.
 
      Local account user/qubes, autologon, OOBE skipped, payload\setup.cmd on first logon —
      unchanged. The final template's account rename (E4: no account named "user") happens
@@ -155,7 +154,7 @@
     <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64"
         publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
       <ComputerName>win11de-base</ComputerName>
-      <TimeZone>W. Europe Standard Time</TimeZone>
+      <TimeZone>FLE Standard Time</TimeZone>
     </component>
   </settings>
   <settings pass="oobeSystem">
