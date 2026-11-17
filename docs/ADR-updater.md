@@ -657,6 +657,59 @@ by the 2026-10-02 process audit and left in place, which is why it is a rule her
    the previous relay exe and says why.
 7. A commit-time lint refuses kill-by-name and adopt-by-name in shipped guest scripts.
 
+### 12.5 Network channels: what each one needs to reach the relay
+
+**Status:** RECORD, 2026-11-17, on the owner's order. It records what the shipped code does and what was measured
+on the rig. It decides nothing. Line numbers are `guest/qubes-windows-update.ps1` unless a file is named. The runs
+are the row-47 rig runs of 2026-11-17 (run16-run20) and reads of `win11de26-t54` and its AppVM `win11de26-a54`.
+Every cell was checked against its source by an independent read-only verifier.
+
+**The carrier.** Every channel leaves through one path:
+
+- the relay `127.0.0.1:8082` (`guest/qubes-updates-relay.cs`, started by the pass and up only during it);
+- qrexec `qubes.UpdatesProxy`;
+- the target dom0's policy names: `win-idd-mgmt` on the rig (`mgmt/10-win-idd-all.policy:264`), Qubes' stock rule
+  for templates in the field.
+
+The relay filters by host suffix (`relay.cs:158-174`, seven suffixes) and by process (`relay.cs:490-491`, plus
+`HKLM\SOFTWARE\Qubes\UpdatesProxy`). Only a TemplateVM runs a pass (`:3086-3098`).
+
+| # | channel | carrier | how it reaches the relay | evidence |
+|---|---|---|---|---|
+| 1 | Search: SLS lookup (skipped once the guest is seeded) | Windows Update agent | The signed-in user's own proxy, or the per-machine policy present at sign-in (the pass writes the machine values after it). `netsh` alone does not carry it. | measured: run17c-e, run18 arm A, run19, run20 T; `netsh` alone: run18 arm 0, one run |
+| 2 | Search: scan web service (fe2cr/fe3cr) | Windows Update agent | Logs `AllowUserProxyAsFallbackToSystemProxy`. `netsh` alone works; the user's own proxy alone works. | measured: run20 D; run19 |
+| 3 | Search: device ticket (`AuthTicketHelper::GetDeviceTickets`) | Windows Update agent | Fails `800704CF` in every arm that searched; the search completes anyway. | measured: run19, run20 |
+| 4 | Catalog lookup | the pass, `Invoke-WebRequest -Proxy` | Proxy named in the request. | code `:1597`, `:1663` |
+| 5 | Catalog `.msu`: cumulatives, .NET (12.2 point 2) | the pass, `Fetch-Msu` (`:1803-1820`), installed from the `.msu` | Proxy named in the request. | code; the install has never run without the machine proxy |
+| 6 | Static content: Defender definitions, MSRT, Security platform (12.2 point 3) | the pass fetches, `CopyToCache`, the agent's own installer | Proxy named in the request. | code `:2280-2330`; the install has never run without the machine proxy |
+| 7 | Drivers with no KB | Catalog by title, the pass, `pnputil` | Proxy named in the request. | code `:1507-1526`, `:2151` |
+| 8 | Certificate trust lists | the pass, to a local mirror (`RootDirURL`); CryptoAPI reads the mirror and itself goes direct | Proxy named in the request. | code `:885-937`; "goes direct" is the 2026-08-19 measurement in the code comment `:871-877` |
+| 9 | Windows Update's own downloader (DO/BITS) | Windows Update agent | Not used without a route (`:3681-3683`). Used with a route (`:3237`, `:3477-3479`), with `QUBES_UPDATES_ALLOW_WU_NATIVE=1`, or with `-Action wuinstall` by hand. | code |
+| 10 | Defender's own updater | Defender | Not a route of ours. The relay admits its processes and hosts (`relay.cs:166`, `:174`, `:490-491`). | not measured whether it uses a pass |
+
+Only the search (rows 1-2) needs a Windows proxy setting. Rows 4-8 name the proxy in each request. The shipped code
+gives the search that setting machine-wide, at every pass (`Ensure-Proxy` `:821-856`). This is what it leaves in
+the template's root, and so in every AppVM at every start:
+
+| setting | after a clean pass | after a pass cut by a shutdown | evidence |
+|---|---|---|---|
+| per-machine policy `ProxySettingsPerUser=0` | stays | stays | run17c; t54 and a54 |
+| machine `ProxyOverride` `<local>` | stays (code `:946-956`) | stays | a54 |
+| machine `ProxyEnable` / `ProxyServer` | 0 / deleted (code) | 1 / `127.0.0.1:8082` | t54, a54 |
+| WinHTTP (`netsh`) | reset (code) | `127.0.0.1:8082` | t54, a54 |
+| `RootDirURL` to the local mirror | stays, by design (`:883`) | stays | code; not read on an AppVM |
+| `DODownloadMode` 99 | restored (row 9 only) | left (inferred from code, `:1385`) | code `:1228-1234` |
+
+On a54 with a network (measured once), requests that follow the system proxy failed, and the same URL fetched
+directly returned 200.
+
+**Not known:**
+
+- row 1 with nobody signed in;
+- how long a seeded SLS result lasts, and what refreshes it;
+- the row 5-6 installs with no machine proxy;
+- whether Defender (row 10) or anything else uses the relay during a pass today.
+
 ## 13. The installer waits for a running scan, and a refused updater deploy is never quiet
 
 **Status:** ACCEPTED (Jev), 2026-10-04; shipped in 4.3.35.
