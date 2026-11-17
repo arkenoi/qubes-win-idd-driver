@@ -354,14 +354,14 @@ function Get-UpdaterDeployFailureRecord {
     param([Parameter(Mandatory)][string]$Message)
     $code = 'DEPLOY-FAILED'
     if ($Message -match '^(QWT[A-Z]+)') { $code = $Matches[1] }
-    # Short on purpose: header + line 1 + cause + the technical line must stay under the route's 600 bytes (measured 2026-10-04 by
-    # tools/tests/wu-deploy-loud-test.ps1 on the shipped route: the QWTUPDMUTEXHELD form is sent as 498 bytes in 4 lines).
+    # Short on purpose: the remedy is the notice's line 1 and the cause is this log's, so each stands alone; header + line 1 +
+    # the technical line must stay under the route's 600 bytes (tools/tests/wu-deploy-loud-test.ps1 measures the sent text).
     $rerun = 'then run install.cmd /updatesonly from the install medium.'
     switch ($code) {
         'QWTUPDMUTEXHELD'       { $cause = 'an update pass of the previous updater was running when the installer reached the updater (QWTUPDMUTEXHELD)'
-                                  $remedy = "Let that pass finish or end it (schtasks /end /tn QubesWindowsUpdateRun), $rerun" }
+                                  $remedy = "Let the running update pass finish or end it (schtasks /end /tn QubesWindowsUpdateRun), $rerun" }
         'QWTUPDSCANWAITEXPIRED' { $cause = 'the previous updater''s update scan did not finish within its own time limit (QWTUPDSCANWAITEXPIRED)'
-                                  $remedy = "End that scan (schtasks /end /tn QubesWindowsUpdateScan), $rerun" }
+                                  $remedy = "End the running update scan (schtasks /end /tn QubesWindowsUpdateScan), $rerun" }
         'QWTUPDMUTEXABANDONED'  { $cause = 'a previous update pass was interrupted and what it was doing is unknown (QWTUPDMUTEXABANDONED)'
                                   $remedy = "Restart this qube (Windows settles pending servicing during boot), $rerun" }
         'QWTUPDSTATEUNKNOWN'    { $cause = 'a previous update pass was interrupted in this boot and what it was doing is unknown (QWTUPDSTATEUNKNOWN)'
@@ -5693,10 +5693,9 @@ public static class QdbPrime {
                 try {
                     . $notifyHelper
                     $sent = Send-QwtError -Component 'installer' -Id 'updater-not-installed' -Severity ACTION `
-                        -Header 'The Windows Update agent was not installed' `
-                        -Next "This qube keeps its previous updater; dom0 may show no updates while Windows Update lists some. $($udf.remedy)" `
-                        -Cause "Cause: $($udf.cause)." `
-                        -Tech (Format-QwtNotifyTechLine -Subject 'Install-QwtImproved.ps1' -Code $udf.code -Count 'reported once per install' -Evidence 'C:\qwt-improved-install.log')
+                        -Header 'Windows Update agent not installed' `
+                        -Next "dom0 may miss updates. $($udf.remedy)" `
+                        -Tech (Format-QwtNotifyTechLine -Subject 'Install-QwtImproved.ps1' -Code $udf.code -Evidence 'C:\qwt-improved-install.log')
                 } catch { $sent = "failed: $($_.Exception.Message)" }
             }
             Write-Log "  dom0 notification installer.updater-not-installed: $sent"
@@ -5729,10 +5728,9 @@ public static class QdbPrime {
                     # TEMPLATED TEXT ONLY - no zone names here. The notify route refuses a value read
                     # from the system, and both zones were read from the system (tzutil and qubesdb).
                     $sentTz = Send-QwtError -Component 'installer' -Id 'timezone-overridden' -Severity ACTION `
-                        -Header 'The time zone set on this qube was not kept' `
-                        -Next 'Setting a time zone here is not supported: it was replaced with dom0 time zone, the only one this qube clock can carry.' `
-                        -Cause 'Cause: the hardware clock carries dom0 local time, which has no zone of its own.' `
-                        -Tech (Format-QwtNotifyTechLine -Subject 'Install-QwtImproved.ps1' -Code 'QWTTZOVERRIDE' -Count 'reported once per install' -Evidence 'C:\qwt-improved-install.log')
+                        -Header 'Time zone reset to match dom0' `
+                        -Next 'Only the dom0 time zone is supported in this qube.' `
+                        -Tech (Format-QwtNotifyTechLine -Subject 'Install-QwtImproved.ps1' -Code 'QWTTZOVERRIDE' -Evidence 'C:\qwt-improved-install.log')
                 } catch { $sentTz = "failed: $($_.Exception.Message)" }
             }
             Write-Log "  dom0 notification installer.timezone-overridden: $sentTz"
@@ -5763,10 +5761,9 @@ public static class QdbPrime {
                 try {
                     . $nh3
                     $sentRs = Send-QwtError -Component 'installer' -Id 'restart-to-finish' -Severity ACTION `
-                        -Header 'The tools install is complete - this qube is shutting down' `
-                        -Next 'Start it again once it has stopped: its windows come back at that start.' `
-                        -Cause 'Cause: the display path was switched during the install and the new one starts at the next boot.' `
-                        -Tech (Format-QwtNotifyTechLine -Subject 'Install-QwtImproved.ps1' -Count 'reported once per install' -Evidence 'C:\qwt-improved-install.log')
+                        -Header 'Tools installed, qube shutting down' `
+                        -Next 'Start it again once it has stopped.' `
+                        -Tech (Format-QwtNotifyTechLine -Subject 'Install-QwtImproved.ps1' -Evidence 'C:\qwt-improved-install.log')
                 } catch { $sentRs = "failed: $($_.Exception.Message)" }
             }
         }

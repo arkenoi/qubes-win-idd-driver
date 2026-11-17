@@ -3075,10 +3075,9 @@ elseif ($wuCauses) {
       . $notifyPs1
       $sent = Send-QwtError -Component 'qubes-windows-update' -Id 'auto-restart-possible' -Severity ACTION `
         -Header 'Windows may restart this qube by itself' `
-        -Next 'Windows Update can install an update and restart this qube without asking; unsaved work can be lost.' `
-        -Cause 'Cause: the Windows Update policy in force allows it; the log names the values.' `
+        -Next 'An update can restart it without asking. Unsaved work can be lost.' `
         -Tech (Format-QwtNotifyTechLine -Subject 'qubes-windows-update.ps1' -Code ('allowed by ' + (($wuCauses | ForEach-Object { $_.Tag } | Select-Object -Unique) -join ', ')) `
-          -Count 'reported once per boot' -Evidence (Join-Path (Get-QwtLogDir) ('qubes-windows-update.ps1-' + (Get-Date -Format 'yyyyMMdd') + '.log')))
+          -Evidence ('qubes-windows-update.ps1-' + (Get-Date -Format 'yyyyMMdd') + '.log'))
     }
   } catch { $sent = 'failed:exception'; Log "WUAUTORESTART notice could not be sent: $($_.Exception.Message)" 'WARN' }
   Log "WUAUTORESTART notice: $sent"
