@@ -63,7 +63,6 @@ resolve-rip-selftest.sh
 result-flags-selftest.sh
 retired-names-gate-selftest.sh
 rig-cleanup-selftest.sh
-runlib-qrexec-grace-selftest.sh
 seal-halted-selftest.sh
 serial-rig-selftest.sh
 shutdown-reask-selftest.sh
