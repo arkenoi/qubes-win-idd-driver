@@ -1,0 +1,32 @@
+{
+  "note": "pristine German Win11 26H2 26300.9457 base, PRIMER=1, no QWT",
+  "props": {
+    "klass": "StandaloneVM",
+    "maxmem": "8192",
+    "memory": "8192",
+    "vcpus": "4",
+    "virt_mode": "hvm"
+  },
+  "sealed_utc": "2026-11-17T00:56:16Z",
+  "vm": "win11de26-base",
+  "volumes": {
+    "private": {
+      "revisions": [
+        "1794876530-back",
+        "1794876957-back"
+      ],
+      "revisions_to_keep": "2",
+      "size": "21474836480",
+      "usage": "2147483"
+    },
+    "root": {
+      "revisions": [
+        "1794876530-back",
+        "1794876957-back"
+      ],
+      "revisions_to_keep": "2",
+      "size": "85899345920",
+      "usage": "18081812316"
+    }
+  }
+}
