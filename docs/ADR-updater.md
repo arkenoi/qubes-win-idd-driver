@@ -515,6 +515,22 @@ declining a proxy the system is handing it.
 **Reopened, 2026-11-14.** On the field reporter's 4.3.43 guest the state survived a full restart twice:
 findings/issues.md WU8024402CSURVIVESARESTART, docs/GWECK-STATUS.md row 47.
 
+**Why the restart did not clear it, measured 2026-11-17.** Reproduced on the rig for the first time on a
+fresh German 26H2 template (QWT 4.3.44.1322 installed fresh, Windows Update never run: no
+SoftwareDistribution\SLS, no DataStore). Passes on two separate boots failed `0x8024402C` with WU's first
+service lookup failing in 13 ms and never reaching the relay; the pass on a boot that STARTED with the
+WinHTTP proxy already set reached the relay and searched (7 offered). The single variable was the proxy
+being set before the boot. Every pass ends in `Remove-Proxy`, which reset that proxy - so the restart
+this remedy requested always booted without it, and on a guest whose WU never completed a lookup it could
+not clear the state. Rig subjects never showed it because every one is cloned from a golden whose WU
+already holds a successful lookup.
+
+**Decision (2026-11-17).** While the remedy's restart is pending (requested in this pass, or requested
+earlier in this boot and not yet performed), `Remove-Proxy` leaves the WinHTTP proxy set; the relay is
+stopped as on every pass, so the setting points at a closed local port and serves nothing - the temporal
+gate (section 12) is unchanged. The next pass sets it again and, once its search returns, resets it as
+always.
+
 ## 12. Architecture: who does what, and who may touch which process
 
 **Status:** ACCEPTED (owner, Jev), 2026-10-03, after the KB5007651 failure. Implemented in QWT-NG 4.3.33
