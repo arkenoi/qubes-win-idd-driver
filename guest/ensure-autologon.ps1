@@ -401,11 +401,11 @@ try {
                     $script:QwtNotifyLog = { param($m) $null = Write-QwtLogLine 'W' "NOTIFYERR $m" -Module 'ensure-autologon.ps1'; Write-Host "note   NOTIFYERR $m" }
                     . $nh
                     $sent = Send-QwtError -Component 'autologon' -Id 'private-volume-empty' -Severity ACTION `
-                        -Header 'No user profile: the private volume of this qube is empty' `
-                        -Next 'Windows shows no desktop. Recreate the qube in dom0 with: qvm-clone --class StandaloneVM TEMPLATE NAME' `
-                        -Cause "Cause: qvm-create --template gave it a new, empty private volume, where the profiles live; not repaired: $why" `
+                        -Header 'User profiles missing, private volume empty' `
+                        -Next 'Windows shows no desktop. Recreate the qube in dom0: qvm-clone --class StandaloneVM TEMPLATE NAME' `
+                        -Cause "Not repaired: $why" `
                         -Tech (Format-QwtNotifyTechLine -Subject 'ensure-autologon.ps1' -Code "C:\Users links to the missing $cuTarget" `
-                                 -Count 'reported once per boot' -Evidence 'Application log, User Profile Service event 1505')
+                                 -Evidence 'Application log, User Profile Service event 1505')
                 }
                 Write-Output "WARN   dom0 notice: $sent"
             }

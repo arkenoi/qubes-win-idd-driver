@@ -441,14 +441,13 @@ public static class QiddProbe {
         if ($LASTEXITCODE -ne 0) {
             $result['shutdown_rc'] = $LASTEXITCODE
             Log "shutdown.exe /r was REFUSED (rc '$LASTEXITCODE') - the guest is NOT rebooting on its own; the IDD is activated but will not be primary until this qube is rebooted BY HAND" 'FATAL'
-            # terse by rule (owner 2026-10-10): the driver is activated, just not primary until a reboot; a hand restart
-            # is qvm-shutdown then qvm-start from dom0; shutdown.exe's exit code is in the log named by the technical line
+            # short and precise (owner 2026-11-17; 2026-10-10 "terse"): the driver is activated, just not primary until a
+            # reboot; a hand restart is qvm-shutdown then qvm-start from dom0
             $iddLog = Get-IddLogFile
             [void](Send-QwtError -Component 'activate-idd' -Id 'reboot-refused' -Severity ACTION `
-                -Header 'The display driver needs a reboot that was refused' `
-                -Next 'The new display driver is not primary until this qube is restarted by hand from dom0.' `
-                -Cause 'Cause: Windows refused the reboot request; the log has shutdown.exe''s code.' `
-                -Tech (Format-QwtNotifyTechLine -Subject 'activate-idd.ps1' -Count 'reported once per boot' -Evidence $iddLog))
+                -Header 'Display driver reboot refused' `
+                -Next 'The new display driver is not active. Restart the qube from dom0.' `
+                -Tech (Format-QwtNotifyTechLine -Subject 'activate-idd.ps1' -Code "shutdown.exe exit $(if ($null -ne $result['shutdown_rc']) { $result['shutdown_rc'] } else { 'unknown' })" -Evidence (Split-Path -Leaf $iddLog)))
             # Same situation as -NoReboot: this run is not rebooting, so the agent it quiesced must
             # come back or the qube maps no windows until that manual reboot.
             Restore-Gui
@@ -466,10 +465,9 @@ public static class QiddProbe {
     # user - the previous display configuration stays.
     $iddLog = Get-IddLogFile
     [void](Send-QwtError -Component 'activate-idd' -Id 'activation-failed' -Severity ACTION `
-        -Header 'The display driver could not be activated' `
-        -Next 'The display configuration is unchanged; rerun the activation after reading its log.' `
-        -Cause 'Cause: a step of the activation failed; the log has the error.' `
-        -Tech (Format-QwtNotifyTechLine -Subject 'activate-idd.ps1' -Count 'reported once per boot' -Evidence $iddLog))
+        -Header 'Display driver activation failed' `
+        -Next 'The display configuration is unchanged. Read the log, then rerun the activation.' `
+        -Tech (Format-QwtNotifyTechLine -Subject 'activate-idd.ps1' -Evidence (Split-Path -Leaf $iddLog)))
     Restore-Gui
     Emit 1
 }

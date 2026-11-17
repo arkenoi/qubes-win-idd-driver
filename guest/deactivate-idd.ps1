@@ -170,14 +170,13 @@ try {
         if ($LASTEXITCODE -ne 0) {
             $result['shutdown_rc'] = $LASTEXITCODE
             Log "shutdown.exe /r was REFUSED (rc '$LASTEXITCODE') - the guest is NOT rebooting on its own; the device changes are made but take effect only at the next boot - reboot this qube from dom0 (qvm-shutdown --wait, then qvm-start)" 'FATAL'
-            # terse by rule (owner 2026-10-10): the device changes are made; a hand restart is qvm-shutdown then
-            # qvm-start from dom0; shutdown.exe's exit code is in the log named by the technical line
+            # short and precise (owner 2026-11-17; 2026-10-10 "terse"): the device changes are made; a hand restart is
+            # qvm-shutdown then qvm-start from dom0
             $iddLog = Get-IddLogFile
             [void](Send-QwtError -Component 'deactivate-idd' -Id 'reboot-refused' -Severity ACTION `
-                -Header 'The display change needs a reboot that was refused' `
-                -Next 'The device changes take effect only at the next boot: restart this qube by hand from dom0.' `
-                -Cause 'Cause: Windows refused the reboot request; the log has shutdown.exe''s code.' `
-                -Tech (Format-QwtNotifyTechLine -Subject 'deactivate-idd.ps1' -Count 'reported once per boot' -Evidence $iddLog))
+                -Header 'Display change reboot refused' `
+                -Next 'The change takes effect at the next boot. Restart the qube from dom0.' `
+                -Tech (Format-QwtNotifyTechLine -Subject 'deactivate-idd.ps1' -Code "shutdown.exe exit $(if ($null -ne $result['shutdown_rc']) { $result['shutdown_rc'] } else { 'unknown' })" -Evidence (Split-Path -Leaf $iddLog)))
             $result.ok = $false
             $result.error = "reboot request refused by shutdown.exe (rc $LASTEXITCODE) - reboot this qube by hand for the VGA topology to be rebuilt"
             Emit 1
