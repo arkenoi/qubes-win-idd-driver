@@ -297,9 +297,6 @@ $script:ClockJumpLogged = $false
 # clock_boot_correction_s gate sits at 60 s, so 30 s is below anything it would pass.
 $script:ClockJumpThresholdSec = 30
 # ---- WU-PASS-CLOCK-END
-# Set by the 0x8024402C remedy while the restart it requested is pending: Remove-Proxy then leaves the
-# WinHTTP proxy in place so that boot starts with it (see Remove-Proxy and ADR-updater section 11).
-$script:KeepWinHttpProxy = $false
 # ---- WU-SAVE-ATOMIC-BEGIN
 # ATOMIC, AND NEVER FATAL. The Qube Manager handler TAILS this file while a pass writes it (that is
 # what the mutex comment above describes), and a plain Set-Content fails outright on the sharing
@@ -868,8 +865,8 @@ function Ensure-Proxy {
 # ONE REBOOT DID: the very next pass got past the search and downloaded a 4.4 GB cumulative.
 # So the first-boot requirement is NOT a service-session problem, and a change with no measured
 # effect does not stay in the shipped script (owner's rule, the 30f2393 flush precedent).
-# What a boot establishes that a service restart does not: the WinHTTP proxy being set when the
-# boot starts (measured 2026-11-17, see Remove-Proxy) - which is why the remedy's restart keeps it.
+# The defect itself remains OPEN in findings/issues.md - what a boot establishes that a service
+# restart does not is still unknown.
 
 # REVOCATION SYNC - without this, every pass on a guest whose CTL cache has expired dies at
 # 0x80072F8F before its first byte of update metadata. Measured + root-caused 2026-08-19:
@@ -947,18 +944,7 @@ function Sync-Revocation {
 # pass left open still serves nobody but the update. Do not remove this because the other exists.
 # ---- WU-RELAY-TEARDOWN-BEGIN   (region markers)
 function Remove-Proxy {
-  # THE REQUESTED RESTART MUST BOOT WITH THE PROXY. Measured 2026-11-17 on a fresh German 26H2 template
-  # (QWT installed fresh, Windows Update never run): passes on two separate boots failed 0x8024402C with
-  # WU's first service lookup never reaching the relay, and the pass on a boot that STARTED with this
-  # WinHTTP proxy already set reached the relay and searched (7 offered). Resetting it here sent the
-  # remedy's restart into a boot without it, so the restart could never clear the state - the field
-  # reporter's guest, WU8024402CSURVIVESARESTART. The relay is still stopped below: the setting alone
-  # points at a closed local port and serves nothing.
-  if ($script:KeepWinHttpProxy) {
-    Log 'WinHTTP proxy left set for the restart this pass requested (0x8024402C remedy) - the relay is stopped'
-  } else {
-    & netsh winhttp reset proxy | Out-Null
-  }
+  & netsh winhttp reset proxy | Out-Null
   SetV $IS 'ProxyEnable' 0 'DWord'
   Remove-ItemProperty -Path $IS -Name 'ProxyServer' -EA SilentlyContinue
   # ONLY THE RELAY THIS PASS STARTED, by its handle (ADR-updater 12.4). Until 2026-10-03 this line killed every process NAMED
@@ -3979,7 +3965,6 @@ try {
         # claimed the remedy had failed when nothing had been tried.)
         $remedy = (' A restart was already requested for this in the current boot and has NOT been performed yet, so this pass ' +
                    'is not asking again - the request stands and the pass after the restart searches normally')
-        $script:KeepWinHttpProxy = $true
       } elseif ($askedFor -and "$untilSearch" -eq '1') {
         # THE RESTART HAPPENED AND DID NOT CLEAR IT. The stamp names an earlier boot, and a search that returns removes it
         # (right after Get-Available in the scan), so finding it here means this guest has started again since the request
@@ -3994,7 +3979,6 @@ try {
           Set-ItemProperty -Path 'HKLM:\SOFTWARE\Qubes\Updates' -Name ProxyStateRestartUntilSearch -Value 1 -Type DWord
           Set-ItemProperty -Path 'HKLM:\SOFTWARE\Qubes\Updates' -Name ProxyStateRestartAskedBoot -Value $bootNow -Type String
           $script:St.reboot_needed = $true
-          $script:KeepWinHttpProxy = $true
           $remedy = ' A RESTART CLEARS THIS IMMEDIATELY (measured), so this pass requests one; the pass after the restart searches normally'
         } catch {
           $remedy = ' A restart clears this state, but the request could not be recorded (' + ($_.Exception.Message -replace "`r|`n",' ') + '), so none is being made'

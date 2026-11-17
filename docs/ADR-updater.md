@@ -130,7 +130,7 @@ flowchart TD
 | 8 | Reboots are counted: performed must equal requested | ACCEPTED | - |
 | 9 | The test is the product | ACCEPTED | - |
 | 10 | The guest cannot restart itself; a restart is REQUESTED, never taken | ACCEPTED | - |
-| 11 | A cause outside our code, with a measured remedy, is CLOSED BY DECISION | ACCEPTED; applied once (`0x8024402C`) | - |
+| 11 | A cause outside our code, with a measured remedy, is CLOSED BY DECISION | ACCEPTED; applied once (`0x8024402C`), REOPENED 2026-11-14 | - |
 | 12 | Architecture: who does what, and who may touch which process | ACCEPTED (owner, Jev); shipped in 4.3.33 | 2026-10-03 |
 | 13 | The installer waits for a running scan; a refused updater deploy is never quiet | ACCEPTED (Jev); shipped in 4.3.35 | 2026-10-04 |
 | 14 | The cumulative goes first, and Windows is asked whether it registered it | ACCEPTED (Jev) | 2026-10-04 |
@@ -515,21 +515,62 @@ declining a proxy the system is handing it.
 **Reopened, 2026-11-14.** On the field reporter's 4.3.43 guest the state survived a full restart twice:
 findings/issues.md WU8024402CSURVIVESARESTART, docs/GWECK-STATUS.md row 47.
 
-**Why the restart did not clear it, measured 2026-11-17.** Reproduced on the rig for the first time on a
-fresh German 26H2 template (QWT 4.3.44.1322 installed fresh, Windows Update never run: no
-SoftwareDistribution\SLS, no DataStore). Passes on two separate boots failed `0x8024402C` with WU's first
-service lookup failing in 13 ms and never reaching the relay; the pass on a boot that STARTED with the
-WinHTTP proxy already set reached the relay and searched (7 offered). The single variable was the proxy
-being set before the boot. Every pass ends in `Remove-Proxy`, which reset that proxy - so the restart
-this remedy requested always booted without it, and on a guest whose WU never completed a lookup it could
-not clear the state. Rig subjects never showed it because every one is cloned from a golden whose WU
-already holds a successful lookup.
+**Measured 2026-11-17** (evidence `/home/user/qwt-accept/wu47/`).
 
-**Decision (2026-11-17).** While the remedy's restart is pending (requested in this pass, or requested
-earlier in this boot and not yet performed), `Remove-Proxy` leaves the WinHTTP proxy set; the relay is
-stopped as on every pass, so the setting points at a closed local port and serves nothing - the temporal
-gate (section 12) is unchanged. The next pass sets it again and, once its search returns, resets it as
-always.
+1. The first contact reproduces on the rig; its survival across a restart does not, yet. Three templates made
+   fresh from a German 26H2 base (26300.9457, QWT 4.3.44.1322, Windows Update never run) failed their first
+   pass with the field signature: Windows Update's service lookup fails in 13 ms and never reaches the relay.
+   On win11de26-t54 the next boot - after a clean `qvm-shutdown` within 6 minutes of the failure, starting
+   with NO proxy set - searched (7 offered). The 2026-10-02 clones (rz31, rz32) behaved the same way: the
+   harness restarted them within minutes of the failing pass and the next boot searched.
+2. The reporter's failing boots ran on for about 30 minutes after the failing pass (4.3.43: 11:29 until a
+   shutdown at 11:59:44; 26H2 on 4.3.44: 09:28 until about 10:00), and each ended in a clean shutdown from
+   inside Windows: no 6008 or Kernel-Power 41 was recorded, and the 10:00 boot was a cold one (qrexec-agent,
+   qubesdb-daemon and gui-agent all started with new process ids). The next boots' passes failed again.
+3. The German 25H2 golden's own log shows the same failure on 2026-09-16 and no Windows Update activity again
+   until 2026-10-02, when its clones' first passes failed: the state outlived the golden's boots in between.
+4. Every rig cure followed a restart that came within minutes; both field failures followed a boot that ran on
+   for half an hour. Windows' own Update Orchestrator runs on our guests about every 30 minutes, without our
+   proxy (findings/updates.md, 2026-09-30), so a boot that long leaves room for a Windows Update contact the
+   relay never sees. Whether that is the variable is NOT tested: no rig run has kept a failing boot up that
+   long (Jev `separating_variable` 0.25, under the floor - no verdict).
+5. RETRACTED: the reading that the reporter's boots ended uncleanly. Our recorder writes
+   `id=6008 ... (boot pass: no new shutdown record)` when its query found NO such event
+   (`guest/install-reboot-audit.ps1`); row 47 and findings/issues.md had read that line as a 6008.
+
+**Withdrawn 2026-11-17: c2516b56, "leave the WinHTTP proxy set across the requested restart"** (reverted; it
+was never released). RETRACTED, the measurement behind it: "passes on two separate boots failed" counted a
+StandaloneVM pass that did nothing, and the boots that started with the proxy set were second boots, which on
+the rig search without it (point 1). Its cost is containment: `on_reboot=destroy` leaves the template halted
+with the setting committed to its root, so every AppVM or DispVM started from it before the template's next
+pass boots with a machine proxy pointing at a closed port, nothing in a non-template resets it, and an
+uninstall leaves it. Owner, 2026-11-17: «global proxy has spectacular side effects and hard to contain, thats
+why we disfavor it under other designs». Jev `withdraw_keep` 0.95.
+
+**Decision (2026-11-17).**
+
+1. The proxy never outlives the pass. No machine proxy setting crosses a halt or an uninstall, and no seeding
+   mechanism may rest on one.
+2. The remedy above stays as it is: the failing pass reports the measured reason and requests one restart, and
+   the pass that finds the state still there after it says so and requests no other - as it did on the
+   reporter's 26H2 guest at 10:03.
+3. The mechanism for a guest where that restart does not cure is NOT decided (Jev `mechanism` 0.29, under the
+   floor). BLOCKING (Jev `missing_measurement` 0.98): on a never-seeded template, our failing pass in boot A,
+   boot A kept up about 35 minutes while recording whether Windows' own orchestrator contacted Windows Update,
+   then a clean restart and the pass in boot B; then the same with the orchestrator's tasks disabled.
+4. If the long boot reproduces the field and disabling the orchestrator restores the cure, the mechanism is the
+   owner's order of 2026-09-30, «updates should be off unconditionally except maybe standalonevms», applied to
+   templates: Windows' own Update Orchestrator does not contact Windows Update there, our proxied passes are its
+   only contacts, and the restart the remedy requests seeds it. If not, this section stays reopened with the
+   variable unknown.
+5. Rejected: a boot that starts with the proxy set, by a kept setting or an early-boot writer (point 1, and the
+   measurement for it is retracted above); restarting Windows Update's services in the same boot (2026-09-21:
+   no effect); writing Windows Update's service-location cache ourselves (undocumented internals); a
+   per-session proxy through `IUpdateSession.WebProxy` (Microsoft documents `IWebProxy` as not supported on
+   Windows 10 and later).
+
+Windows 10: no occurrence is on record. The one Win10-era report (2026-08-30) was voided by the owner, and
+before 2026-08-11 (f1b62558) the proxy stayed set between passes, so no boot started without it.
 
 ## 12. Architecture: who does what, and who may touch which process
 
