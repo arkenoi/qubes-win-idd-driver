@@ -195,7 +195,11 @@ amended 2026-11-14 (point 6).
    (`definitions_offered`) and installed by every install pass.
    THE CLASSIFICATION IS WIDER THAN THE SIGNATURES. Windows Update files the Defender platform update
    (KB4052623) and the Windows Security platform update (KB5007651) under it too. So both leave the number
-   with the signatures. Point 2 does not override this point.
+   with the signatures.
+   THE COST. Only dom0 starts an install pass; the scheduled pass scans and installs nothing. So on a qube
+   whose own updating is off (a template, an AppVM), definitions and the two platform updates arrive with the
+   next update dom0 runs for another reason, and a clear flag asks for none. Point 2 does not override this
+   point.
 
 **Mechanism for point 3, decided 2026-11-08 (Jev, three verdicts above floor).** Point 3 needs the
 offer's own identity on the row that says a pass installed it. `uid`/`rev` ARE the Windows Update
@@ -569,6 +573,9 @@ carries the invariant. In `guest/qubes-windows-update.ps1` as `WU-PASS-ORDER`, `
   same failure with "unknown" in place of "did not register": missing data fails, and nothing
   unverified is ever reported as staged.
 
+The cost is at most one extra restart, and dom0 is told once that work is pending and a restart is required - the
+owner's rule - never that something will complete when it will not.
+
 ---
 
 ## 15. Outside data never becomes a command
@@ -669,7 +676,8 @@ line is itself evidence; that is what identifies dead code as dead rather than a
 
 ## 17. Windows never restarts a guest on its own; a restart waits for the user, and a policy that overrides this is detected and warned about
 
-**Status:** ACCEPTED (owner, 2026-11-13; Jev accept 0.89); built in `guest/qubes-windows-update.ps1`.
+**Status:** ACCEPTED (owner, 2026-11-13; Jev accept 0.89); built in `guest/qubes-windows-update.ps1`. Decision
+1 is owed before this ships.
 
 Windows documents a setting that keeps updates on and leaves the restart to a signed-in user: `AUOptions=4`
 with `NoAutoRebootWithLoggedOnUsers=1` under `HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU`
@@ -700,3 +708,5 @@ automatic reboots. on templateVM and appVM they are off"*.
 
 3. Managed guests (domain or device-management policy) are future work. Until then they are detected and
    warned about, nothing more.
+
+**Cost.** An update that needs a restart stays pending until the user restarts, however long that takes.
