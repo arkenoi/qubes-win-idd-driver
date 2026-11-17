@@ -208,6 +208,13 @@ while [ $(( $(date +%s) - t0 )) -lt "$BUDGET" ]; do
     # backstop that FAILS, never the thing that ends a healthy run.
     if [ -n "$MARKLOOP" ] && MTOOLS_SKIP_CHECK=1 mcopy -n -i "$MARKIMG" ::/PRIMED-OK.TXT - >/dev/null 2>&1; then
         log "PRIMED-OK marker present after $(( $(date +%s) - t0 ))s - provisioning finished (guest said so)"
+        # HANDED OVER HALTED. The primer writes the marker as its last line and does not power off,
+        # and golden_recreate.sh takes only a Halted base as pristine - so until this marker first
+        # worked (2026-11-17) every exit through here left a Running base that the caller refused.
+        # Never killed: a killed base is not pristine.
+        qwt_shutdown "$VM" 600
+        [ "$(state)" = Halted ] || { log "FAIL: $VM is '$(state)' after a clean shutdown request - left as it is, not killed"; exit 1; }
+        log "$VM halted"
         exit 0
     fi
     if [ "${PRISTINE:-0}" = 1 ]; then
