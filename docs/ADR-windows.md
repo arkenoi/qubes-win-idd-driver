@@ -74,6 +74,7 @@ flowchart TD
 | 12 | A withheld window is reported to the user only for a fault that waiting cannot resolve | ACCEPTED (owner, Jev) | 2026-11-14 |
 | 13 | A guest whose profiles live on an empty private volume says so, with the remedy | ACCEPTED (Jev 0.75) | 2026-11-15 |
 | 14 | Repairing such a guest: a fresh private volume, then power off | PROPOSED (Jev 0.75) | 2026-11-15 |
+| 16 | `qubes.WaitForSession` waits for the qube's own qubesdb `/default-user`, as on Linux; a different name from the caller is reported through the existing route | ACCEPTED (owner) | 2026-11-17 |
 
 Status words and the section format are defined in `docs/ADR-README.md`.
 
@@ -680,3 +681,66 @@ next boot by the guard), so the backup header moves. C: does not grow: Windows s
 recovery partition right after C:, and both the live extend (rc=1, "C: cannot grow: ... partition #2
 (Unknown, 796 MiB) lies between C: and that space") and the boot guard after a halted extend refuse, as
 decided above. Growing C: therefore needs that partition moved or removed - not done here.
+
+## 16. `qubes.WaitForSession` waits for the qube's own qubesdb `/default-user`, as on Linux
+
+**Status:** ACCEPTED (owner), 2026-11-17. Built in core-agent 1697352 (`wait-for-logon.c`); not verified on
+a guest.
+
+**Owner, 2026-11-17:** «did you implement the plan for matching linux core-agent to read qubesdb entries? or
+was it postponed to SLS work? workflow it in background»; «yes keep in mind multiplexing/combining vchan load
+whenever possible»; «write qubesdb parity decision to ADR, implement, do not overengineer around dom0
+bubble»; «"no new bubble" does not mean you should not send dom0 notification, it means you should not design
+a new mechanism for it». Earlier the same day, on `docs/GWECK-STATUS.md` row 54: «gweck admitted he messed
+with the user. so we may revert the fix, but it probably should give a loud warning when user does not
+match» - done in core-agent 6251a6b.
+
+**Context.** dom0's `qvm-run --service` calls `qubes.WaitForSession` with dom0's `default_user` on stdin and
+sends the app call only after it returns. Since 6251a6b `wait-for-logon.exe` returns only for an active
+session whose account is exactly the name it waits for (stock `wcscmp`); a session of another account is a W
+line and one dom0 notification per boot (`default-user-mismatch`). The name it waited for was the one the
+caller sent. Linux takes it from the qube's own qubesdb and never reads what the caller sent
+(qubes-core-qrexec `qubes-rpc-base/qubes.WaitForSession`):
+
+    user="$(qubesdb-read /default-user || echo 'user')"
+
+**Decision.**
+1. `wait-for-logon.exe` reads `/default-user` from the local qubesdb: one `qdb_open`, one `qdb_read`, the same
+   trailing CR/LF/space trim the stdin name gets, a UTF-8 to UTF-16 conversion with the windows-utils API.
+   Each failure - open failed, key absent or read failed, value empty, conversion failed - is its own E line.
+2. The caller's name is still read as before (command line, else stdin). When qubesdb answered, its name is
+   the one waited for.
+3. When the caller sent a non-empty name that differs from the qubesdb one (exact comparison, the stock
+   rule), a W line names both and says the wait is for the qubesdb name, as on Linux, and dom0 is told
+   through the existing error route by the existing function, `NotifyUserMismatch`, now taking its id, code
+   and texts as arguments: id `default-user-changed`, code `QWTUSERCHANGED`, "App menu entries wait for a
+   different account than dom0 named", with the remedy "If default_user was changed in dom0 while this qube
+   runs, restart the qube." The route's once-per-boot rule for each id is the route's; nothing is added to
+   it. The `default-user-mismatch` call from the session check passes today's id, code and texts.
+4. When qubesdb cannot be read, the wait is for the caller's name, and for the literal `user` (with its own E
+   line) only when the caller sent none.
+
+**Why.** The vchan load: the Windows qubesdb client reaches the LOCAL daemon over a named pipe
+(`client/qdb-client.c`, `QDB_DAEMON_LOCAL_PATH`), and the daemon answers a read from its own copy
+(`daemon/db-cmds.c` `handle_read`); only a local client's writes and removals are duplicated through the
+vchan to dom0 (`handle_write`, `handle_rm`). So the read adds no vchan traffic. Reporting a difference
+between the caller's name and qubesdb's follows Jev (log_and_report 0.85). Two choices are NOT Jev verdicts:
+one `qdb_open` with no retry, thread or bound (Jev leaned unbounded 0.53 at confidence 0.30; the owner's rule
+is no timeout as a fix), and the fallback to the caller's name when qubesdb cannot be read (Jev leaned 0.50 at
+0.33), chosen because for dom0's callers that name IS the `default_user` dom0 holds, while a literal `user`
+would strand every qube whose `default_user` is not `user`.
+
+**Cost.** A qubesdb daemon that is alive but not answering holds the call: measured 2026-10-24 on
+win11r-sup, where `qdb_open` against a suspended daemon did not return within 90 s and returned 67 ms after
+the resume (core-agent `src/qrexec-agent/qrexec-agent.c`, the comment above `WaitForQdb`). It is accepted
+without a bound by the owner's no-timeout rule; this is not a Jev verdict. Every call opens the local pipe
+once and makes one read on it.
+
+**Evidence.** Owed: a rig run of the built exe - a caller name equal to `/default-user`, one that differs (the
+W line, the notification, the duplicate suppressed), and qubesdb unreadable.
+
+**Open.**
+- Whether qubesdb `/default-user` follows a `default_user` change made in dom0 while the qube runs is NOT
+  measured; a rig read is pending, and this section claims neither way.
+- A zero-byte stdin still ends the call with an error before qubesdb is read, as before; only a name that
+  trims to empty reaches the fallback in rule 4.
