@@ -577,9 +577,10 @@ findings/issues.md WU8024402CSURVIVESARESTART, docs/GWECK-STATUS.md row 47.
    written the policy, and its pass failed at 10:02:48 - as his 4.3.43 pass at 13:46 did, after the 11:29 pass
    and a shutdown. The policy's presence at those sign-ins was never observed; it is inferred from the code.
    Rig and field differ: his account is `Weck` with no `user` account and Open-Shell is installed
-   (mgmt/reporters/gweck.json asserts both; t56 fails them), and his profiles are on the private volume - his
-   26H2 autologon log reads "profile store C:\Users links to Q:\Users" from 09:27 on, his 4.3.43 install log
-   names MoveUsers - which nothing asserts. rz31 and rz32 had no `user` account (env-assert, 2026-10-02) and a
+   (mgmt/reporters/gweck.json asserts both; t56 fails them). The profile store is NOT a difference: his 26H2
+   autologon log reads "profile store C:\Users links to Q:\Users" from 09:27 on (his 4.3.43 install log names
+   MoveUsers), and the rig's win11de26-t54 logs the same line (its updater log of 2026-11-17, evidence
+   wu47/run13-earlyboot). rz31 and rz32 had no `user` account (env-assert, 2026-10-02) and a
    restart cured them, so the account alone does not explain it; whether they had Open-Shell is not recorded
    (that assertion was added 2026-10-08). The rig's cold-boot sign-in with the policy present searched
    (run17e) - the condition his 10:00 boot is inferred to have had - so what decides it is the one fact never
