@@ -297,12 +297,8 @@ function Get-TaskResultMeaning([uint32]$r) {
         default { return 'unmapped code' }
     }
 }
-# What a killed pass leaves behind, torn down the way qubes-windows-update.ps1's Remove-Proxy does
-# it: WinHTTP proxy reset, WinINET proxy disabled. That script is not dot-sourceable (it IS the
-# pass - loading it runs one) and has no cleanup action, so the steps are mirrored here; keep them
-# in step with Remove-Proxy. Every step reports its own outcome: this handler runs in the rpc
-# caller's context, and a relay left serving is the one leftover that matters (see the
-# temporal-gate comment there) - it is REPORTED, never killed (docs/ADR-updater.md 12.4).
+# What a killed pass leaves behind, in step with qubes-windows-update.ps1's Remove-Proxy: since ADR-updater §18 the proxy
+# configuration stays on the template, so the one leftover is the relay - REPORTED, never killed (docs/ADR-updater.md 12.4).
 # Who LISTENS on 127.0.0.1:8082: the owning pid, 0 when nobody does, -1 when the table cannot be read (UNKNOWN IS NOT ZERO). Found by
 # the PORT, identified by its PID, never by a process name. A free port is an ObjectNotFound error from Get-NetTCPConnection; any other
 # error is unknown. Mirror of Get-RelayPortOwner in qubes-windows-update.ps1 and install-updater-agent.ps1; keep the three in step.
@@ -330,15 +326,9 @@ function Remove-DeadPassLeftovers {
         $Err.WriteLine('leftovers NOT touched: ' + (Format-HolderNow) + ' owns the updater right now, and the proxy and the relay are its own')
         return
     }
-    $isKey = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Internet Settings'
+    # The proxy CONFIGURATION stays (ADR-updater §18, owner 2026-11-18): on a template it is kept between passes, and the
+    # relay's process gate, not time, keeps other processes out. The one leftover that matters is the relay.
     $done = @(); $failed = @()
-    & netsh winhttp reset proxy 2>&1 | Out-Null
-    if ($LASTEXITCODE -eq 0) { $done += 'winhttp proxy reset' } else { $failed += "winhttp proxy reset (netsh rc=$LASTEXITCODE)" }
-    try {
-        New-ItemProperty -Path $isKey -Name 'ProxyEnable' -Value 0 -PropertyType DWord -Force -EA Stop | Out-Null
-        Remove-ItemProperty -Path $isKey -Name 'ProxyServer' -EA SilentlyContinue
-        $done += 'wininet proxy disabled'
-    } catch { $failed += "wininet proxy disable ($($_.Exception.Message))" }
     # THE RELAY IS NOT KILLED - not by name, not at all (ADR-updater 12.4). Until 2026-10-03 this killed every process named
     # qubes-updates-relay, a LIVE scan's among them (measured 2026-10-02). The dead pass started its relay with --parent-pid, and the
     # relay's own watchdog ends it within seconds of that pass's exit (ParentCheckMs, 5 s). The observable is 127.0.0.1:8082's LISTEN
@@ -353,8 +343,8 @@ function Remove-DeadPassLeftovers {
     elseif ($relayOwner -eq 0) { $done += ('relay pid ' + $relayFirst + ' exited on its own (its parent watchdog) after ' + ($waits * 500) + ' ms - not killed') }
     else { $failed += (Format-RelaySurvivor $relayOwner) }   # GUARD:relaynokill
     # never end in a bare number (see Msg): the summary closes with a word
-    if ($failed.Count) { $Err.WriteLine('leftovers: ' + (($done + $failed) -join '; ') + ' - CHECK the qube, its offline baseline is NOT restored') }
-    else { $Err.WriteLine('leftovers: ' + ($done -join '; ') + ' - offline baseline restored') }
+    if ($failed.Count) { $Err.WriteLine('leftovers: ' + (($done + $failed) -join '; ') + ' - CHECK the qube, a relay may still be serving') }
+    else { $Err.WriteLine('leftovers: ' + ($done -join '; ') + ' - the proxy configuration stays (ADR-updater 18)') }
 }
 while ((Get-Date) -lt $deadline) {
     Start-Sleep -Seconds 3

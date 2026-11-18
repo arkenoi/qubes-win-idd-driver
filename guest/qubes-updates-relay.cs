@@ -168,9 +168,8 @@ static class Relay
             // NOTE, deliberately: go.microsoft.com is a general REDIRECTOR, so this is the widest
             // entry in the list - it can point the caller at many Microsoft properties, not one file
             // server. Added on the owner's explicit instruction (2026-08-21). The exposure stays
-            // bounded by the two gates that already exist and must NOT be removed: the positional
-            // peer allowlist (only the update process may use the proxy at all) and the temporal
-            // gate (the proxy is torn down when the pass ends).
+            // bounded by the positional peer allowlist (only the update process may use the proxy
+            // at all, by identity - ADR-updater §18) and by the relay running only while a pass does.
             "go.microsoft.com",             // ONLY to resolve the Defender fwlink redirect
         };
     }
@@ -411,15 +410,14 @@ static class Relay
     // system proxy and phones home - measured on an "offline" guest as 147 dom0
     // qubes.UpdatesProxy policy hits in one afternoon, still dripping hours after the last scan.
     //
-    // BOTH GATES ARE KEPT, deliberately (user, 2026-08-15). This positional gate does NOT
-    // replace the temporal one - the pass still brings the proxy up only for its own duration and
-    // tears it down afterwards (Ensure-Proxy / Remove-Proxy, "proxy removed, relay stopped").
-    // They fail differently, which is the point: the positional gate depends on our own
-    // process-identity logic being right, and if it is ever wrong - a new svchost split, a
-    // service we did not anticipate, a bug in the TCP-table lookup - the temporal gate still
-    // bounds the exposure to the minutes a pass takes. And if a pass is somehow left open, the
-    // positional gate still refuses everything that is not the update. Neither is sufficient
-    // alone; removing either because the other exists is the mistake to avoid.
+    // THE PROCESS GATE IS THE GATE (ADR-updater §18, owner 2026-11-18: «we want to keep the process gate ... so no time
+    // window», «and that it is not accessible by non-update process (test it)»). The proxy CONFIGURATION now stays on the
+    // template between passes; this RELAY still runs only while a pass does (the parent watchdog below), so the time
+    // bound the owner kept on 2026-08-15 survives for the relay process alone. A relay that serves between passes (manual
+    // updates, §18 point 3) removes that last bound, which is why the gate decides by IDENTITY - LocalSystem token, image
+    // under the Windows/Defender folders, the pass registered by pid and start time - and not by name: measured on
+    // win11de26-t79 (as shipped: a renamed curl and the signed-in user's powershell were served) and t80 (this code:
+    // both refused, the registered pass and a System32 image served).
     //
     // The relay is the only place that can tell WHO is calling, so it decides. Each accepted
     // connection is mapped back to the owning process through the TCP table, and only processes
@@ -663,18 +661,123 @@ static class Relay
             Process p = Process.GetProcessById(pid);
             why = p.ProcessName + " (pid " + pid + ")";
             if (pid == Process.GetCurrentProcess().Id) return true;
-            foreach (string img in UpdateImages)
-                if (string.Equals(p.ProcessName, img, StringComparison.OrdinalIgnoreCase)) return true;
             // svchost hosts many services, and the socket cannot say which one - so ask the SCM
             // which PIDs host the update services and compare. Cached: this runs per connection.
             string svcName = ServiceHostedBy(pid);
             if (svcName != null) { why = p.ProcessName + " hosting " + svcName + " (pid " + pid + ")"; return true; }
-            // Our own agent: PowerShell running the updater, and whatever it spawns.
-            if (string.Equals(p.ProcessName, "powershell", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(p.ProcessName, "qubes-updates-relay", StringComparison.OrdinalIgnoreCase))
-                return true;
+            // IDENTITY, NOT NAME (ADR-updater §18 point 2). A NAME is any process with that name: measured
+            // 2026-11-18 on win11de26-t78 with the relay as shipped, a curl copied to C:\ProgramData\run26\dism.exe
+            // was served, and so was the signed-in user's own powershell. That exposure lasted one pass while the
+            // proxy existed only during a pass; with the proxy kept up on a template it would be permanent.
+            bool named = false;
+            foreach (string img in UpdateImages)
+                if (string.Equals(p.ProcessName, img, StringComparison.OrdinalIgnoreCase)) { named = true; break; }
+            bool ps = string.Equals(p.ProcessName, "powershell", StringComparison.OrdinalIgnoreCase);
+            if (!named && !ps) return false;
+            // Every update process runs as LocalSystem; a user's process, elevated or not, never does.
+            if (!ProcessTokenIsSystem(pid)) { why += " - not LocalSystem"; return false; }
+            if (named)
+            {
+                // ...and from where only an administrator can put an executable.
+                string path = ProcessImagePath(pid);
+                if (UnderTrustedRoot(path)) return true;
+                why += " - image " + (path ?? "(unreadable)") + " is outside the Windows and Defender folders";
+                return false;
+            }
+            // powershell: only the update pass itself, which registers its pid and start time before it starts
+            // the relay. Any other LocalSystem powershell is not part of the update.
+            if (IsRegisteredUpdater(pid, p.StartTime)) return true;
+            why += " - not a registered update pass";
+            return false;
         }
         catch (Exception e) { why = "pid " + pid + " (" + e.GetType().Name + ")"; }
+        return false;
+    }
+
+    // The peer's identity for PeerIsUpdate: its token's user, its image path, and the pass's registration. Each answers
+    // false on anything it cannot read - an unreadable identity is not an update process.
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern IntPtr OpenProcess(uint access, bool inherit, int pid);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool CloseHandle(IntPtr h);
+    [DllImport("advapi32.dll", SetLastError = true)]
+    static extern bool OpenProcessToken(IntPtr process, uint access, out IntPtr token);
+    [DllImport("advapi32.dll", SetLastError = true)]
+    static extern bool GetTokenInformation(IntPtr token, int cls, IntPtr buf, int len, out int needed);
+    [DllImport("advapi32.dll", SetLastError = true)]
+    static extern bool IsWellKnownSid(IntPtr sid, int type);
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    static extern bool QueryFullProcessImageNameW(IntPtr process, int flags, StringBuilder name, ref int size);
+    const uint ProcessQueryLimited = 0x1000;   // PROCESS_QUERY_LIMITED_INFORMATION: also granted on protected processes
+
+    static bool ProcessTokenIsSystem(int pid)
+    {
+        IntPtr h = OpenProcess(ProcessQueryLimited, false, pid);
+        if (h == IntPtr.Zero) return false;
+        IntPtr tok = IntPtr.Zero, buf = IntPtr.Zero;
+        try
+        {
+            if (!OpenProcessToken(h, 0x0008 /*TOKEN_QUERY*/, out tok)) return false;
+            int needed;
+            GetTokenInformation(tok, 1 /*TokenUser*/, IntPtr.Zero, 0, out needed);
+            if (needed <= 0) return false;
+            buf = Marshal.AllocHGlobal(needed);
+            if (!GetTokenInformation(tok, 1, buf, needed, out needed)) return false;
+            return IsWellKnownSid(Marshal.ReadIntPtr(buf), 22 /*WinLocalSystemSid*/);   // TOKEN_USER.User.Sid
+        }
+        finally
+        {
+            if (buf != IntPtr.Zero) Marshal.FreeHGlobal(buf);
+            if (tok != IntPtr.Zero) CloseHandle(tok);
+            CloseHandle(h);
+        }
+    }
+
+    static string ProcessImagePath(int pid)
+    {
+        IntPtr h = OpenProcess(ProcessQueryLimited, false, pid);
+        if (h == IntPtr.Zero) return null;
+        try
+        {
+            StringBuilder sb = new StringBuilder(1024);
+            int size = sb.Capacity;
+            return QueryFullProcessImageNameW(h, 0, sb, ref size) ? sb.ToString(0, size) : null;
+        }
+        finally { CloseHandle(h); }
+    }
+
+    // Folders a standard user cannot write: the Windows directory (TiWorker in WinSxS, TrustedInstaller in servicing,
+    // dism in System32, DismHost under Windows\Temp, which only a LocalSystem process gets past the check above), the
+    // program folders, and Defender's platform folder (MpCmdRun, MsMpEng).
+    static bool UnderTrustedRoot(string path)
+    {
+        if (string.IsNullOrEmpty(path)) return false;
+        string full;
+        try { full = System.IO.Path.GetFullPath(path); } catch { return false; }
+        string pd = Environment.GetEnvironmentVariable("ProgramData");
+        string[] roots = {
+            Environment.GetFolderPath(Environment.SpecialFolder.Windows),
+            Environment.GetEnvironmentVariable("ProgramFiles"),
+            Environment.GetEnvironmentVariable("ProgramFiles(x86)"),
+            string.IsNullOrEmpty(pd) ? null : System.IO.Path.Combine(pd, @"Microsoft\Windows Defender\Platform"),
+        };
+        foreach (string r in roots)
+        {
+            if (string.IsNullOrEmpty(r)) continue;
+            string root = r.TrimEnd('\\') + "\\";
+            if (full.StartsWith(root, StringComparison.OrdinalIgnoreCase)) return true;
+        }
+        return false;
+    }
+
+    // The update pass registers itself here before it starts the relay: REG_MULTI_SZ UpdaterPids under
+    // HKLM\SOFTWARE\Qubes\UpdatesProxy, one "<pid>@<start time, UTC ticks>" per running pass. Only an administrator can
+    // write the key; the start time defeats pid reuse after a pass that died without removing its entry.
+    static bool IsRegisteredUpdater(int pid, DateTime start)
+    {
+        string want = pid + "@" + start.ToUniversalTime().Ticks;
+        foreach (string e in PolicyList("UpdaterPids"))
+            if (string.Equals((e ?? "").Trim(), want, StringComparison.Ordinal)) return true;
         return false;
     }
 
@@ -825,8 +928,8 @@ static class Relay
     // Measured 2026-09-17 on the German 25H2 template: the Task Scheduler ended the updater's
     // PowerShell instance hard 90 s into a pass (LastTaskResult 0x41306), so its
     // `finally { Remove-Proxy }` never ran and this relay kept serving 127.0.0.1:8082 for hours -
-    // the temporal gate ("the proxy is up ONLY for the duration of a pass", see the updater's
-    // Ensure-Proxy comment) was then held by nothing. The updater passes its own $PID as
+    // the relay's time bound (it runs only while a pass does; ADR-updater §18 keeps the proxy
+    // CONFIGURATION, not the relay) was then held by nothing. The updater passes its own $PID as
     // --parent-pid; when that process is gone the relay EXITS. No draining, no grace: the proxy
     // must go DOWN. A pid can be recycled inside the check interval, so the parent's start time
     // is captured at arming and a different start time under the same pid counts as gone.

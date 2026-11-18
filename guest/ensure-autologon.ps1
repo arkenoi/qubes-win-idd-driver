@@ -20,7 +20,7 @@
 # Windows password protects nothing dom0 relies on. QWT's own Autologon component would store an
 # LSA secret instead, but it randomises the account password, which is why the image omits it.
 #
-# -AtBoot is passed by the boot task (QubesAutologonGuard) only; part 5 runs only then, never for the
+# -AtBoot is passed by the boot task (QubesAutologonGuard) only; parts 5-7 run only then, never for the
 # installer or the updater, which run this script for its autologon verdict.
 param([switch]$AtBoot)
 $ErrorActionPreference = 'Continue'
@@ -481,6 +481,37 @@ public static class QwtGuardQdb {
         }
     } else {
         Write-Output "note   profile seed not refreshed: C:\Users links to '$cuTarget' or Q:\Users\Default has no NTUSER.DAT"
+    }
+    # 7. The updates proxy belongs to the template (ADR-updater §18 point 4). Its pass keeps the proxy configured on
+    #    the template's root, and every qube made from that root boots with it - where nothing serves 127.0.0.1:8082.
+    #    Not a template: remove what OUR pass wrote, and only that - a WinHTTP or WinINET proxy that is not ours, and
+    #    the policy value when the machine proxy is someone else's, are left as they are. An unreadable class changes
+    #    nothing (a template must keep its proxy).
+    if ($vmClass -and $vmClass -ne 'TemplateVM') {
+        $ours = '127.0.0.1:8082'
+        $isK = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Internet Settings'
+        $polK = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\CurrentVersion\Internet Settings'
+        $done = @()
+        $wh = (& netsh winhttp show proxy 2>&1 | Out-String)
+        if ($wh -match [regex]::Escape($ours)) { & netsh winhttp reset proxy | Out-Null; $done += 'WinHTTP proxy' }
+        $ps = (Get-ItemProperty -LiteralPath $isK -Name ProxyServer -ErrorAction SilentlyContinue).ProxyServer
+        if ($ps -eq $ours) {
+            Set-ItemProperty -LiteralPath $isK -Name ProxyEnable -Value 0 -Type DWord -ErrorAction SilentlyContinue
+            Remove-ItemProperty -LiteralPath $isK -Name ProxyServer, ProxyOverride -ErrorAction SilentlyContinue
+            $done += 'machine WinINET proxy'
+        }
+        if ((-not $ps -or $ps -eq $ours) -and $null -ne (Get-ItemProperty -LiteralPath $polK -Name ProxySettingsPerUser -ErrorAction SilentlyContinue).ProxySettingsPerUser) {
+            Remove-ItemProperty -LiteralPath $polK -Name ProxySettingsPerUser -ErrorAction SilentlyContinue
+            $done += 'per-machine proxy policy'
+        }
+        if ($null -ne (Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Qubes\UpdatesProxy' -Name UpdaterPids -ErrorAction SilentlyContinue).UpdaterPids) {
+            Remove-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Qubes\UpdatesProxy' -Name UpdaterPids -ErrorAction SilentlyContinue
+            $done += 'relay registration'
+        }
+        if ($done.Count) { Write-Output ("SET    updates proxy: removed on this $vmClass - " + ($done -join ', ')) }
+        else { Write-Output "ok     updates proxy: none of ours on this $vmClass" }
+    } elseif (-not $vmClass) {
+        Write-Output "note   updates proxy: the qube class is unreadable from QubesDB - left as it is"
     }
 }
 

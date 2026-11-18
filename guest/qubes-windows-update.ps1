@@ -682,12 +682,10 @@ function Get-OfferRouteKey($u) {
 if ($script:St.recovered) { Log ("PREVPASS " + $script:St.recovered) }
 function SetV($p,$n,$v,$t){ if(-not(Test-Path $p)){New-Item -Path $p -Force|Out-Null}; New-ItemProperty -Path $p -Name $n -Value $v -PropertyType $t -Force|Out-Null }
 
-# The proxy is up ONLY for the duration of a pass. Leaving the system-wide WinHTTP proxy set
-# turns the relay into an always-on escape hatch: every Windows background HTTP client (telemetry,
-# Edge/Defender update checks, NCSI, DO) discovers it and phones home, each connection spawning a
-# qrexec qubes.UpdatesProxy call - measured 147 dom0 policy hits in one afternoon on an "offline"
-# guest, still dripping hours after the last scan. Remove-Proxy in the finally below restores the
-# routeless baseline; update traffic is the only traffic that ever gets a path out.
+# The proxy CONFIGURATION stays on the template between passes (ADR-updater §18, owner 2026-11-18); the relay runs during a
+# pass. The 147 dom0 policy hits in one afternoon once measured with the WinHTTP proxy left set came from before the relay's
+# process gate: a denied caller is now reset at accept, before it is counted as demand, so it never opens a qrexec channel.
+# The gate admits by identity (relay.cs PeerIsUpdate), not by name - measured 2026-11-18 (run26, t79/t80).
 # ---- WU-RELAY-BEGIN   (region markers)
 function Test-RelayListening {
   param([int]$BoundMs = 15000)
@@ -818,6 +816,22 @@ function Stop-OwnRelay {
     else { Log ("ANOMALY: relay pid {0} did not exit within 10 s of being killed by this pass" -f $id) }
   } catch { Log ("ANOMALY: relay pid {0} NOT stopped: {1}" -f $id, $_.Exception.Message) }
 }
+# The relay serves a powershell only when it is a registered update pass (ADR-updater §18 point 2; relay.cs IsRegisteredUpdater):
+# REG_MULTI_SZ UpdaterPids under HKLM\SOFTWARE\Qubes\UpdatesProxy, one "<pid>@<start time, UTC ticks>" per running pass.
+# -Add registers this pass, -Remove unregisters it; both drop the entries of passes that are gone (a killed pass's entry).
+function Update-UpdaterRegistration([switch]$Add, [switch]$Remove) {
+  $key = 'HKLM:\SOFTWARE\Qubes\UpdatesProxy'
+  $me = "$PID@" + [Diagnostics.Process]::GetCurrentProcess().StartTime.ToUniversalTime().Ticks
+  $keep = @()
+  foreach ($e in @((Get-ItemProperty -LiteralPath $key -Name UpdaterPids -EA SilentlyContinue).UpdaterPids)) {
+    if ($e -notmatch '^(\d+)@(\d+)$' -or $e -eq $me) { continue }
+    $p = Get-Process -Id ([int]$Matches[1]) -EA SilentlyContinue
+    if ($p -and "$($p.StartTime.ToUniversalTime().Ticks)" -eq $Matches[2]) { $keep += $e }
+  }
+  if ($Add) { $keep += $me }
+  SetV $key 'UpdaterPids' ([string[]]$keep) 'MultiString'
+  Log ("relay registration: " + $(if ($Add) { "this pass $me registered" } else { "this pass $me unregistered" }) + "; $($keep.Count) entr$(if ($keep.Count -eq 1) { 'y' } else { 'ies' }) now")
+}
 function Ensure-Proxy {
   # NEVER ADOPT (ADR-updater 12.4). Until 2026-10-03 this started a relay only if no process NAMED qubes-updates-relay existed and
   # otherwise served through whatever answered on 8082 - measured that day: the boot scan adopted a relay another process had
@@ -828,6 +842,7 @@ function Ensure-Proxy {
   & netsh winhttp set proxy '127.0.0.1:8082' '<local>' | Out-Null
   SetV $POL 'ProxySettingsPerUser' 0 'DWord'; SetV $IS 'ProxyEnable' 1 'DWord'
   SetV $IS 'ProxyServer' '127.0.0.1:8082' 'String'; SetV $IS 'ProxyOverride' '<local>' 'String'
+  Update-UpdaterRegistration -Add
   Start-Relay
   # Serviceability probe: a relay that exists but is not accepting would fail the pass 0x80072EFD. Stop and respawn ONLY the relay
   # this pass started, by its handle; the port is re-read before the respawn, because a listener that appeared meanwhile is not
@@ -944,15 +959,18 @@ function Sync-Revocation {
 # pass left open still serves nobody but the update. Do not remove this because the other exists.
 # ---- WU-RELAY-TEARDOWN-BEGIN   (region markers)
 function Remove-Proxy {
-  & netsh winhttp reset proxy | Out-Null
-  SetV $IS 'ProxyEnable' 0 'DWord'
-  Remove-ItemProperty -Path $IS -Name 'ProxyServer' -EA SilentlyContinue
+  # THE CONFIGURATION STAYS (ADR-updater §18, owner 2026-11-18). Windows Update takes its proxy from the per-machine policy
+  # present at sign-in (§12.5 row 1), so a proxy written mid-pass and reset at its end was never there for the lookup - and
+  # resetting ProxyEnable/ProxyServer while the policy stayed left every template pointing at NO proxy at the next sign-in.
+  # Other processes are kept out by the relay's process gate, not by time; a qube made from this root clears it at boot
+  # (ensure-autologon.ps1 part 7).
   # ONLY THE RELAY THIS PASS STARTED, by its handle (ADR-updater 12.4). Until 2026-10-03 this line killed every process NAMED
   # qubes-updates-relay - measured that day: a relay another process had started, TerminateProcess'ed mid-transfer with no log
   # line and no crash record. A relay this pass did not start is not its to stop; that relay's own --parent-pid watchdog ends it
   # when ITS pass is gone.
   Stop-OwnRelay   # GUARD:relayownstop
-  Log 'proxy removed (offline baseline restored)'
+  Update-UpdaterRegistration -Remove
+  Log 'relay stopped; the proxy configuration stays (ADR-updater 18)'
 }
 # ---- WU-RELAY-TEARDOWN-END
 
