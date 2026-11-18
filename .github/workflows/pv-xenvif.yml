@@ -92,10 +92,19 @@ jobs:
         timeout-minutes: 15
         shell: pwsh
         run: |
-          choco install windowsdriverkit11 --no-progress -y
+          # WDK 10.0.22000.1 STRAIGHT FROM MICROSOFT - the URL, switches and file the choco package windowsdriverkit11
+          # wraps (its tools/common.ps1, SHA1 3c9e76a6... = this SHA256) - not through community.chocolatey.org, whose
+          # package lookup answered 504 Gateway Timeout and failed release-package twice on 2026-11-18 (44267896659,
+          # 44299880677) before anything was downloaded. A hash mismatch or a non-zero exit fails the step at once.
+          $wdk = Join-Path $env:RUNNER_TEMP 'wdksetup.exe'
+          Invoke-WebRequest -UseBasicParsing 'https://download.microsoft.com/download/7/d/6/7d602355-8ae9-414c-ae36-109ece2aade6/wdk/wdksetup.exe' -OutFile $wdk
+          $wdkHash = (Get-FileHash $wdk -Algorithm SHA256).Hash
+          if ($wdkHash -ne '6538402F1D71836D5B9C2B9A705A2599F2FC2D03A9616B33BCA3D9D9768CA374') { throw "wdksetup.exe SHA256 $wdkHash is not the pinned one" }
+          $wdkRun = Start-Process $wdk -ArgumentList '/features', '+', '/q', '/norestart' -Wait -PassThru
+          if ($wdkRun.ExitCode -ne 0) { throw "wdksetup.exe exited $($wdkRun.ExitCode)" }
           $vsix = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\Vsix" -Recurse -Filter '*.vsix' |
                   Select-Object -First 1
-          if (-not $vsix) { throw "WDK.vsix not found after choco install" }
+          if (-not $vsix) { throw "WDK.vsix not found after the WDK install" }
           $inst = Get-ChildItem "${env:ProgramFiles}\Microsoft Visual Studio" -Recurse -Filter VSIXInstaller.exe |
                   Select-Object -First 1
           # VSIXInstaller can HANG on the hosted runner (2026-10-03/04: release-package runs 37147382401 and 37179019542 sat in it, the

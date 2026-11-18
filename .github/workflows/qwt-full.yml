@@ -607,16 +607,25 @@ jobs:
           # that target never fired, masking exactly the failure it exists to make visible. With
           # nothing pre-generated, a project whose import is missing fails with RC1015 on
           # qwt_version.h - that is the load-bearing fixture for the imports.
-          # WDK, for relocate-dir. Same recipe as build.yml (choco windowsdriverkit11 + the VSIX
+          # WDK, for relocate-dir. Same recipe as build.yml (wdksetup.exe from Microsoft + the VSIX
           # into VS2022) - relocate-dir.vcxproj builds with PlatformToolset
           # WindowsApplicationForDrivers10.0 and links ntdllp.lib, both of which arrive with that
           # integration. Without it MSBuild fails on an unknown toolset, which is why this project
-          # was excluded rather than fixed. Idempotent: choco is a no-op if already present.
+          # was excluded rather than fixed. Idempotent: skipped when the kit is already present.
           if (-not (Test-Path "${env:ProgramFiles(x86)}\Windows Kits\10\Include\*\km\ntifs.h")) {
-            choco install windowsdriverkit11 --no-progress -y
+            # WDK 10.0.22000.1 STRAIGHT FROM MICROSOFT - the URL, switches and file the choco package windowsdriverkit11
+            # wraps (its tools/common.ps1, SHA1 3c9e76a6... = this SHA256) - not through community.chocolatey.org, whose
+            # package lookup answered 504 Gateway Timeout and failed release-package twice on 2026-11-18 (44267896659,
+            # 44299880677) before anything was downloaded. A hash mismatch or a non-zero exit fails the step at once.
+            $wdk = Join-Path $env:RUNNER_TEMP 'wdksetup.exe'
+            Invoke-WebRequest -UseBasicParsing 'https://download.microsoft.com/download/7/d/6/7d602355-8ae9-414c-ae36-109ece2aade6/wdk/wdksetup.exe' -OutFile $wdk
+            $wdkHash = (Get-FileHash $wdk -Algorithm SHA256).Hash
+            if ($wdkHash -ne '6538402F1D71836D5B9C2B9A705A2599F2FC2D03A9616B33BCA3D9D9768CA374') { throw "wdksetup.exe SHA256 $wdkHash is not the pinned one" }
+            $wdkRun = Start-Process $wdk -ArgumentList '/features', '+', '/q', '/norestart' -Wait -PassThru
+            if ($wdkRun.ExitCode -ne 0) { throw "wdksetup.exe exited $($wdkRun.ExitCode)" }
             $vsix = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\Vsix" -Recurse -Filter '*.vsix' -ErrorAction SilentlyContinue |
                     Select-Object -First 1
-            if (-not $vsix) { throw "WDK.vsix not found after choco install" }
+            if (-not $vsix) { throw "WDK.vsix not found after the WDK install" }
             $inst = Get-ChildItem "${env:ProgramFiles}\Microsoft Visual Studio" -Recurse -Filter VSIXInstaller.exe |
                     Select-Object -First 1
             # VSIXInstaller can HANG on the hosted runner (2026-10-03/04: release-package runs 37147382401 and 37179019542 sat in it, the
