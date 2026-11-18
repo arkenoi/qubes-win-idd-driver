@@ -90,9 +90,20 @@ tools/qcon open <vm>; tools/qcon run <vm> '<cmd>'; tools/qcon close <vm> --logou
 ```
 
 `diag` collects identity, boot time and sessions, memory, the Qubes/Xen services, the top CPU
-processes, the thread wait states of qrexec-agent / gui-agent / qubesdb-daemon, the Qubes log tails,
-the last 30 System events and the Application errors. It never stops, kills, restarts or
-reconfigures the guest, and it detaches when done, success or not.
+processes, the thread wait states of qrexec-agent / gui-agent / qubesdb-daemon, the FULL process
+tree (`process-tree.txt`: parent before child, pid, session, threads, handles, working set, CPU,
+UTC start, command line), and the LOGS WHOLE: every System and Application event of this boot (in
+the sweep collector's `EV` line format, guest-local time - `identity` records the zone - numeric
+level, so `tools/log-sweep.py` reads it) and every QWT log file written this boot, one host file per
+guest log under `qwt-logs/`. ~16 KB/s over the console: a healthy win11 boot (11 QWT files, 200 KB,
+~130 events, 139 processes) takes ~60 s. It never stops, kills, restarts or reconfigures the
+guest, and it detaches when done, success or not. `QCON_BUDGET` bounds a whole pass; an alarm mid-
+pass still detaches cleanly (measured: the next diag answered 10/10).
+
+**The settle path runs it for you.** `wedge_collect` (`mgmt/harness/wedge-gates-lib.sh`, called by
+`tools/release-acceptance.sh` before any kill) runs one `qcon diag` into `<record>/console-diag/`,
+bounded by `WG_CONSOLE_BUDGET` (900 s), whatever qrexec answered; its rc is in `console-diag-rc` and
+changes no class.
 
 **Measured 2026-11-18 on a HEALTHY guest (win11-con, 4.3.45.1366) - the first healthy control ever
 run. Every console-based guest verdict before that date is VOID.**

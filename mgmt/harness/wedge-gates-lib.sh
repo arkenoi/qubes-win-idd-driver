@@ -831,6 +831,19 @@ wedge_collect(){
     printf 'ANSWERED\n' > "$d/qrexec"; date +%s > "$d/c4"
   else printf 'SILENT\n' > "$d/qrexec"; fi
 
+  # O3b THE GUEST'S OWN LOGS, OVER THE PV CONSOLE, BEFORE ANYTHING CAN KILL IT. Owner 2026-11-18:
+  # «write a usable skill that does usable diagnostics, not ... now i kill the guest and destroy all
+  # live evidence inside», and «what we are interested in is also logs: eventlog and qwt logs». The
+  # console shares nothing with qrexec, so it is asked whatever O3 said: `qcon diag` takes this
+  # boot's whole System/Application event logs, every QWT log written this boot, the process tree,
+  # services and agent thread states into $d/console-diag. Read-only; it detaches when done.
+  # ADVISORY: its rc is recorded and changes no class. A silent console is INCONCLUSIVE (the qcon
+  # header names four causes) and is never written up as a dead guest. Bounded by QCON_BUDGET, not
+  # `timeout`, so its own cleanup always runs.
+  QCON_BUDGET="${WG_CONSOLE_BUDGET:-900}" ./tools/qcon diag "$vm" --out "$d/console-diag" \
+      > "$d/console-diag.log" 2>&1
+  printf '%s\n' "$?" > "$d/console-diag-rc"
+
   # O4 the framebuffer, which dom0 draws whether or not the guest's agent lives
   if declare -F w_screen >/dev/null 2>&1 || . mgmt/harness/e2e-wait.sh 2>/dev/null; then
     w_screen "$vm" "wedge" "$d" > "$d/screen" 2>/dev/null || printf '\n' > "$d/screen"

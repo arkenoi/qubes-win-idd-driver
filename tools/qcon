@@ -97,6 +97,7 @@ within the budget (session left open) / 6 BUSY (another attacher) / 7 REFUSED by
 8 no session open / 9 a session already exists (open refused).
 """
 import codecs
+import csv
 import json
 import os
 import select
@@ -594,10 +595,12 @@ def archive_and_remove(vm, sdir, op):
     shutil.rmtree(sdir, ignore_errors=True)
 
 
-def request(sdir, obj, on_out=None):
+def request(sdir, obj, on_out=None, timeout=None):
     """One request to the session daemon; streams {"out":..} lines to on_out, returns the final
-    {"done":true,...} object, or None if the daemon went away."""
+    {"done":true,...} object, or None if the daemon went away. `timeout` bounds each socket wait
+    (socket.timeout is an OSError)."""
     s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    s.settimeout(timeout)
     s.connect(os.path.join(sdir, "sock"))
     s.sendall(json.dumps(obj).encode() + b"\n")
     f = s.makefile("rb")
@@ -1115,7 +1118,10 @@ def cmd_close(vm, logout=False):
     except Exception:
         pid = None
     try:
-        r = request(sdir, {"op": "close", "logout": logout})
+        # BOUNDED: the daemon serves one request at a time, so a close sent while it is still
+        # streaming a cut-off dump (diag's alarm) would wait for that run's whole deadline. Past
+        # 60 s the SIGTERM below ends it, and the daemon's finally detaches.
+        r = request(sdir, {"op": "close", "logout": logout}, timeout=60)
         say(op, f"rc={r.get('rc') if r else '?'}: {r.get('msg') if r else 'daemon went away'}")
     except OSError as e:
         say(op, f"daemon unreachable ({e}); terminating it")
@@ -1148,11 +1154,23 @@ def cmd_oneshot(vm, cmd, deadline, stall, user, pw):
             cmd_close(vm)
 
 
-# Read-only, in the order a stalled guest is worth reading. Each line is short (the input budget);
-# none uses `%` (the run wrapper's %QT% shares the cmd.exe line). Output volume is unlimited -
-# only INPUT locks the console.
+# Read-only. Each line is short (the input budget); none uses `%` (the run wrapper's %QT% shares
+# the cmd.exe line). OUTPUT volume is unlimited - only INPUT locks the console - so the logs come
+# WHOLE: every event of this boot and every QWT log file written this boot, never a tail (owner
+# 2026-11-18: «what we are interested in is also logs: eventlog and qwt logs»). An entry may carry
+# its own (deadline, stall). Event lines are the sweep collector's EV format EXACTLY
+# (mgmt/harness/log-sweep-collect.ps1 header: `EV yyyy-MM-dd HH:mm:ss.fff [Log] id=N level=N
+# Provider: msg`, guest-local time, numeric level), so tools/log-sweep.py and logvol_salvage read a
+# console dump like a pulled one; `identity` records the guest's zone for the host-side join.
+_EVT = ('powershell -nop -c "$b=(Get-CimInstance Win32_OperatingSystem).LastBootUpTime;'
+        "Get-WinEvent -FilterHashtable @{{LogName='{log}';StartTime=$b}} -Oldest -EA 0|"
+        "ForEach-Object{{$m=$_.Message;if(-not $m){{$m=($_.Properties|ForEach-Object{{$_.Value}})"
+        " -join ' | '}};'EV '+$_.TimeCreated.ToString('yyyy-MM-dd HH:mm:ss.fff')+' [{log}] id='+"
+        "$_.Id+' level='+$_.Level+' '+$_.ProviderName+': '+"
+        "(($m -split '[\\r\\n]+'|?{{$_.Trim()}}) -join ' / ')}}\"")
+QWT_FILE_MARK = "===== QCON-FILE "
 DIAG = [
-    ("identity", "hostname & whoami & ver & echo %DATE% %TIME%"),
+    ("identity", "hostname & whoami & ver & echo %DATE% %TIME% & tzutil /g"),
     ("boot-sessions", 'powershell -nop -c "(Get-CimInstance Win32_OperatingSystem).LastBootUpTime;'
                       ' query user"'),
     ("memory", 'powershell -nop -c "Get-CimInstance Win32_OperatingSystem|'
@@ -1165,12 +1183,20 @@ DIAG = [
     ("agent-threads", 'powershell -nop -c "foreach($n in \'qrexec-agent\',\'gui-agent\','
                       '\'qubesdb-daemon\'){$p=Get-Process $n -ea 0;\'== \'+$n+\' \'+$p.Id;'
                       'if($p){$p.Threads|group ThreadState,WaitReason|ft -a Count,Name}}"'),
-    ("qubes-log-tails", 'powershell -nop -c "$d=(gp \'HKLM:\\SOFTWARE\\Invisible Things Lab\\Qubes'
-                        ' Tools\').LogDir;gci $d -File|sort LastWriteTime -desc|select -f 8|'
-                        'ForEach-Object{\'== \'+$_.FullName;gc $_.FullName -Tail 12}"'),
-    ("system-events", "wevtutil qe System /c:30 /rd:true /f:text"),
-    ("app-errors", 'wevtutil qe Application /c:15 /rd:true /f:text /q:"*[System[(Level=1 or '
-                   'Level=2)]]"'),
+    # EVERY process, as CSV: the tree (who spawned what, and with which command line) is rendered on
+    # the host into process-tree.txt; the guest only enumerates.
+    ("process-tree", 'powershell -nop -c "Get-CimInstance Win32_Process|select ProcessId,'
+                     "ParentProcessId,SessionId,@{n='CreationDate';e={$_.CreationDate.ToUniversalTime()"
+                     ".ToString('yyyy-MM-ddTHH:mm:ssZ')}},ThreadCount,HandleCount,WorkingSetSize,"
+                     'KernelModeTime,UserModeTime,Name,CommandLine|ConvertTo-Csv -NoTypeInformation"',
+     120, 30),
+    ("system-log", _EVT.format(log="System"), 600, 60),
+    ("application-log", _EVT.format(log="Application"), 600, 60),
+    ("qwt-logs", 'powershell -nop -c "$b=(Get-CimInstance Win32_OperatingSystem).LastBootUpTime;'
+                 "$d=(gp 'HKLM:\\SOFTWARE\\Invisible Things Lab\\Qubes Tools').LogDir;'LogDir '+$d;"
+                 "gci $d -File -Recurse|?{$_.LastWriteTime -ge $b}|sort LastWriteTime|"
+                 f"ForEach-Object{{'{QWT_FILE_MARK}'+$_.FullName+' '+$_.Length;"
+                 'gc -LiteralPath $_.FullName}"', 1800, 60),
 ]
 
 
@@ -1180,6 +1206,11 @@ def cmd_diag(vm, user, pw, out, deadline, stall):
     opened. It never stops, kills, restarts or reconfigures the guest: whatever it finds is still
     there for the next instrument."""
     op = "diag"
+    # THE CLIENT'S OWN ALARM (QCON_BUDGET, 600 s) would cut a whole-log pass; the pass is bounded by
+    # its items' deadlines instead, plus the open/login and the close.
+    # A caller that must bound the pass (a settle loop) sets QCON_BUDGET explicitly; it then wins.
+    signal.alarm(int(float(os.environ["QCON_BUDGET"])) if os.environ.get("QCON_BUDGET") else
+                 int(sum(it[2] if len(it) > 2 else deadline for it in DIAG) + 300))
     out = out or os.path.join(os.path.expanduser("~"), "qcon-diag",
                               f"{vm}-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}")
     os.makedirs(out, exist_ok=True)
@@ -1198,13 +1229,15 @@ def cmd_diag(vm, user, pw, out, deadline, stall):
         opened = True
     results = []
     try:
-        for n, (label, cmd) in enumerate(DIAG, 1):
+        for n, item in enumerate(DIAG, 1):
+            label, cmd = item[0], item[1]
+            dl, sl = (item[2], item[3]) if len(item) > 3 else (deadline, stall)
             path = os.path.join(out, f"{n:02d}-{label}.txt")
             t0 = time.time()
             with open(path, "w") as f:
                 try:
-                    r = request(state_dir(vm), {"op": "run", "cmd": cmd, "deadline": deadline,
-                                                "stall": stall},
+                    r = request(state_dir(vm), {"op": "run", "cmd": cmd, "deadline": dl,
+                                                "stall": sl},
                                 on_out=lambda t, f=f: f.write(t))
                 except OSError as e:
                     r = {"rc": RC_NO_SESSION, "msg": f"session daemon unreachable: {e}"}
@@ -1213,6 +1246,54 @@ def cmd_diag(vm, user, pw, out, deadline, stall):
             results.append(f"{label:16s} rc={rc} {time.time() - t0:5.1f}s {os.path.getsize(path):7d}B"
                            + ("" if rc == RC_OK else f"  {r.get('msg')}"))
             say(op, results[-1])
+            if label == "process-tree":
+                # Parent before child, indented by depth; a pid whose parent is gone (or reused, so
+                # the "parent" started later) is a root. Raw CSV stays beside it.
+                with open(path, errors="replace") as src:
+                    lines = src.read().splitlines()
+                hdr = next((i for i, x in enumerate(lines) if x.startswith('"ProcessId"')), None)
+                rows = list(csv.DictReader(lines[hdr:])) if hdr is not None else []
+                byp = {x["ProcessId"]: x for x in rows}
+                kids = {}
+                for x in rows:
+                    par = byp.get(x["ParentProcessId"])
+                    if par is None or par is x or (par["CreationDate"] or "") > (x["CreationDate"] or ""):
+                        kids.setdefault(None, []).append(x)
+                    else:
+                        kids.setdefault(x["ParentProcessId"], []).append(x)
+                tree, seen, stack = [], set(), [(x, 0) for x in reversed(kids.get(None, []))]
+                while stack:
+                    x, depth = stack.pop()
+                    if x["ProcessId"] in seen:
+                        continue
+                    seen.add(x["ProcessId"])
+                    cpu = (int(x["KernelModeTime"] or 0) + int(x["UserModeTime"] or 0)) / 1e7
+                    tree.append(f"{x['ProcessId']:>6} s{x['SessionId']:<2} thr={x['ThreadCount']:<4}"
+                                f" h={x['HandleCount']:<6} ws={int(x['WorkingSetSize'] or 0) >> 20:>5}M"
+                                f" cpu={cpu:8.1f}s {x['CreationDate']:<22} {'  ' * depth}"
+                                f"{x['Name']}  {x['CommandLine'] or ''}")
+                    stack.extend((k, depth + 1) for k in reversed(kids.get(x["ProcessId"], [])))
+                with open(os.path.join(out, "process-tree.txt"), "w") as f:
+                    f.write("\n".join(tree) + "\n")
+                say(op, f"  process-tree: {len(tree)} of {len(rows)} process(es) -> {out}/process-tree.txt")
+            if label == "qwt-logs":
+                # One host file per guest log, named as the guest names it, so a reader or the sweep
+                # tools take them like any pulled LogDir. A file cut by a deadline is kept, cut.
+                cur, nfiles = None, 0
+                os.makedirs(os.path.join(out, "qwt-logs"), exist_ok=True)
+                with open(path, errors="replace") as src:
+                    for line in src:
+                        if line.startswith(QWT_FILE_MARK):
+                            if cur:
+                                cur.close()
+                            name = line[len(QWT_FILE_MARK):].rsplit(" ", 1)[0].replace("\\", "/")
+                            cur = open(os.path.join(out, "qwt-logs", os.path.basename(name)), "w")
+                            nfiles += 1
+                        elif cur:
+                            cur.write(line)
+                if cur:
+                    cur.close()
+                say(op, f"  qwt-logs: {nfiles} guest log file(s) -> {out}/qwt-logs/")
             if rc in (RC_NOCONSOLE, RC_NO_SESSION):
                 break                          # nothing attached any more; keep what we have
     finally:
