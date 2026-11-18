@@ -643,9 +643,18 @@ if [ "$SKIP_FEATURES" -eq 0 ]; then
           ./mgmt/harness/notify-errors-guest-test.sh >>"$WORK/$t.out" 2>&1
         rc=$? ;;
       crop-before-map)
-        # Rides the guest the notify test just left installed with the release.
-        VM=win11-nfy LOG="$WORK/$t.log" ./mgmt/harness/crop-before-map.sh >>"$WORK/$t.out" 2>&1
-        rc=$? ;;
+        # Rides the guest the notify test just left installed with the release - ONLY while it is Running.
+        # Build-4.3.45.1357 a3: notify-errors left win11-nfy Transient (hung at its reboot-2 shutdown) and
+        # this suite then asked that guest for its LogLevel 1 s later, an instrument-fail that named the
+        # wrong cause; and a qrexec call to a guest that cannot answer queues in dom0.
+        _nst=$(qvm-ls --raw-data --fields state win11-nfy 2>/dev/null)   # e2e-wait.sh w_state's form: this one qube only
+        if [ "$_nst" = Running ]; then
+          VM=win11-nfy LOG="$WORK/$t.log" ./mgmt/harness/crop-before-map.sh >>"$WORK/$t.out" 2>&1
+          rc=$?
+        else
+          echo "[$(date +%H:%M:%S)] FAIL  its subject win11-nfy is '${_nst:-absent}' after notify-errors-guest-test, not Running - nothing was asked of it" >>"$WORK/$t.out"
+          rc=2
+        fi ;;
       updater-component)
         # THE UPDATER'S QUICK GATES, over GWeck's sealed German 25H2 TemplateVM. Minutes, guest-side,
         # no dom0 photography. It asserts what template-update never did - that the relay was BUILT,
