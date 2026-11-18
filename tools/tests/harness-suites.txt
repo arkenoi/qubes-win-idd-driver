@@ -53,7 +53,6 @@ matrix-runmarker-selftest.sh
 matrix-verifyinstalled-grade-selftest.sh
 offline-rigshim-selftest.sh
 offline-runner-selftest.sh
-qcon-session-selftest.sh
 qrexec-gap-witness-selftest.sh
 qtest-halted-guard-selftest.sh
 qtest-push-selftest.sh

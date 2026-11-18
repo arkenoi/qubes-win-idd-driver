@@ -37,7 +37,6 @@ procown-sites-selftest.sh            STRAY FAILURE FIXED 2026-10-26, pwsh STILL 
 ps-runtime-shapes-selftest.sh        Needs PowerShell: measured 2026-10-25 with PWSH redirected (its own fallback path still reachable) - SELFTEST-ERROR: no pwsh, so neither check could be driven - this is not a pass. A GitHub runner installs none.
 pvnic-rearm-selftest.sh              Needs PowerShell: measured 2026-10-25 with PWSH redirected (its own fallback path still reachable) - FAIL no pwsh at /nonexistent/pwsh - the decision cannot be exercised, so nothin. A GitHub runner installs none.
 pvnic-xbm-verify-selftest.sh         Needs PowerShell: measured 2026-10-25 with PWSH redirected (its own fallback path still reachable) - FATAL: no pwsh. A GitHub runner installs none.
-qcon-fake-console.py                 Helper, not a check: it impersonates a PV console for other suites to drive.
 relay-close-selftest.sh              Needs PowerShell: measured 2026-10-25 with PWSH redirected (its own fallback path still reachable) - FAIL pwsh not found at /nonexistent/pwsh - nothing ran. A GitHub runner installs none.
 relay-svcmap-selftest.sh             Needs PowerShell: measured 2026-10-25 with PWSH redirected (its own fallback path still reachable) - FAIL pwsh not found at /nonexistent/pwsh - nothing ran. A GitHub runner installs none.
 restart-gui-agent-selftest.sh        Prints "SKIP: no pwsh" and EXITS 0, so in CI it would pass on nothing - measured 2026-10-25 under a pwsh-free namespace, where it came back UNKNOWN-FORMAT. Needs a real no-pwsh verdict before it can be gated.

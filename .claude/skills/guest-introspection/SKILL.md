@@ -1,6 +1,6 @@
 ---
 name: guest-introspection
-description: Determine what a Windows test guest is ACTUALLY doing mid-flight - processes, phase, progress rate - instead of inferring it from silence. Use whenever a long guest operation (DISM/CBS servicing, a large download, a feature update, a benchmark) is running and you are tempted to say "it is probably still working" or "it seems stuck". ALSO the binding procedure for the PV console (tools/qcon): read it BEFORE attaching, closing or re-attaching a guest console, and before reading anything into a console transcript.
+description: Determine what a Windows test guest is ACTUALLY doing mid-flight - processes, phase, progress rate - instead of inferring it from silence; and READ a guest whose qrexec is dead over the PV console (tools/qcon diag) before anything kills it. Use whenever a long guest operation (DISM/CBS servicing, a large download, a feature update, a benchmark) is running and you are tempted to say "it is probably still working" or "it seems stuck". ALSO the binding procedure for the PV console (tools/qcon): read it BEFORE attaching, closing or re-attaching a guest console, and before reading anything into a console transcript.
 ---
 
 # Introspect the guest, do not guess
@@ -77,39 +77,53 @@ Phase names worth recognising in the CBS tail:
 6. **Big logs: analyse in-guest.** Streaming CBS.log out over qrexec
    costs more than the analysis; run the aggregation in the guest and return a digest.
 
-## The PV console: one attach, and you do not get it back
+## The PV console: the evidence path when qrexec is dead
 
-`tools/qcon` is the out-of-band channel for "guest alive, qrexec dead".
+`tools/qcon` drives the guest's Xen PV console (xencons -> xencons_tty -> cmd.exe), which shares
+nothing with qrexec. **Use it to READ a stalled guest before anything kills it.** On a guest that
+stopped answering qrexec: host-side first (cputime series, `local.WinWedgeForensics`, the log volume
+with mtools), then `tools/qcon diag <vm>`, then decide. Never kill first.
 
-**There are TWO console transports and qcon only speaks one of them.**
+```bash
+tools/qcon diag <vm>     # read-only pass -> ~/qcon-diag/<vm>-<UTC>/NN-<label>.txt + summary.txt
+tools/qcon open <vm>; tools/qcon run <vm> '<cmd>'; tools/qcon close <vm> --logout   # ad hoc
+```
 
-| transport | reaches | available to this qube |
-|---|---|---|
-| `admin.vm.Console` (what `qcon` uses) | libvirt's `<console>` tty, verbatim (`/domain/devices/console/@tty`) | yes |
-| `xl console -t pv` / `qvm-console` | the guest's own Xen PV console ring, the one `xencons_tty` terminates | **no - dom0 only** |
+`diag` collects identity, boot time and sessions, memory, the Qubes/Xen services, the top CPU
+processes, the thread wait states of qrexec-agent / gui-agent / qubesdb-daemon, the Qubes log tails,
+the last 30 System events and the Application errors. It never stops, kills, restarts or
+reconfigures the guest, and it detaches when done, success or not.
 
-`dom0/11-wedge-forensics.sh:204` and README "Known limitations" both say this. They are not the
-same pty. If the one you can reach is the wrong one, no amount of retrying fixes it.
+**Measured 2026-11-18 on a HEALTHY guest (win11-con, 4.3.45.1366) - the first healthy control ever
+run. Every console-based guest verdict before that date is VOID.**
 
-**Banner + one login prompt + silence is NOT a health signal, in either direction.**
-A fresh attach is blank until you send a CR (a pty has no scrollback), so the prompt is just the
-wake answer.
+- `admin.vm.Console` DOES reach the guest's PV ring (xencons_tty's prompt, guest-written lines). The
+  old "two transports, not the same pty" claim here was wrong.
+- **The first attach after a boot shows `[ATTACHED]` + `<HOST> login:` with no input.** That is the
+  GUEST's backlog, not dom0: xencons_monitor writes `[ATTACHED]` when it opens the device at boot
+  (`[DETACHED]` when it stops), and xenconsoled holds the pty slave open without reading it, so
+  output waits for the next attach. Later attaches are silent until they send. Silence before input
+  is not a fact about the guest.
+- **Detach and reattach are healthy.** Six back-to-back open/run/close cycles all answered; the
+  logged-in shell survives a detach. (`close` used to kill the client before dom0's socat released
+  the console lock, so an open in the same second was refused - qcon now waits for the release.)
+- **THE ONE WAY TO LOCK IT OUT: ~1.2 KB of input in one login.** Upstream xencons_monitor copies every
+  input byte to both of the tty's pipe connections inside its lock, and the write-only one is never
+  read; when its buffer fills, the monitor blocks forever - no echo, no prompt, on any attach. Only
+  restarting `xencons_monitor` (over qrexec) recovers it. `exit` starts a fresh tty with fresh
+  connections. qcon counts input per login and re-logs in before INPUT_BUDGET (700), and refuses a
+  single command larger than that. 40 commands (~3.2 KB) through one session: 40/40. **Never type
+  into a console by hand** (`qvm-console`, `xl console`, raw `admin.vm.Console`) on a guest that
+  matters: one long paste locks it out.
+- **Credentials:** qcon defaults to the rig account (`user`/`qubes`). A guest built otherwise (GWeck's
+  German golden) needs `QCON_USER`/`QCON_PASS`. A wrong password is answered with a fresh `login:`.
+- **A silent console is INCONCLUSIVE.** No answer to a CR means one of: the input lockout above,
+  another attacher splitting the pty (dom0 `xl console`), xencons not bound, or a guest wedged at
+  high IRQL. Do not write any of them up from the silence alone. A wedge bundle's `console-pv.txt`
+  reading `Unable to attach console` is the dom0 kit's own failure, not a guest fact.
 
-Never write "the guest wrote it live, so it is not dead" from a prompt, and never write "the
-console is dead" from the silence after it. Neither claim is carried by those bytes.
-
-**Do not use an old transcript as the baseline.** A healthy guest shows ONE login prompt; an older
-transcript may show two, and comparing against that shape inverts the conclusion.
-
-**`close` does not recover a console - it spends it.** After a close, the next attach returns zero
-bytes - not even dom0's `[ATTACHED]` - with `rc` 2, not 200/126 (dom0 grants the flock). Closing
-makes the channel strictly worse and there is no way back from this qube.
-
-**When the attach is silent, the remaining moves are all dom0** (`sudo xl console -t pv <vm>`,
-`qvm-console <vm>`, or reading `/var/log/xen/console/guest-<vm>.log`, the retroactive transcript
-xenconsoled writes with no guest cooperation). Those are owner escalations, not something to retry
-around. A wedge bundle's `console-pv.txt` reading `Unable to attach console` is an **instrument
-failure, not a guest fact** - do not quote it as evidence the console was dead.
+Not yet measured: the "Run Elevated [yes|no]:" prompt (an admin under UAC; the rig account got a
+shell without it), and the console on a guest that is actually stalled.
 
 ## Related
 

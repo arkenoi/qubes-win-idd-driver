@@ -17,9 +17,9 @@ ten times (specimen 10: seven attaches in thirty minutes, the first a raw probe)
 time you claim you see a console, and then say 'it is not answering username anymore' something in
 your console access procedure is deeply broken, either it is unidirectional or locking or there is
 something else that goes wrong." The per-attach design is the named defect; this file removes it.
-Whether the second attach dies from a stale lock, a pty split or something else is UNTESTED - what
-is measured is only that later attaches returned nothing, and the fake in the self-test models
-exactly that observable and nothing more.
+ANSWERED 2026-11-18 (below): a second attach is silent until it sends, because the first one drained
+the guest's boot backlog - and every guest verdict built on that silence, the ten included, is VOID.
+The real lockout is input volume, not attaches.
 
 WHY THIS EXISTS (unchanged). Every other way this qube reaches a guest goes through the guest's own
 qrexec agent (tools/qtest run/ps/push/pushrun), so all of them die together in the failure class
@@ -37,8 +37,31 @@ WHAT STILL HAS TO BE ALIVE (this is NOT "works on any dead guest"):
 ONE ATTACHER AT A TIME. dom0's `xl console` and this tool open the same pty slave and split the
 byte stream, so a concurrent attach returns nothing. admin.vm.Console's dom0 script also takes
 `flock -n -E 200`, so a second attacher - including a stale lock left by a killed client - exits
-200 (reported as BUSY), and a qrexec policy refusal exits 126 (REFUSED). NOCONSOLE (no bytes, not
-even dom0's [ATTACHED] banner) is inconclusive and is never "the guest is dead".
+200 (reported as BUSY), and a qrexec policy refusal exits 126 (REFUSED).
+
+WHAT AN ATTACH SHOWS - MEASURED 2026-11-18 ON A HEALTHY GUEST (win11-con, build 4.3.45.1366).
+This tool used to read "[ATTACHED]" as dom0's banner. It is not: the GUEST's xencons_monitor writes
+"[ATTACHED]" once when it opens the device at boot (monitor.c:949, upstream a815963) and
+"[DETACHED]" when it stops. xenconsoled keeps the pty slave open and never reads it, so whatever the
+guest writes while nobody is attached waits in the pty and is delivered to the NEXT attach. The
+first attach after a boot therefore gets "[ATTACHED]" + "<HOST> login: " with no input; every later
+attach gets nothing until it sends. Silence before input says nothing about the guest. Detaching
+does NOT spend the console: a later attach + CR reached the same logged-in shell every time.
+
+THE INPUT BUDGET - THE ONE WAY TO LOCK THE CONSOLE OUT, MEASURED THE SAME DAY. xencons_tty opens the
+monitor's pipe twice (read, write); the monitor copies every input byte to BOTH connections with a
+blocking write inside its lock, and the write-only one is never read. After ~1.2 KB of cumulative
+input in ONE tty lifetime that buffer is full and the monitor blocks forever: no echo, no prompt, on
+any attach, until `xencons_monitor` is restarted (which needs qrexec). `exit` ends the tty and the
+monitor starts a new one with new connections - 700 + 700 bytes across an exit stayed live. So every
+byte this tool sends is counted per login, and before a command would pass INPUT_BUDGET it types
+`exit` and logs in again. An attach that finds a shell of unknown spend re-logs in before its first
+command. A single command larger than the budget is refused: put the work in a script instead.
+
+CREDENTIALS. Default: the rig's guest account (mgmt/CLAUDE.md: `user`/`qubes`, set by our unattend).
+A guest built otherwise (GWeck's German golden) needs QCON_USER/QCON_PASS. A rejected password is
+answered with a fresh `login:` - it is never silence. NOCONSOLE is inconclusive and is never "the
+guest is dead".
 
 THE SIGNAL NET (77344ef, kept). Wrapping the old qcon in `timeout` sent SIGTERM to the python,
 which exited WITHOUT unwinding, so the qrexec-client-vm child was orphaned STILL ATTACHED and every
@@ -52,27 +75,26 @@ Usage:
     tools/qcon status <vm>                          # open? age, phase, last activity
     tools/qcon shell  <vm> [--user U --pass P]      # open if needed, then interactive passthrough
     tools/qcon close  <vm> [--logout]               # end the session (--logout types `exit` first)
+    tools/qcon diag   <vm> [--out DIR]              # read-only evidence pass over the console:
+                                                    # open, fixed diagnostics, logout, detach.
+                                                    # Never stops, kills or restarts anything.
     tools/qcon <vm> '<command>'                     # convenience: open + run + close, ONE attach;
                                                     # refused while a session for <vm> exists
 Environment:
-    QCON_USER / QCON_PASS       credentials when --user/--pass are not given
+    QCON_USER / QCON_PASS       credentials (default: the rig account user / qubes)
+    QCON_INPUT_BUDGET (700)     input bytes per login before `exit` + re-login (lockout ~1200)
     QCON_DEADLINE (45) / QCON_STALL (12)   per-command budget: total seconds / silent seconds
     QCON_LOGIN_DEADLINE (45)    a Windows login takes seconds; be generous
     QCON_QUIET (1.5)            silence that counts as "the previous exchange is over"
     QCON_BUDGET (600)           wall clock for ONE client invocation (never wrap qcon in `timeout`)
     QCON_STATE_ROOT ($HOME/tmp) session state lives in <root>/qcon-<vm>/ ; every attach and detach
                                 is appended to <root>/qcon-attach-ledger.log with a timestamp
-    QCON_TRANSPORT (qrexec)     `fake:<unix socket>` replaces ONLY the attach primitive (self-test)
-    QCON_DEFECT                 `perattach` re-introduces the OLD attach-per-command behaviour so
-                                the self-test can be seen to FAIL on it. Never set it for real.
 State dir (<root>/qcon-<vm>/): pid, sock, state.json, attach.log, session.log (raw transcript),
 daemon.log. `close` moves session.log to <root>/qcon-<vm>.closed.log and removes the dir.
 
 Exit codes: 0 ok / 1 usage / 2 NOCONSOLE / 3 NEEDS_LOGIN / 4 guest not running / 5 no output
 within the budget (session left open) / 6 BUSY (another attacher) / 7 REFUSED by policy /
 8 no session open / 9 a session already exists (open refused).
-
-Self-test (offline, fake console): tools/tests/qcon-session-selftest.sh
 """
 import codecs
 import json
@@ -92,7 +114,8 @@ LOGIN_DEADLINE = float(os.environ.get("QCON_LOGIN_DEADLINE", "45"))
 BUDGET = float(os.environ.get("QCON_BUDGET", "600"))
 STATE_ROOT = os.environ.get("QCON_STATE_ROOT") or os.path.join(os.path.expanduser("~"), "tmp")
 TRANSPORT = os.environ.get("QCON_TRANSPORT", "qrexec")
-DEFECT = os.environ.get("QCON_DEFECT", "")
+INPUT_BUDGET = int(os.environ.get("QCON_INPUT_BUDGET", "700"))
+DEFAULT_USER, DEFAULT_PASS = "user", "qubes"
 
 RC_OK, RC_USAGE, RC_NOCONSOLE, RC_NEEDS_LOGIN, RC_NOT_RUNNING = 0, 1, 2, 3, 4
 RC_NO_OUTPUT, RC_BUSY, RC_REFUSED, RC_NO_SESSION, RC_SESSION_EXISTS = 5, 6, 7, 8, 9
@@ -123,8 +146,6 @@ def _install_signal_net(budget):
     # daemon's _install_signal_net(0) never cleared it - so every session died exactly QCON_BUDGET
     # seconds after `open` with reason='signal/exit 142'. Measured on the first live run,
     # 2026-09-17 (ATTACH 11:09:38Z -> DETACH 11:19:38Z, 600.0 s, guest healthy throughout).
-    if os.environ.get("QCON_DEFECT") == "alarm" and budget <= 0:   # GUARD:alarm (self-test knob)
-        return
     try:
         signal.alarm(int(budget) if budget > 0 else 0)
     except (ValueError, OSError):
@@ -159,6 +180,9 @@ class Console:
     def __init__(self, vm, transcript=None):
         self.vm, self.buf, self.eof = vm, b"", False
         self.rx_bytes, self.last_rx, self.transcript = 0, None, transcript
+        # Input bytes sent to the CURRENT tty. None = unknown (a shell found on attach, typed by
+        # someone before us) - treated as spent, so the first command re-logs in.
+        self.spent = None
         self.attached_at = time.time()
         if TRANSPORT.startswith("fake:"):
             self.p = None
@@ -177,6 +201,8 @@ class Console:
 
     def send(self, s):
         data = s.encode()
+        if self.spent is not None:
+            self.spent += len(data)
         try:
             while data:
                 n = os.write(self.wfd, data)
@@ -255,8 +281,15 @@ class Console:
         self.settle(quiet, deadline)
         self.buf = b""
 
-    def exit_code(self):
-        return self.p.poll() if self.p else None
+    def exit_code(self, wait=0.0):
+        """The attach's exit code; with `wait`, give an attach that has hit EOF that long to
+        report it - a BUSY (200) read before it arrived was misreported as NOCONSOLE."""
+        if not self.p:
+            return None
+        try:
+            return self.p.wait(timeout=wait) if wait else self.p.poll()
+        except subprocess.TimeoutExpired:
+            return None
 
     def stderr_text(self):
         if not self.p:
@@ -272,8 +305,19 @@ class Console:
             if self.sock:
                 self.sock.close()
             if self.p:
-                self.p.kill()
-                self.p.wait(timeout=5)
+                # END THE ATTACH, DO NOT KILL IT. dom0's socat holds the console flock until it
+                # sees our EOF and exits; killing the client returned before that, and an `open`
+                # in the same second got the lock still held (2026-11-18, ledger 14:59:12Z). The
+                # client exits only once dom0's side has, so waiting on it means the lock is free.
+                try:
+                    self.p.stdin.close()
+                except OSError:
+                    pass
+                try:
+                    self.p.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    self.p.kill()
+                    self.p.wait(timeout=5)
         except Exception:
             pass
 
@@ -297,13 +341,13 @@ def wake(c):
     rc != 0 - the caller decides by `phase` ('dead' means nothing is attached any more)."""
     c.send("\r")
     why = c.pump(until="\n", deadline=8, stall=6)
-    # The first newline is usually dom0's "[ATTACHED]" banner, which arrives BEFORE the guest
-    # answers the CR - classifying on it alone reads a healthy login prompt as "guest silent"
-    # (caught by the self-test on 2026-09-17). Let the answer finish arriving: settle on silence.
+    # The first attach after a boot also delivers the guest's boot backlog ("[ATTACHED]" from the
+    # guest's own monitor + a login prompt) ahead of the answer to this CR. Let it all arrive.
     if c.buf:
         c.settle(deadline=6)
     if not c.buf:
-        rc, err = c.exit_code(), c.stderr_text()
+        rc = c.exit_code(wait=5.0 if why == "eof" else 0.0)
+        err = c.stderr_text()
         if rc == 200:
             return RC_BUSY, "dead", ("BUSY - another attacher holds the console lock (dom0 `xl "
                                      "console`, or a stale lock from a killed client)")
@@ -312,15 +356,13 @@ def wake(c):
         if rc is not None or why == "eof":
             return RC_NOCONSOLE, "dead", (f"NOCONSOLE - the attach ENDED with no bytes at all "
                                           f"(child rc={rc} {err!r}); nothing is attached now")
-        # NOT EVEN [ATTACHED] IS A STRONGER RESULT THAN "quiet". dom0 prints "[ATTACHED]" as soon
-        # as it binds the domain's console, BEFORE the guest writes anything (measured 2026-09-09:
-        # healthy guest -> banner within seconds; parked wedge -> nothing, no other attacher).
+        # A healthy guest answers a CR at login: or at a shell within ~150 ms (measured 2026-11-18).
         return RC_NOCONSOLE, "silent", (
-            "NOCONSOLE - no bytes at all, not even dom0's [ATTACHED] banner, and the attach is "
-            "still up. This points at the ATTACH, not at guest software; INCONCLUSIVE alone. "
-            "The session is LEFT OPEN - a silent session is information; re-attaching is "
-            "forbidden. Check: 1. another attacher? (dom0 `xl console` splits the pty) "
-            "2. xencons bound in the guest? 3. guest wedged at high IRQL?")
+            "NOCONSOLE - the CR got no answer and the attach is still up. INCONCLUSIVE about the "
+            "guest: the same silence follows the xencons monitor's input lockout (~1.2 KB typed "
+            "in one login, by anyone), another attacher splitting the pty, xencons not bound, or "
+            "a guest wedged at high IRQL. Session LEFT OPEN; nothing here may be written up as "
+            "guest death.")
     phase = classify_tail(c.buf)
     if phase == "login":
         return RC_NEEDS_LOGIN, "login", "console is at the login prompt"
@@ -352,12 +394,13 @@ def login(c, user, pw, ld=None):
             break
         why = c.pump(until=">", deadline=left, stall=min(4.0, left))
         if why == "hit":
+            c.spent = len(user) + len(pw or "") + 2      # this login opened a new tty
             return RC_OK, "shell", "logged in - shell prompt seen"
         # A REJECTED credential is NOT silence. Measured 2026-09-17 on a healthy win11de-gwt: the
         # guest echoed the user name, printed "Password:", and answered the (wrong) password with a
         # FRESH login prompt - the old code waited the whole deadline and reported "no shell prompt
         # within 45 s", i.e. the same words a dead console gets. Only bytes AFTER the password count.
-        if os.environ.get("QCON_DEFECT") != "rejected" and b"login:" in c.buf[n0:]:   # GUARD:rejected
+        if b"login:" in c.buf[n0:]:
             return RC_NEEDS_LOGIN, "login", (
                 "credential REJECTED - the guest answered the password with a fresh login prompt "
                 "(the console is NOT silent); session LEFT OPEN at the login prompt: "
@@ -368,14 +411,49 @@ def login(c, user, pw, ld=None):
                                              f"password (pump exit: {why}) - session LEFT OPEN")
 
 
-def run_command(c, cmd, deadline, stall, out):
+def relogin(c, user, pw):
+    """`exit` the shell (the tty ends; the monitor starts a fresh one with fresh pipe connections,
+    so the input budget starts over), wait for its login prompt, log in. Returns (rc, phase, msg).
+    Costs ~16 input bytes on the OLD tty, which the budget's margin below the lockout covers."""
+    c.drain_quiet()
+    # Type for the prompt the console is AT. A session reused after the guest's monitor restarted
+    # sits at a fresh login:, where `exit` would be read as a user name (measured 2026-11-18).
+    where = classify_tail(c.buf)
+    if where == "login":
+        return login(c, user, pw)
+    step = "\r" if where == "password" else "exit\r"   # empty password -> rejected -> new login:
+    c.send(step)
+    if c.pump(until="login:", deadline=20, stall=15) != "hit":
+        return RC_NO_OUTPUT, "unknown", (f"{step!r} at a {where} prompt got no fresh login "
+                                         "prompt within 20 s - the input budget could not be "
+                                         "renewed; session LEFT OPEN")
+    c.drain_quiet(deadline=3)
+    return login(c, user, pw)
+
+
+def run_command(c, cmd, deadline, stall, out, renew=None):
     """Type ONE command through the open session and stream its output to `out(text)` until the
     end marker. Returns (rc, message). Never closes anything.
 
     The token is built IN THE GUEST (`set QT=`), so the echoed input line can never contain the
     literal marker; the buffer is synced on the token's own echo, which cannot be left over from
-    a previous exchange."""
+    a previous exchange.
+
+    INPUT BUDGET: if this command would take the current login past INPUT_BUDGET input bytes (or
+    the spend is unknown), `renew()` re-logs in first - otherwise the xencons monitor locks the
+    console until it is restarted (module docstring)."""
     tok = os.urandom(4).hex().upper()
+    need = len(f"set QT={tok}\r") + len("echo B-%QT%&" + cmd + "&echo E-%QT%\r")
+    if need > INPUT_BUDGET - 64:
+        return RC_USAGE, (f"command needs {need} input bytes and one login allows {INPUT_BUDGET}: "
+                          "REFUSED, it would lock the console. Put it in a script on the guest")
+    if c.spent is None or c.spent + need > INPUT_BUDGET:
+        if renew is None:
+            return RC_USAGE, (f"input budget: {c.spent} spent + {need} > {INPUT_BUDGET} and no "
+                              "credentials to re-login with - REFUSED, it would lock the console")
+        rc, phase, msg = renew()
+        if rc != RC_OK:
+            return rc, f"re-login to renew the input budget failed: {msg}"
     c.drain_quiet()
     c.send(f"set QT={tok}\r")
     why = c.pump(until=tok, deadline=15, stall=10)
@@ -549,6 +627,7 @@ class Daemon:
         self.opened_at, self.opened_epoch = ts(), time.time()
         self.phase, self.open_rc, self.open_msg = "attaching", None, ""
         self.runs, self.c = 0, None
+        self.user, self.pw = None, None
         self.dlog = open(os.path.join(sdir, "daemon.log"), "a")
         self.transcript = open(os.path.join(sdir, "session.log"), "ab")
         with open(os.path.join(sdir, "pid"), "w") as f:
@@ -590,9 +669,14 @@ class Daemon:
             self.write_state()
             return
         self.log("open", f"attached: {self.c.how}; waking with CR")
+        self.user, self.pw = user, pw
         try:
             rc, phase, msg = wake(self.c)
-            if phase == "login" and user:
+            if phase == "shell" and user:
+                # Someone's login of unknown input spend: renew it before typing anything.
+                self.log("open", f"shell of unknown input spend found; exit + re-login as {user}")
+                rc, phase, msg = relogin(self.c, user, pw)
+            elif phase == "login" and user:
                 self.log("open", f"login prompt seen; logging in as {user}")
                 rc, phase, msg = login(self.c, user, pw)
             elif phase == "login":
@@ -637,8 +721,9 @@ class Daemon:
                                   "shell; `qcon login <vm> --user U --pass P` through this session")
         self.runs += 1
         try:
+            renew = (lambda: relogin(self.c, self.user, self.pw)) if self.user else None
             rc, msg = run_command(self.c, cmd, deadline, stall,
-                                  lambda text: self.reply(cl, out=text))
+                                  lambda text: self.reply(cl, out=text), renew)
         except ConsoleGone as e:
             rc, msg = RC_NOCONSOLE, str(e)
         if rc == RC_NOCONSOLE:
@@ -654,6 +739,7 @@ class Daemon:
             return self.reply(cl, done=True, rc=RC_NOCONSOLE, msg="the attach has ENDED")
         if not user:
             return self.reply(cl, done=True, rc=RC_USAGE, msg="--user is required")
+        self.user, self.pw = user, pw
         try:
             self.c.drain_quiet()
             rc, phase, msg = login(self.c, user, pw)
@@ -708,6 +794,12 @@ class Daemon:
                         continue
                     if not d:
                         break
+                    if self.c.spent is not None and self.c.spent + len(d) > INPUT_BUDGET:
+                        # Typing on would lock the console (monitor deadlock, module docstring).
+                        cl.sendall(f"\r\n[qcon: input budget {INPUT_BUDGET} bytes for this login "
+                                   "is used up - input DROPPED. Type nothing; detach and run "
+                                   "`qcon shell` again, which re-logs in]\r\n".encode())
+                        continue
                     self.c.send(d.decode("utf-8", "replace"))
         except (OSError, ConsoleGone) as e:
             self.log("shell", f"ended: {e}")
@@ -845,13 +937,6 @@ def cmd_open(vm, user, pw, op="open"):
         say(op, f"previous session had ended ({describe_holder(st)}); its state is archived, "
                 "and this open is a NEW attach (recorded in the ledger)")
         archive_and_remove(vm, sdir, op)
-    if DEFECT == "perattach":
-        os.makedirs(sdir, exist_ok=True)
-        with open(os.path.join(sdir, "creds.json"), "w") as f:
-            json.dump({"user": user, "pass": pw}, f)
-        say(op, "DEFECT KNOB perattach: NOT attaching now - every `run` will attach by itself "
-                "(the OLD attach-per-command behaviour, re-introduced for the self-test)")
-        return RC_OK
     if not TRANSPORT.startswith("fake:") and vm_running(vm) is False:
         say(op, f"{vm} is not Running - a halted guest has no console")
         return RC_NOT_RUNNING
@@ -904,8 +989,6 @@ def require_session(vm, op):
 
 def cmd_run(vm, cmd, deadline, stall, user, pw):
     op = "run"
-    if DEFECT == "perattach":
-        return run_perattach(vm, cmd, deadline, stall, user, pw)
     sdir = require_session(vm, op)
     if not sdir:
         return RC_NO_SESSION
@@ -922,42 +1005,6 @@ def cmd_run(vm, cmd, deadline, stall, user, pw):
     if rc != RC_OK:
         say(op, f"rc={rc}: {r.get('msg')}")
     return rc
-
-
-def run_perattach(vm, cmd, deadline, stall, user, pw):
-    """THE OLD BEHAVIOUR, kept only so the self-test can watch it fail: attach for this command
-    alone, wake, log in, run, detach. Against a console that serves one attach, the SECOND
-    command returns nothing - the shape that lost specimen 10."""
-    op = "run"
-    sdir = state_dir(vm)
-    try:
-        with open(os.path.join(sdir, "creds.json")) as f:
-            cr = json.load(f)
-            user, pw = user or cr.get("user"), pw if pw is not None else cr.get("pass")
-    except OSError:
-        pass
-    say(op, "DEFECT KNOB perattach: attaching for this command alone (the OLD behaviour)")
-    ledger(vm, "ATTACH", f"op=run DEFECT=perattach cmd={cmd!r}")
-    c = Console(vm)
-    try:
-        rc, phase, msg = wake(c)
-        if phase == "login" and user:
-            rc, phase, msg = login(c, user, pw)
-        if phase not in ("shell",):
-            say(op, f"rc={rc} phase={phase}: {msg} [perattach: this attach is DETACHED now, "
-                    "as the old tool did]")
-            return rc
-        rc, msg = run_command(c, cmd, deadline, stall,
-                              lambda t: (sys.stdout.write(t), sys.stdout.flush()))
-        if rc != RC_OK:
-            say(op, f"rc={rc}: {msg}")
-        return rc
-    except ConsoleGone as e:
-        say(op, f"rc={RC_NOCONSOLE}: {e}")
-        return RC_NOCONSOLE
-    finally:
-        c.close()
-        ledger(vm, "DETACH", "op=run DEFECT=perattach")
 
 
 def cmd_login(vm, user, pw):
@@ -1059,10 +1106,6 @@ def cmd_close(vm, logout=False):
     if not os.path.isdir(sdir):
         say(op, f"no session open for {vm}")
         return RC_NO_SESSION
-    if DEFECT == "perattach" and not live:
-        shutil.rmtree(sdir, ignore_errors=True)
-        say(op, "DEFECT KNOB perattach: nothing was held open; state removed")
-        return RC_OK
     if not live:
         say(op, f"session had already ENDED ({describe_holder(st)}); removing its state")
         archive_and_remove(vm, sdir, op)
@@ -1105,16 +1148,93 @@ def cmd_oneshot(vm, cmd, deadline, stall, user, pw):
             cmd_close(vm)
 
 
+# Read-only, in the order a stalled guest is worth reading. Each line is short (the input budget);
+# none uses `%` (the run wrapper's %QT% shares the cmd.exe line). Output volume is unlimited -
+# only INPUT locks the console.
+DIAG = [
+    ("identity", "hostname & whoami & ver & echo %DATE% %TIME%"),
+    ("boot-sessions", 'powershell -nop -c "(Get-CimInstance Win32_OperatingSystem).LastBootUpTime;'
+                      ' query user"'),
+    ("memory", 'powershell -nop -c "Get-CimInstance Win32_OperatingSystem|'
+               'fl FreePhysicalMemory,TotalVisibleMemorySize,NumberOfProcesses"'),
+    ("services", 'powershell -nop -c "Get-CimInstance Win32_Service|'
+                 "?{$_.Name -match 'qubes|qrexec|qdb|xen|gui|wuauserv|TrustedInstaller'}|"
+                 'ft -a Name,State,ProcessId,StartMode|out-string -w 220"'),
+    ("top-cpu", 'powershell -nop -c "Get-Process|sort CPU -desc|select -f 30 Id,ProcessName,'
+                'CPU,WS,Responding,StartTime|ft -a|out-string -w 220"'),
+    ("agent-threads", 'powershell -nop -c "foreach($n in \'qrexec-agent\',\'gui-agent\','
+                      '\'qubesdb-daemon\'){$p=Get-Process $n -ea 0;\'== \'+$n+\' \'+$p.Id;'
+                      'if($p){$p.Threads|group ThreadState,WaitReason|ft -a Count,Name}}"'),
+    ("qubes-log-tails", 'powershell -nop -c "$d=(gp \'HKLM:\\SOFTWARE\\Invisible Things Lab\\Qubes'
+                        ' Tools\').LogDir;gci $d -File|sort LastWriteTime -desc|select -f 8|'
+                        'ForEach-Object{\'== \'+$_.FullName;gc $_.FullName -Tail 12}"'),
+    ("system-events", "wevtutil qe System /c:30 /rd:true /f:text"),
+    ("app-errors", 'wevtutil qe Application /c:15 /rd:true /f:text /q:"*[System[(Level=1 or '
+                   'Level=2)]]"'),
+]
+
+
+def cmd_diag(vm, user, pw, out, deadline, stall):
+    """Evidence pass over the PV console. Opens ONE attach (or reuses an open session), runs DIAG,
+    writes each answer to <out>/<n>-<label>.txt plus summary.txt, logs out and detaches if it
+    opened. It never stops, kills, restarts or reconfigures the guest: whatever it finds is still
+    there for the next instrument."""
+    op = "diag"
+    out = out or os.path.join(os.path.expanduser("~"), "qcon-diag",
+                              f"{vm}-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}")
+    os.makedirs(out, exist_ok=True)
+    live, _st = session_live(state_dir(vm))
+    opened = False
+    if not live:
+        rc = cmd_open(vm, user, pw, op)
+        if rc != RC_OK:
+            # Detach what this call attached: a daemon left holding a silent attach serves no one,
+            # and the next diag would inherit it (measured 2026-11-18). The transcript is kept.
+            if os.path.isdir(state_dir(vm)):
+                cmd_close(vm)
+            say(op, f"rc={rc}: no usable session - nothing collected; transcript kept as "
+                    f"{state_dir(vm)}.closed.log")
+            return rc
+        opened = True
+    results = []
+    try:
+        for n, (label, cmd) in enumerate(DIAG, 1):
+            path = os.path.join(out, f"{n:02d}-{label}.txt")
+            t0 = time.time()
+            with open(path, "w") as f:
+                try:
+                    r = request(state_dir(vm), {"op": "run", "cmd": cmd, "deadline": deadline,
+                                                "stall": stall},
+                                on_out=lambda t, f=f: f.write(t))
+                except OSError as e:
+                    r = {"rc": RC_NO_SESSION, "msg": f"session daemon unreachable: {e}"}
+            r = r or {"rc": RC_NOCONSOLE, "msg": "session daemon went away mid-command"}
+            rc = int(r.get("rc", RC_NOCONSOLE))
+            results.append(f"{label:16s} rc={rc} {time.time() - t0:5.1f}s {os.path.getsize(path):7d}B"
+                           + ("" if rc == RC_OK else f"  {r.get('msg')}"))
+            say(op, results[-1])
+            if rc in (RC_NOCONSOLE, RC_NO_SESSION):
+                break                          # nothing attached any more; keep what we have
+    finally:
+        with open(os.path.join(out, "summary.txt"), "w") as f:
+            f.write(f"qcon diag {vm} {ts()}\n" + "\n".join(results) + "\n")
+        if opened and os.path.isdir(state_dir(vm)):
+            cmd_close(vm, logout=True)
+    say(op, f"{sum(' rc=0 ' in x for x in results)}/{len(DIAG)} answered; evidence in {out}")
+    return RC_OK if all(" rc=0 " in x for x in results) and len(results) == len(DIAG) else RC_NO_OUTPUT
+
+
 # ----------------------------------------------------------------------------- argv
 def parse(argv):
     """<verb> <vm> [options] [command] - options may appear anywhere after the verb."""
-    opts = {"user": os.environ.get("QCON_USER"), "pass": os.environ.get("QCON_PASS"),
-            "deadline": DEADLINE, "stall": STALL, "logout": False}
+    opts = {"user": os.environ.get("QCON_USER") or DEFAULT_USER,
+            "pass": os.environ.get("QCON_PASS") or DEFAULT_PASS,
+            "deadline": DEADLINE, "stall": STALL, "logout": False, "out": None}
     rest = []
     i = 0
     while i < len(argv):
         a = argv[i]
-        if a in ("--user", "--pass", "--deadline", "--stall"):
+        if a in ("--user", "--pass", "--deadline", "--stall", "--out"):
             if i + 1 >= len(argv):
                 raise ValueError(f"{a} needs a value")
             v = argv[i + 1]
@@ -1135,7 +1255,7 @@ def main():
         return daemon_main(argv[1], argv[2], argv[3])
     if not argv:
         sys.exit(__doc__)
-    verbs = ("open", "run", "login", "status", "shell", "close")
+    verbs = ("open", "run", "login", "status", "shell", "close", "diag")
     try:
         if argv[0] in verbs:
             verb = argv[0]
@@ -1165,6 +1285,8 @@ def main():
         return cmd_shell(vm, o["user"], o["pass"])
     if verb == "close":
         return cmd_close(vm, o["logout"])
+    if verb == "diag":
+        return cmd_diag(vm, o["user"], o["pass"], o["out"], o["deadline"], o["stall"])
     if not args:
         sys.exit(__doc__)
     return cmd_oneshot(vm, " ".join(args), o["deadline"], o["stall"], o["user"], o["pass"])
