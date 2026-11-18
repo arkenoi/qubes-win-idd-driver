@@ -185,7 +185,8 @@ def log_calls_in(text, tail=None):
         # THE DEGRADE MACROS TAKE THE STOP FLAG FIRST, so the format sits past the first comma.
         # Matching a literal run straight after `(` reads `FALSE, "QGA...` as no literal at all,
         # which turned every one of the eight routed sites into UNREADABLE on first run.
-        if name in DEGRADE_MACROS:
+        # win_perror2(status, fmt, ...) has the same shape: core-agent 1697352's two sites read UNREADABLE (build-4.3.45.1357).
+        if name in DEGRADE_MACROS or name == "win_perror2":
             comma = rest.find(",")
             rest = rest[comma + 1:] if comma >= 0 else rest
         run = LITERAL_RUN_RE.match(rest.lstrip())

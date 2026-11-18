@@ -458,6 +458,78 @@
    "status": "unsettled",
    "max_per_boot": null,
    "reason": "NEVER OBSERVED (0 in 85 agent/watchdog logs of the 2026-11-16 rig runs of this agent), AND DELIBERATELY NOT SILENCED. agent/watchdog/watchdog.c WatchdogThread (agent f93d7ef): written at service stop only while the foreign agent of the 'did not start holds' line is still alive. Jev on the canonical log-sweep rubric (floor 0.5): expected 0.47 conf [expected=0.60 insufficient-evidence=0.24 defect=0.15 noise=0.01]; keep_armed noul=0.77, so it is armed: the first occurrence is flagged and decided with that run's evidence. CEILING UNMEASURED."
+  },
+  {
+   "regex": "^winutils\\|E\\|[^|]*: the notification command line for '([^']*' does not fit its buffer |$)",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "NEVER OBSERVED (no campaign has run core-agent 1697352; run27, the one rig run of build-4.3.45.1357, never invoked wait-for-logon - qvm-run from the dev qube skips qubes.WaitForSession), AND DELIBERATELY NOT SILENCED. core-agent/src/qubes-rpc-services/wait-for-logon/wait-for-logon.c:85 (GWeck row 54): the dom0 notice of a user mismatch could not be formatted; the warning stays in the log, the notice is lost. Jev on the sweep rubric (scratchpad/jev-preacc1357-out.json): insufficient-evidence 0.35, keep_armed 0.78 - under the floor, so armed, not expected."
+  },
+  {
+   "regex": "^winutils\\|E\\|[^|]*: CfgReadString\\(InstallDir\\) - dom0 is NOT notified of the user mismatch",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "NEVER OBSERVED (no campaign has run core-agent 1697352; run27, the one rig run of build-4.3.45.1357, never invoked wait-for-logon - qvm-run from the dev qube skips qubes.WaitForSession), AND DELIBERATELY NOT SILENCED. core-agent/src/qubes-rpc-services/wait-for-logon/wait-for-logon.c:93 win_perror2: the tools install dir is unreadable, so the mismatch notifier cannot be located. Jev on the sweep rubric (scratchpad/jev-preacc1357-out.json): insufficient-evidence 0.39, keep_armed 0.69 - under the floor, so armed, not expected."
+  },
+  {
+   "regex": "^winutils\\|E\\|[^|]*: the tools bin directory does not fit a path - dom0 is NOT notified of the user mismatch",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "NEVER OBSERVED (no campaign has run core-agent 1697352; run27, the one rig run of build-4.3.45.1357, never invoked wait-for-logon - qvm-run from the dev qube skips qubes.WaitForSession), AND DELIBERATELY NOT SILENCED. core-agent/src/qubes-rpc-services/wait-for-logon/wait-for-logon.c:98: the notifier path does not fit MAX_PATH. Jev on the sweep rubric (scratchpad/jev-preacc1357-out.json): insufficient-evidence 0.49, keep_armed 0.69 - under the floor, so armed, not expected."
+  },
+  {
+   "regex": "^winutils\\|E\\|[^|]*: ExpandEnvironmentStrings\\(powershell\\) - dom0 is NOT notified of the user mismatch",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "NEVER OBSERVED (no campaign has run core-agent 1697352; run27, the one rig run of build-4.3.45.1357, never invoked wait-for-logon - qvm-run from the dev qube skips qubes.WaitForSession), AND DELIBERATELY NOT SILENCED. core-agent/src/qubes-rpc-services/wait-for-logon/wait-for-logon.c:104 win_perror: powershell's path could not be expanded. Jev on the sweep rubric (scratchpad/jev-preacc1357-out.json): insufficient-evidence 0.37, keep_armed 0.72 - under the floor, so armed, not expected."
+  },
+  {
+   "regex": "^winutils\\|E\\|[^|]*: CreateProcess\\(powershell\\) - dom0 is NOT notified of the user mismatch",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "NEVER OBSERVED (no campaign has run core-agent 1697352; run27, the one rig run of build-4.3.45.1357, never invoked wait-for-logon - qvm-run from the dev qube skips qubes.WaitForSession), AND DELIBERATELY NOT SILENCED. core-agent/src/qubes-rpc-services/wait-for-logon/wait-for-logon.c:109 win_perror: the notifier process could not be started. Jev on the sweep rubric (scratchpad/jev-preacc1357-out.json): insufficient-evidence 0.40, keep_armed 0.76 - under the floor, so armed, not expected."
+  },
+  {
+   "regex": "^winutils\\|W\\|[^|]*: requested user '([^']*' is not the account logged on interactively |$)",
+   "status": "expected",
+   "max_per_boot": null,
+   "reason": "NEVER OBSERVED yet (no campaign has run core-agent 1697352). core-agent/src/qubes-rpc-services/wait-for-logon/wait-for-logon.c:147, once per process: THE row-54 warning - the requested user is not the interactive account, so the wait returns only when that account signs in. A correct record of a real configuration mismatch; on German-account guests with dom0 default_user 'user' it fires on every qubes.WaitForSession. Jev on the sweep rubric (scratchpad/jev-preacc1357-out.json): expected 0.95, keep_armed 0.45 - expected; keep_armed under 0.5."
+  },
+  {
+   "regex": "^winutils\\|E\\|[^|]*: qdb_open failed - qubesdb /default-user is not read; the wait uses the name the caller sent, or 'user'",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "NEVER OBSERVED (no campaign has run core-agent 1697352; run27, the one rig run of build-4.3.45.1357, never invoked wait-for-logon - qvm-run from the dev qube skips qubes.WaitForSession), AND DELIBERATELY NOT SILENCED. core-agent/src/qubes-rpc-services/wait-for-logon/wait-for-logon.c:287 win_perror: qubesdb unreachable from the helper; the wait falls back to the caller's name. Jev on the sweep rubric (scratchpad/jev-preacc1357-out.json): insufficient-evidence 0.43, keep_armed 0.70 - under the floor, so armed, not expected."
+  },
+  {
+   "regex": "^winutils\\|E\\|[^|]*: qubesdb /default-user returned nothing: the key is absent or the read failed - the wait uses the name the caller sent, or 'user'",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "NEVER OBSERVED (no campaign has run core-agent 1697352; run27, the one rig run of build-4.3.45.1357, never invoked wait-for-logon - qvm-run from the dev qube skips qubes.WaitForSession), AND DELIBERATELY NOT SILENCED. core-agent/src/qubes-rpc-services/wait-for-logon/wait-for-logon.c:294. Jev on the sweep rubric (scratchpad/jev-preacc1357-out.json): insufficient-evidence 0.51, keep_armed 0.70 - under the floor, so armed, not expected."
+  },
+  {
+   "regex": "^winutils\\|E\\|[^|]*: qubesdb /default-user is empty - the wait uses the name the caller sent, or 'user'",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "NEVER OBSERVED (no campaign has run core-agent 1697352; run27, the one rig run of build-4.3.45.1357, never invoked wait-for-logon - qvm-run from the dev qube skips qubes.WaitForSession), AND DELIBERATELY NOT SILENCED. core-agent/src/qubes-rpc-services/wait-for-logon/wait-for-logon.c:309. Jev on the sweep rubric (scratchpad/jev-preacc1357-out.json): insufficient-evidence 0.52, keep_armed 0.68 - under the floor, so armed, not expected."
+  },
+  {
+   "regex": "^winutils\\|E\\|[^|]*: converting qubesdb /default-user to UTFN failed - the wait uses the name the caller sent, or 'user'",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "NEVER OBSERVED (no campaign has run core-agent 1697352; run27, the one rig run of build-4.3.45.1357, never invoked wait-for-logon - qvm-run from the dev qube skips qubes.WaitForSession), AND DELIBERATELY NOT SILENCED. core-agent/src/qubes-rpc-services/wait-for-logon/wait-for-logon.c:316 win_perror2. Jev on the sweep rubric (scratchpad/jev-preacc1357-out.json): insufficient-evidence 0.47, keep_armed 0.71 - under the floor, so armed, not expected."
+  },
+  {
+   "regex": "^winutils\\|W\\|[^|]*: the caller sent user '([^']*' but this qube's qubesdb /default-user is |$)",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "NEVER OBSERVED (no campaign has run core-agent 1697352; run27, the one rig run of build-4.3.45.1357, never invoked wait-for-logon - qvm-run from the dev qube skips qubes.WaitForSession), AND DELIBERATELY NOT SILENCED. core-agent/src/qubes-rpc-services/wait-for-logon/wait-for-logon.c:384: dom0's call named one user and qubesdb another; the helper follows qubesdb, as Linux qubes.WaitForSession does. Jev on the sweep rubric (scratchpad/jev-preacc1357-out.json): expected 0.87, keep_armed 0.59 - expected, but keep_armed over 0.5, so armed."
+  },
+  {
+   "regex": "^winutils\\|E\\|[^|]*: qubesdb /default-user is unavailable and the caller sent no user name - waiting for 'user'",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "NEVER OBSERVED (no campaign has run core-agent 1697352; run27, the one rig run of build-4.3.45.1357, never invoked wait-for-logon - qvm-run from the dev qube skips qubes.WaitForSession), AND DELIBERATELY NOT SILENCED. core-agent/src/qubes-rpc-services/wait-for-logon/wait-for-logon.c:395. Jev on the sweep rubric (scratchpad/jev-preacc1357-out.json): insufficient-evidence 0.43, keep_armed 0.73 - under the floor, so armed, not expected."
   }
  ],
  "signatures": {
@@ -4482,5 +4554,5 @@
   }
  },
  "version": 1,
- "preaccounted_at": "b2c75a7edc939e599a11c1a3e788585a40ea02f0"
+ "preaccounted_at": "b2b8e697fbd11c5e74439ba8112fc67d5707e1b1"
 }
