@@ -76,6 +76,7 @@ flowchart TD
 | 15 | Outside data never becomes a command | ACCEPTED | 2026-10-07 |
 | 16 | The updater is graded in two phases: deterministic gates first, the dom0-driven sequence second | ACCEPTED (owner) | 2026-10-22 |
 | 17 | Windows never restarts a guest on its own; a restart waits for the user, and a policy that overrides this is detected and warned about | ACCEPTED (owner, Jev 0.89); built, decision 1's measurement owed | 2026-11-13 |
+| 18 | On a template the updates proxy stays up, gated by process, not by time; in an AppVM it is gone | ACCEPTED (owner); not built, the gate test owed | 2026-11-18 |
 
 Status words and the section format are defined in `docs/ADR-README.md`. Each section below states the essentials.
 `docs/REFERENCE-updater.md` keeps every section in full under the same number: the complete wording, context,
@@ -582,3 +583,31 @@ user signed in, against a control without the values. The code shipped in 4.3.43
 **Open.** TrustedInstaller's servicing-completion restart (§8 point 5) is reached by no documented policy. A guest
 at its logon screen has no signed-in user, so the setting does not hold there. A guest installed with
 `/noupdates` gets neither the values nor the warning.
+
+## 18. On a template the updates proxy stays up, gated by process, not by time; in an AppVM it is gone
+
+**Status:** ACCEPTED (owner, 2026-11-18). Not built. The gate test (point 2) is owed before it ships.
+
+**Context.** Row 47 (`0x8024402C`): Windows Update takes its proxy from the per-machine policy present at sign-in
+or from the signed-in user, never from what a pass writes mid-session (§12.5 row 1). A proxy that exists only while
+a pass runs therefore misses the lookup. A per-search window in the signed-in user's settings was measured and
+declined the same day.
+
+**Decision.** The owner: *"we do not want to disable proxy globally. we want to keep the process gate, but having
+manual updates and installs work would be a nice addition. so no time window, just make sure it is gone in appvm"*,
+*"and that it is not accessible by non-update process (test it)"*, and *"we keep our paths because it makes update
+process more tidy, but that would be it."*
+
+1. On a TemplateVM the updates proxy stays configured between passes. There is no temporal gate and no time window.
+2. The process gate is the only gate: a process that is not an update process is refused by the relay. This is
+   shown by a test on a guest in which a non-update process is refused, before the change ships.
+3. Windows Update and installs the user starts on the template working through it is a welcome addition, not a
+   requirement.
+4. In every class that is not a TemplateVM, the proxy configuration is gone.
+5. Our own update paths (§12.2) stay because they make the update process tidier. That is the only reason for them.
+
+**Supersedes** the temporal gate: "the proxy is torn down when the pass ends" (`guest/qubes-updates-relay.cs:172-173`,
+owner 2026-08-21), and "up only during it" in §12.5.
+
+**Open.** Which processes count as update processes, and how the gate tells them apart from a process that only
+carries the same name.
