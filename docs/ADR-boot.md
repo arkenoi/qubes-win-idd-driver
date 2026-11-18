@@ -44,10 +44,10 @@ flowchart TD
 
 | § | decision | status | date |
 |---|---|---|---|
-| 1 | Work that reaches QEMU or Xen in a fresh domain's first minutes is serialized and paced | ACCEPTED (owner, Jev); the harness half WITHDRAWN (owner); rule 3 amended by §4 (owner) | 2026-10-04, 2026-11-14 |
+| 1 | Work that reaches QEMU or Xen in a fresh domain's first minutes is serialized and paced | ACCEPTED (owner, Jev); the harness half WITHDRAWN (owner); rule 3's §4 amendment withdrawn with §4 (owner) | 2026-10-04, 2026-11-14, 2026-11-18 |
 | 2 | The qrexec service opens only after stage 2's device work | ACCEPTED (owner, Jev); amended for 4.3.35: the updater deploy runs after the release | 2026-10-04, 2026-10-06 |
 | 3 | Stage 2 switches devices LIVE on a guest that is about to power off | PROPOSED (Jev); NOT BUILT - one measurement decides it | 2026-10-29 |
-| 4 | A dom0 call's ring unmap moves out of the console session's first minute | ACCEPTED (owner); the first version REJECTED (measured) | 2026-11-14 |
+| 4 | A dom0 call's ring unmap moves out of the console session's first minute | REVERTED (owner); was ACCEPTED (owner), its first version REJECTED (measured) | 2026-11-14, 2026-11-18 |
 | 5 | A removal keeps the Xen PV drivers while Xen will unplug the emulated disk | ACCEPTED under Jev's floor, not a verdict; not yet measured on a build | 2026-11-15 |
 
 Status words and the section format are defined in `docs/ADR-README.md`.
@@ -91,9 +91,8 @@ an emulated medium - our product never releases work all at once.
 2. Each step starts only when the previous step's completion has been OBSERVED. QWT's services after msiexec
    come up one by one, each after the previous one is running.
 3. Pacing means waiting for an observed completion. It never means a fixed sleep (owner: no pauses or timeouts
-   as a fix). **Amended 2026-11-14 (owner):** §4's ring hold is the one timed deferral allowed. It moves an unmap,
-   not a step, keeps each call's own spacing and takes the unmaps one at a time, so outside a shutdown nothing is
-   released at once.
+   as a fix). The 2026-11-14 amendment that allowed §4's ring hold as the one timed deferral is withdrawn with §4
+   (owner 2026-11-18): no timed deferral is allowed.
 
 Jev: this rule 0.93; judging changes by their exposure alone 0.07.
 
@@ -318,7 +317,16 @@ Until that measurement exists this section is not built, and §2 is unchanged.
 
 ## 4. A dom0 call's ring unmap moves out of the console session's first minute
 
-**Status:** ACCEPTED (owner), 2026-11-14. Offered "Amend ADR, redesign hold: you amend ADR-boot §1.3 to allow a timed
+**Status:** REVERTED (owner), 2026-11-18. The guest unmaps a dom0 call's ring when the call ends, as before
+2026-11-14 (core-agent 3b694ee reverts 4708503 and 918498b). Offered keep it, land the unshipped stop-turn commit
+43652c4, or revert, the owner chose «Revert the hold». Why: build-4.3.45.1357's notify-errors guest hung at a
+shutdown whose log shows the hold's Open item below happening - 8 held unmaps released by a stop within 95 ms - and
+one vCPU then spinning in stock xenbus's HIGH_LEVEL bucket lock (xenbus stays RETIRED from our scope: upstream has
+no fix, and this records a specimen, it reopens nothing). That the release caused the spin is not measured; the
+hold's own A/B showed no effect (owner: «proved nothing»), and the owner keeps a workaround only when it is proven
+efficient. The text below is the decision as it stood, kept for the record.
+
+**Former status:** ACCEPTED (owner), 2026-11-14. Offered "Amend ADR, redesign hold: you amend ADR-boot §1.3 to allow a timed
 deferral; I rebuild the hold to release one ring at a time after the session's first minute", the owner answered
 «look at freeze and amend ADR/redesign hold». The 60 s, the per-call shift and the turn are the agent's design under
 that order. Jev on this text: no verdict (revise 0.57, accept 0.42, under the floor); rule 2 removes the burst the
