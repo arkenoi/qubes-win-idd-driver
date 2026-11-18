@@ -50,7 +50,7 @@ does NOT spend the console: a later attach + CR reached the same logged-in shell
 
 THE INPUT BUDGET - THE ONE WAY TO LOCK THE CONSOLE OUT, MEASURED THE SAME DAY. xencons_tty opens the
 monitor's pipe twice (read, write); the monitor copies every input byte to BOTH connections with a
-blocking write inside its lock, and the write-only one is never read. After ~1.2 KB of cumulative
+blocking write inside its lock, and the write-only one is never read. After ~1 KB (the 1024-byte pipe buffer; paced at 20 ms/byte it stopped at 1026) of cumulative
 input in ONE tty lifetime that buffer is full and the monitor blocks forever: no echo, no prompt, on
 any attach, until `xencons_monitor` is restarted (which needs qrexec). `exit` ends the tty and the
 monitor starts a new one with new connections - 700 + 700 bytes across an exit stayed live. So every
@@ -360,7 +360,7 @@ def wake(c):
         # A healthy guest answers a CR at login: or at a shell within ~150 ms (measured 2026-11-18).
         return RC_NOCONSOLE, "silent", (
             "NOCONSOLE - the CR got no answer and the attach is still up. INCONCLUSIVE about the "
-            "guest: the same silence follows the xencons monitor's input lockout (~1.2 KB typed "
+            "guest: the same silence follows the xencons monitor's input lockout (~1 KB typed "
             "in one login, by anyone), another attacher splitting the pty, xencons not bound, or "
             "a guest wedged at high IRQL. Session LEFT OPEN; nothing here may be written up as "
             "guest death.")

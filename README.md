@@ -78,8 +78,10 @@ derivation checks. Feature tests in a rig guest matching the reporter's German 2
 updater gates, drove three dom0 update passes on a TemplateVM, and ran the UAC-on checks, all 8
 passing. **Not proven:** that the proxy change clears `0x8024402C` on the reporter's guest, and a dom0
 menu click through the wait end to end (our rig's policy cannot call it). **Known:** the PV console
-(`qvm-console`) stops answering after about 1.2 KB of input in one login. Restarting the guest's
-`xencons_monitor` service brings it back; the cause is not established. Full detail in
+(`qvm-console`) stops answering after about 1 KB of input in one login, typed at any speed - the
+upstream console monitor's 1024-byte pipe to the login shell fills and is never read. `exit` before
+then starts a fresh login; once locked, restarting the guest's `xencons_monitor` service brings it
+back. Full detail in
 [`docs/RELEASE-NOTES-4.3.45.md`](docs/RELEASE-NOTES-4.3.45.md).
 
 **On "updates available" reappearing right after an update — this is Windows Defender, and dom0 is telling you the truth.**

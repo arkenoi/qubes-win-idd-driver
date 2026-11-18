@@ -118,7 +118,9 @@ run. Every console-based guest verdict before that date is VOID.**
 - **Detach and reattach are healthy.** Six back-to-back open/run/close cycles all answered; the
   logged-in shell survives a detach. (`close` used to kill the client before dom0's socat released
   the console lock, so an open in the same second was refused - qcon now waits for the release.)
-- **THE ONE WAY TO LOCK IT OUT: ~1.2 KB of input in one login.** Upstream xencons_monitor copies every
+- **THE ONE WAY TO LOCK IT OUT: ~1 KB of input in one login, at ANY pace** (2026-11-18: one byte per
+  20 ms stopped echoing at 1026 bytes incl. the 12 login bytes = the monitor's 1024-byte pipe buffer,
+  monitor.c:101; `/home/user/qwt-quick-upgrade/con-1366/control/paced-20ms.txt`). Upstream xencons_monitor copies every
   input byte to both of the tty's pipe connections inside its lock, and the write-only one is never
   read; when its buffer fills, the monitor blocks forever - no echo, no prompt, on any attach. Only
   restarting `xencons_monitor` (over qrexec) recovers it. `exit` starts a fresh tty with fresh

@@ -134,9 +134,13 @@ fault-injection twin, built from the same commit.
   of an acceptance: Windows completed its shutdown, and QEMU never reported the power-off. Each time, the
   guest's emulated USB disks had lost their media earlier in that boot. These are harness-attached sticks, not
   something a user's qube has. The cause is not established.
-- The PV console stops answering after about 1.2 KB of input in one `qvm-console` login. It answered again
-  only after the `xencons_monitor` service in the guest was restarted. Seen on this build's Windows 11 guest
-  with the unpatched upstream xencons that QWT-NG has shipped since 4.3.16; its cause is not established.
+- The PV console stops answering after about 1 KB of input in one `qvm-console` login, typed at any speed.
+  Measured on this build's Windows 11 guest with the unpatched upstream xencons that QWT-NG has shipped since
+  4.3.16: input typed one byte per 20 ms stopped echoing after 1026 bytes in that login, which is the
+  1024-byte buffer of the console monitor's pipe to the login shell. That shell opens the pipe twice and
+  never reads one of them, so once that buffer is full the monitor blocks. `exit` before 1 KB starts a fresh
+  login with fresh pipes; once locked, it answers again only after the guest's `xencons_monitor` service is
+  restarted.
 
 ---
 
