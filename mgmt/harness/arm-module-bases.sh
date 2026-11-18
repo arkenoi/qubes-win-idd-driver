@@ -120,6 +120,16 @@ foreach ($p in $arr) {
 # APPEND, never overwrite: the record of an earlier boot is exactly what is needed if a LATER boot
 # is the one that wedges and cannot be asked anything.
 Add-Content -LiteralPath $path -Value $lines -Encoding ASCII
+# AND THE SAME BLOCK INTO THE LOG DIRECTORY (log.c's rule: the registry LogDir), which on a bound guest is
+# the secondary log volume - an image file the host reads with mtools while the guest is wedged or Halted.
+# Q: alone is readable only by booting the specimen: build-4.3.45.1357's notify-errors hang (win11-nfy,
+# boot 04:56:11Z) had its table only on Q:, and resolving its RIPs took a SPECIMEN_BOOT.
+$logDir = $null
+try { $logDir = (Get-ItemProperty 'HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools' -Name LogDir -ErrorAction Stop).LogDir } catch { }
+if ($logDir -and (Test-Path -LiteralPath $logDir) -and
+    ([IO.Path]::GetFullPath($logDir).TrimEnd('\') -ne [IO.Path]::GetFullPath($dir).TrimEnd('\'))) {
+  Add-Content -LiteralPath (Join-Path $logDir 'module-bases.txt') -Value $lines -Encoding ASCII
+}
 PS1
 
 # LAND THE RECORDER WITHOUT NEEDING A LOGGED-ON SESSION.
