@@ -489,7 +489,7 @@ if ($PvArtifact -and (Test-Path $PvArtifact)) {
 # emulated NIC, which is a functional regression. A missing xencons costs a diagnostic only.
 if ($ConsArtifact -and (Test-Path $ConsArtifact)) {
     $consNames = 'xencons.sys','xencons.inf','xencons.cat','xencons-signer.cer',
-                 'xencons_monitor.exe','xencons_tty.exe'
+                 'xencons_monitor.exe','xencons_tty.exe','qubes-console-tty.exe'
     $consWanted = @(Get-ChildItem $ConsArtifact -Recurse -Include $consNames)
     # The INF's [monitor_copyfiles]/[tty_copyfiles] sections reference the two exes, so a
     # package carrying the .sys without them installs a driver whose userspace half is

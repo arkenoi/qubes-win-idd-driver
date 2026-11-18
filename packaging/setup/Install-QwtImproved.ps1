@@ -305,6 +305,52 @@ function Get-PvStageOnly {
     return $v
 }
 
+# XENCONSINPUTDEADLOCK. Upstream xencons_tty opens the monitor's pipe twice, read-only and
+# write-only; the monitor copies every input byte to every connection with a blocking write
+# inside its lock, the write-only connection is never read, and after ~1 KB typed in one login
+# the console takes no more input (measured 1026-1034 bytes, Win10 and Win11). qubes-console-tty
+# is the same tty.c with one overlapped read/write connection (patches/xencons-tty-one-connection
+# .patch). The monitor runs whatever Parameters\default\Executable names, and the xencons INF
+# rewrites that value to upstream's tty on every driver install - so this runs AFTER pnputil.
+# The monitor reads the value once, when its service starts, hence the stop/start. A value that
+# names a missing file means NO console at all (the monitor's CreateProcess fails and it never
+# retries), so the value is written only once the copy has succeeded, and the file goes to
+# System32 beside upstream's tty: xencons outlives a QWT uninstall, and so must the file it runs.
+function Set-ConsoleTty([string]$PvDir) {
+    $src = Join-Path $PvDir 'qubes-console-tty.exe'
+    if (-not (Test-Path -LiteralPath $src)) {
+        Write-Log 'pv-drivers/qubes-console-tty.exe not in the payload - the console keeps upstream xencons_tty (no input after ~1 KB per login)' 'WARN'
+        return 'not shipped'
+    }
+    $svcKey = 'HKLM:\SYSTEM\CurrentControlSet\Services\xencons_monitor'
+    if (-not (Test-Path -LiteralPath $svcKey)) {
+        Write-Log 'xencons_monitor is not registered (no device bound yet) - the console keeps upstream xencons_tty until the next install' 'WARN'
+        return 'deferred: monitor not registered'
+    }
+    $dst = Join-Path $env:SystemRoot 'System32\qubes-console-tty.exe'
+    $state = 'failed: stop'
+    try {
+        # Stopping the monitor ends the running tty, which is what holds an older copy of $dst open.
+        Stop-Service -Name xencons_monitor -Force -ErrorAction Stop
+        $state = 'failed: copy'
+        Copy-Item -LiteralPath $src -Destination $dst -Force -ErrorAction Stop
+        $state = 'failed: registry'
+        $key = Join-Path $svcKey 'Parameters\default'
+        if (-not (Test-Path -LiteralPath $key)) { New-Item -Path $key -Force -ErrorAction Stop | Out-Null }
+        New-ItemProperty -LiteralPath $key -Name 'Executable' -PropertyType String -Value ('"{0}"' -f $dst) -Force -ErrorAction Stop | Out-Null
+        $state = 'ours'
+    } catch {
+        Write-Log "console tty: $state ($_) - the monitor keeps the tty it had" 'WARN'
+    } finally {
+        try { Start-Service -Name xencons_monitor -ErrorAction Stop } catch {
+            Write-Log "console tty: xencons_monitor did not start ($_) - the next boot starts it" 'WARN'
+            if ($state -eq 'ours') { $state = 'ours: monitor start failed' }
+        }
+    }
+    if ($state -eq 'ours') { Write-Log "console tty: xencons_monitor now runs $dst (one pipe connection)" }
+    return $state
+}
+
 function Resolve-MirrorLog {
     # Resolved ONCE PER SUCCESS, then cached - see the note at $script:MirrorLog. A failed attempt
     # returns with the state untouched so the next line tries again; only an opened file latches.
@@ -4206,6 +4252,9 @@ function Invoke-Stage2 {
             Write-Log ("xencons {0} - DEV_CONS should bind after the reboot" -f $(if ($consStageOnly) { 'staged (no /install)' } else { 'installed' }))
             $script:Result.detail.pv_xencons = $(if ($consStageOnly) { 'staged-only' } else { 'installed' })
             $script:Result.detail.exp_stage_pv_only = $consStageOnly
+            # Staged-only: the device install (and the INF's write of upstream's tty) happens at
+            # the next boot, after this, so there is nothing to override yet.
+            $script:Result.detail.pv_xencons_tty = $(if ($consStageOnly) { 'deferred: staged-only' } else { Set-ConsoleTty $pvDir })
         }
         }
     } else {

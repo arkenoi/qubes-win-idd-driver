@@ -1,0 +1,159 @@
+diff --git a/src/tty/tty.c b/src/tty/tty.c
+index b8629d5..7d182f7 100644
+--- a/src/tty/tty.c
++++ b/src/tty/tty.c
+@@ -178,17 +178,59 @@ CreateChild(
+     return TRUE;
+ }
+ 
++// qwt-one-connection: the device is ONE pipe handle opened with FILE_FLAG_OVERLAPPED (see
++// _tmain). A synchronous handle serialises its I/O, so TtyIn parked in a read would block
++// TtyOut's write; every device transfer therefore carries its own OVERLAPPED and event and
++// waits for its own completion, and a read and a write can be in flight together.
++static BOOL
++DeviceTransfer(
++    _In_ HANDLE         Handle,
++    _In_ BOOL           Write,
++    _Inout_updates_bytes_(Length) PVOID Buffer,
++    _In_ DWORD          Length,
++    _Out_opt_ LPDWORD   Transferred
++    )
++{
++    OVERLAPPED          Overlapped;
++    DWORD               Done;
++    BOOL                Success;
++
++    Done = 0;
++    ZeroMemory(&Overlapped, sizeof (Overlapped));
++    Overlapped.hEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
++    if (Overlapped.hEvent == NULL) {
++        Success = FALSE;
++        goto done;
++    }
++
++    if (Write)
++        Success = WriteFile(Handle, Buffer, Length, NULL, &Overlapped);
++    else
++        Success = ReadFile(Handle, Buffer, Length, NULL, &Overlapped);
++
++    if (Success || GetLastError() == ERROR_IO_PENDING)
++        Success = GetOverlappedResult(Handle, &Overlapped, &Done, TRUE);
++
++    CloseHandle(Overlapped.hEvent);
++
++done:
++    if (Transferred != NULL)
++        *Transferred = Done;
++
++    return Success;
++}
++
+ static VOID
+ PutCharacter(
+     _In_ PTTY_STREAM    Stream,
+     _In_ CHAR           Character
+     )
+ {
+-    WriteFile(Stream->Write,
+-              &Character,
+-              1,
+-              NULL,
+-              NULL);
++    DeviceTransfer(Stream->Write,
++                   TRUE,
++                   &Character,
++                   1,
++                   NULL);
+ }
+ 
+ static VOID
+@@ -205,11 +247,11 @@ PutString(
+         DWORD   Written;
+         BOOL    Success;
+ 
+-        Success = WriteFile(Stream->Write,
+-                            &Buffer[Offset],
+-                            Length - Offset,
+-                            &Written,
+-                            NULL);
++        Success = DeviceTransfer(Stream->Write,
++                                 TRUE,
++                                 &Buffer[Offset],
++                                 Length - Offset,
++                                 &Written);
+         if (!Success)
+             break;
+ 
+@@ -238,11 +280,11 @@ GetLine(
+         PCHAR   Character;
+         DWORD   Read;
+ 
+-        Success = ReadFile(Stream->Read,
+-                           &Sequence,
+-                           sizeof (Sequence),
+-                           &Read,
+-                           NULL);
++        Success = DeviceTransfer(Stream->Read,
++                                 FALSE,
++                                 Sequence,
++                                 sizeof (Sequence),
++                                 &Read);
+         if (!Success)
+             break;
+ 
+@@ -501,11 +543,11 @@ TtyOut(
+         if (Read == 0)
+             continue;
+ 
+-        Success = WriteFile(Context->Device.Write,
+-                            Buffer,
+-                            Read,
+-                            &Written,
+-                            NULL);
++        Success = DeviceTransfer(Context->Device.Write,
++                                 TRUE,
++                                 Buffer,
++                                 Read,
++                                 &Written);
+         if (!Success)
+             break;
+     }
+@@ -536,30 +578,22 @@ _tmain(
+     if (!WaitNamedPipe(PIPE_NAME, NMPWAIT_USE_DEFAULT_WAIT))
+         ExitProcess(1);
+ 
++    // qwt-one-connection: ONE connection, read and write. The monitor's DeviceThread copies
++    // every input byte to every connection with a blocking write inside its lock; a second,
++    // write-only connection is never read, so its 1024-byte buffer fills and the whole
++    // console stops taking input (monitor.c DeviceThread, measured at 1026-1034 bytes).
+     Context->Device.Read = CreateFile(PIPE_NAME,
+-                                      GENERIC_READ,
+-                                      FILE_SHARE_WRITE,
++                                      GENERIC_READ | GENERIC_WRITE,
++                                      FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                       NULL,
+                                       OPEN_EXISTING,
+-                                      FILE_ATTRIBUTE_NORMAL,
++                                      FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OVERLAPPED,
+                                       NULL);
+ 
+     if (Context->Device.Read == INVALID_HANDLE_VALUE)
+         ExitProcess(1);
+ 
+-    if (!WaitNamedPipe(PIPE_NAME, NMPWAIT_USE_DEFAULT_WAIT))
+-        ExitProcess(1);
+-
+-    Context->Device.Write = CreateFile(PIPE_NAME,
+-                                       GENERIC_WRITE,
+-                                       FILE_SHARE_READ | FILE_SHARE_WRITE,
+-                                       NULL,
+-                                       OPEN_EXISTING,
+-                                       FILE_ATTRIBUTE_NORMAL,
+-                                       NULL);
+-
+-    if (Context->Device.Write == INVALID_HANDLE_VALUE)
+-        ExitProcess(1);
++    Context->Device.Write = Context->Device.Read;
+ 
+     Success = GetCredentials(Password, sizeof(Password));
+     if (!Success)

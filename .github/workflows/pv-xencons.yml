@@ -217,6 +217,41 @@ jobs:
           Set-Content pv-out\PROVENANCE.txt -Value $prov
           Get-ChildItem pv-out | Format-Table Name, Length
 
+      # OUR console tty, built AFTER the driver package is signed, so the package above stays
+      # upstream's byte for byte. Upstream's xencons_tty opens the monitor pipe twice (read-only +
+      # write-only); the monitor copies every input byte to every connection with a blocking write
+      # inside its lock, the write-only connection is never read, and the console stops taking input
+      # after ~1 KB per login (XENCONSINPUTDEADLOCK). This is the same tty.c with ONE overlapped
+      # read/write connection; the installer points the monitor's Executable value at it. The name
+      # must not match xencons_tty*.exe, which the package step above collects.
+      - name: Build qubes-console-tty (upstream tty, one pipe connection)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force ctty\src\tty | Out-Null
+          Copy-Item xencons\src\tty\tty.c ctty\src\tty\tty.c
+          Push-Location ctty
+          git apply --verbose ..\repo\patches\xencons-tty-one-connection.patch
+          if ($LASTEXITCODE -ne 0) { throw 'xencons-tty-one-connection.patch did not apply' }
+          Pop-Location
+          foreach ($m in 'qwt-one-connection', 'DeviceTransfer', 'FILE_FLAG_OVERLAPPED') {
+            if (-not (Select-String -Path ctty\src\tty\tty.c -Pattern $m -SimpleMatch -Quiet)) { throw "marker '$m' missing after the patch" }
+          }
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -version '[17.0,19.0)' `
+                  -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $vs) { throw 'no Visual Studio with the x64 C++ tools' }
+          Import-Module (Join-Path $vs 'Common7\Tools\Microsoft.VisualStudio.DevShell.dll')
+          Enter-VsDevShell -VsInstallPath $vs -SkipAutomaticLocation -DevCmdArguments '-arch=x64 -host_arch=x64'
+          # /Zi + /DEBUG embed the PDB path, which lies under this workspace (...\qubes-win-idd-driver\...):
+          # that path is how tools/verify-release-package.sh classifies a pv-drivers binary as ours
+          # (PVRUN); a binary with no such path is UNCLASSIFIED and fails its PE_UNIVERSE gate.
+          cl.exe /nologo /W3 /O2 /MT /GS /Zi /DPROJECT=qubes_console_tty /DWIN32 /D_WINDOWS /D_CRT_SECURE_NO_WARNINGS `
+                 ctty\src\tty\tty.c /Fo:ctty\ /Fd:ctty\ /Fe:pv-out\qubes-console-tty.exe `
+                 /link /DEBUG /PDB:ctty\qubes-console-tty.pdb advapi32.lib userenv.lib
+          if ($LASTEXITCODE -ne 0) { throw 'qubes-console-tty build failed' }
+          Add-Content pv-out\PROVENANCE.txt -Value "qubes-console-tty.exe: xencons $env:XENCONS_RESOLVED src/tty/tty.c + patches/xencons-tty-one-connection.patch"
+          Get-Item pv-out\qubes-console-tty.exe | Format-Table Name, Length
+
       - uses: actions/upload-artifact@v4
         with:
           name: pv-xencons
