@@ -2621,6 +2621,17 @@ cell_clean(){ # $1=pristine-base $2=subject $3=tag
     *) no "$tag-clean: prime-run rc=$prc (see $M/$tag-clean-prime.log)"; return ;;
   esac
   clear_prime_leftovers "$vm"
+  # ARM THE MODULE-BASE RECORDER HERE, before the bind: the clean path never reaches run_install's
+  # arming, and the bind below shuts this guest down at the log-volume boundary. That shutdown hung on
+  # build-4.3.45.1366 (WIN11-clean, win11-acc, 2026-11-18): four vCPUs spinning with IF=0, no QMP
+  # SHUTDOWN event, and no table for the boot, so the RIPs could not be named without booting the
+  # specimen. Arming pulls THIS boot's table to the host at once, so a hang here resolves from the host.
+  # Records evidence, grades nothing - as at run_install's arming.
+  if VM="$vm" OUT="$M/modbases-$tag-clean" ./mgmt/harness/arm-module-bases.sh >>"$M/$tag-clean-armlog.txt" 2>&1; then
+    say "  $tag-clean: module-base recorder armed before the bind (this boot's table is on the host)"
+  else
+    say "  $tag-clean: module-base recorder NOT armed before the bind - a hang at its shutdown leaves a raw, unresolvable RIP"
+  fi
   # BIND NOW, NOT IN prime-run. The volume's drive letter depends on which other removable
   # volumes are attached, and LogDir is written with the letter at bind time. prime-run binds
   # while both priming sticks are present; the sweep above then removes them and the volume
