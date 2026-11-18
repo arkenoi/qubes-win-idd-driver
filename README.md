@@ -21,65 +21,66 @@ Anywhere this README says "stock", it means unmodified upstream QWT 4.2.2 as shi
 
 ## Download
 
-Release **[v4.3.44-agentf08d652](https://github.com/arkenoi/qubes-win-idd-driver/releases/tag/v4.3.44-agentf08d652)** — agent `f08d652`, package `4.3.44`, built from commit `889c21aa`. See
-[`docs/RELEASE-NOTES-4.3.44.md`](docs/RELEASE-NOTES-4.3.44.md) for what changed and what was
+Release **[v4.3.45-agent728ddae](https://github.com/arkenoi/qubes-win-idd-driver/releases/tag/v4.3.45-agent728ddae)** — agent `728ddae`, package `4.3.45`, built from commit `03517f30`. See
+[`docs/RELEASE-NOTES-4.3.45.md`](docs/RELEASE-NOTES-4.3.45.md) for what changed and what was
 verified.
 
 > **Published with no override, on a CLEAN acceptance record and a met change-scoped gate.** On these
 > exact bytes the full eight-cell matrix ran — clean install, same-version reinstall, in-place upgrade
 > and template→AppVM derivation, on both Windows 10 and Windows 11 — **89 checks passed, 0 failed,
-> 0 invalid**, every cell's log sweep clean. All six feature tests and every remainder suite passed.
-> **The 19 modules this diff requires were covered, 21 in all**
-> ([`docs/ADR-acceptance.md`](docs/ADR-acceptance.md)). One module, the notification-hold test, failed a
-> row in the full run because its grader mis-read the log; the grader was fixed and that module re-run
-> on this build, 21 rows, 0 failed.
+> 0 invalid**, every cell's log sweep clean. All six feature tests and every remainder suite passed on
+> the first run, with no re-run. **All 19 modules this diff requires were covered**
+> ([`docs/ADR-acceptance.md`](docs/ADR-acceptance.md)).
 
 **The changes you will notice.**
 
-* **Uninstalling from Control Panel leaves a guest that boots.** Stock QWT's removal took the Xen PV
-  drivers away while Xen was still set to unplug the emulated disk, so a PV-booted guest died at its next
-  boot with INACCESSIBLE_BOOT_DEVICE. The removal now keeps the PV drivers when that unplug is armed;
-  measured on a clone of a German 25H2 setup, the removal succeeded and the next boot came up on the PV
-  disk. It also deletes the `QwtngNetSetup` service, which outlived its library and died into dom0
-  notices after every uninstall.
-* **Windows 11 24H2 and later: dialogs and Explorer are no longer withheld on a busy guest.** A dialog
-  resized right after it opens — the Open-Shell installer's — sent the capture helper one frame of the
-  wrong size and nothing more, so dom0 never got it; Explorer painting late on a loaded guest was
-  declared deaf. Both are fixed, and *"a window could not be shown"* is sent only for a definitive fault.
-  At 67% CPU steal, 4.3.43 withheld the dialog and held Explorer deaf in 5 of 10 runs each; the fixed
-  builds did neither in 10 of 10.
-* **A file drag no longer draws a black box in dom0.**
+* **An app menu entry that starts nothing now says why.** dom0 starts a menu entry only once the guest
+  reports that dom0's `default_user` is signed in. On a new qube whose `default_user` was still Qubes'
+  `user` while the Windows account had another name, every entry started nothing, silently. The rule is
+  unchanged, as in stock QWT, but dom0 now gets *"App menu entries start nothing in this qube"*, naming
+  the fix: `qvm-prefs <qube> default_user <account>`, then restart the qube. The guest also reads that
+  name from its own QubesDB, as Linux qubes do.
+* **A StandaloneVM made from a template without its private volume gets a working profile.** Instead of
+  a temporary profile and an Explorer that dies, the boot guard builds the profile store on the new,
+  empty `Q:` from a seed the template keeps, then logs the user back on (measured: 1 s after the
+  sign-out, with a real profile on `Q:`). It writes a disk only when every byte of it reads zero, as
+  Linux does.
+* **`qvm-volume extend` grows the disk inside the guest**, through `qubes.ResizeDisk` while the qube
+  runs and at boot otherwise, for `Q:` and `C:` alike, as on Linux.
 
 Also in this release:
 
-* **The installer's restart notice is sent.** It failed before sending in 4.3.41 to 4.3.43, so a
-  manual install with a restart pending told nobody. A manual upgrade that leaves the guest with no
-  display path now says so in dom0 and powers the guest off.
-* **Defender definitions are not counted** in dom0's updates-available (section below), and a restart
-  that did not clear 0x8024402C is said and not requested again on every boot.
-* **A StandaloneVM made from a template without its private volume** gets a dom0 notice naming
-  `qvm-clone --class StandaloneVM`, instead of a desktop that dies with no explanation.
-* **Smaller fixes:** a crash in the agent's permit worker; the Windows key no longer opens an invisible
-  Start when nothing replaces it; the boot guards are not stopped as hung on a slow boot; dom0-call
-  rings released after logon go out one at a time instead of in a burst.
+* **On a template the updates proxy stays configured between update passes**, and the relay serves
+  only update processes: the 4.3.44 relay served a renamed `curl` and the user's PowerShell, and this
+  one refused all five non-update callers tried. In every other qube the configuration is removed at
+  boot. This targets the `0x8024402C` a field reporter's template hits; it is not yet shown on that
+  guest.
+* **dom0 notices are short:** a title, one line of what happens next, and a facts line naming the code,
+  the build and the log file.
+* **Smaller fixes:** a toast swapped into a banner already on screen is repainted to dom0; the agent
+  watchdog finds the agent by its own liveness mutex, not by process name; our PowerShell logs no longer
+  lose or tear lines when several processes write at once; the 4.3.44 ring hold after logon is removed.
 
-The release's new privileged actions: the uninstall stops and deletes the `QwtngNetSetup` service and
-skips the PV driver removal while Xen's disk unplug is armed; a manual upgrade with no display path
-powers the guest off; the updater writes one marker value beside its existing restart stamp. Everything
-else it adds is log lines and dom0 notices.
+The release's new privileged actions: `qubes.ResizeDisk` and the boot guard extend a partition into free
+space after it; on a qube whose profile store is missing, the boot guard partitions and formats an
+all-zero private disk, creates the profile store, signs the temporary session out and sets
+`ForceAutoLogon` for the one logon after it; on a qube that is not a template, the boot guard removes the
+proxy settings our update pass wrote. Everything else it adds is log lines and dom0 notices.
 
-Everything 4.3.43 and earlier brought is carried forward — among it Windows' own updates on a
-StandaloneVM without automatic restarts, the dom0 failure notices that say why, the notification fixes
-for a guest with UAC on, and the vchan send path that let one slow dom0 reader freeze a qube; see the
-history below.
+Everything 4.3.44 and earlier brought is carried forward — among it an uninstall that leaves a guest
+that boots, dialogs and Explorer no longer withheld on a busy Windows 11, Defender definitions left out
+of dom0's updates-available, and Windows' own updates on a StandaloneVM without automatic restarts; see
+the history below.
 
 **What was verified, and what was not.** The matrix ran against this exact package: per cell, on each
 OS, 16 clean install, 12 same-version reinstall, 13 in-place upgrade from 4.3.35 and 3 AppVM
 derivation checks. Feature tests in a rig guest matching the reporter's German 25H2 setup passed all 8
 updater gates, drove three dom0 update passes on a TemplateVM, and ran the UAC-on checks, all 8
-passing. **Not proven:** what causes the withheld dialogs and the deaf Explorer — the numbers above
-count runs. **Still open:** a capture helper or notification bridge that dies stays down until the GUI
-agent next starts (restart the qube). Full detail in [`docs/RELEASE-NOTES-4.3.44.md`](docs/RELEASE-NOTES-4.3.44.md).
+passing. **Not proven:** that the proxy change clears `0x8024402C` on the reporter's guest, and a dom0
+menu click through the wait end to end (our rig's policy cannot call it). **Known:** the PV console
+(`qvm-console`) stops answering after about 1.2 KB of input in one login. Restarting the guest's
+`xencons_monitor` service brings it back; the cause is not established. Full detail in
+[`docs/RELEASE-NOTES-4.3.45.md`](docs/RELEASE-NOTES-4.3.45.md).
 
 **On "updates available" reappearing right after an update — this is Windows Defender, and dom0 is telling you the truth.**
 On a freshly updated guest, dom0's updates-available can go back to "available" within a minute of clearing. We chased this as a
@@ -121,15 +122,15 @@ not arise, not that the path was exercised.
 
 | file | use it for |
 |---|---|
-| [`qubes-windows-tools-ng-4.3.44-1.agentf08d65295dc7.noarch.rpm`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.44-agentf08d652/qubes-windows-tools-ng-4.3.44-1.agentf08d65295dc7.noarch.rpm) | **dom0** — installs the ISO at `/usr/lib/qubes/qubes-windows-tools.iso`, auto-patches `qvm-create-windows-qube` to use it, and runs nothing in dom0 |
-| [`qwt-improved-setup.iso`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.44-agentf08d652/qwt-improved-setup.iso) | attach to a running Windows qube as a CD and run `install.cmd` elevated |
-| [`qubes-tools-4.3.44.exe`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.44-agentf08d652/qubes-tools-4.3.44.exe) | the installer on its own, if you already have a way to get a file into the guest |
-| [`SHA256SUMS.txt`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.44-agentf08d652/SHA256SUMS.txt) | checksums for all of them |
+| [`qubes-windows-tools-ng-4.3.45-1.agent728ddae1124a.noarch.rpm`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.45-agent728ddae/qubes-windows-tools-ng-4.3.45-1.agent728ddae1124a.noarch.rpm) | **dom0** — installs the ISO at `/usr/lib/qubes/qubes-windows-tools.iso`, auto-patches `qvm-create-windows-qube` to use it, and runs nothing in dom0 |
+| [`qwt-improved-setup.iso`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.45-agent728ddae/qwt-improved-setup.iso) | attach to a running Windows qube as a CD and run `install.cmd` elevated |
+| [`qubes-tools-4.3.45.exe`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.45-agent728ddae/qubes-tools-4.3.45.exe) | the installer on its own, if you already have a way to get a file into the guest |
+| [`SHA256SUMS.txt`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.45-agent728ddae/SHA256SUMS.txt) | checksums for all of them |
 
 The dom0 RPM is unsigned, so `qubes-dom0-update` will refuse it; install it directly:
 
 ```
-sudo rpm -i qubes-windows-tools-ng-4.3.44-1.agentf08d65295dc7.noarch.rpm
+sudo rpm -i qubes-windows-tools-ng-4.3.45-1.agent728ddae1124a.noarch.rpm
 ```
 
 With the RPM in place, dom0 can attach the media itself — `qvm-start <vm> --install-windows-tools`
@@ -138,7 +139,7 @@ hands the guest exactly this ISO as a CD.
 Upgrading a guest that already runs stock QWT or an older build of this package is a
 plain in-place upgrade — run the installer, it detects the older version and lets the
 MSI replace it in one transaction. Validated end to end for an upgrade **from an older
-build of this package** — 4.3.44's acceptance ran the in-place upgrade cell from 4.3.35 on
+build of this package** — 4.3.45's acceptance ran the in-place upgrade cell from 4.3.35 on
 both Windows 10 and Windows 11, **13 checks each passed** and both log sweeps clean, and its tests in
 the reporter's German 25H2 environment upgraded a guest there to the release package. An
 upgrade from **stock QWT 4.2.2** uses the same unchanged
@@ -147,6 +148,14 @@ test images themselves carry a newer build.
 
 **Hand-created qube?** Run `qvm-features <qube> vmexec 1` and `qvm-prefs <qube> qrexec_timeout 1800`
 in dom0 (on the template; AppVMs inherit), or the Qubes Update tool fails against it.
+
+**What changed in 4.3.45 — app menus say why they start nothing, a qube made from a template gets its profile, and disks grow.**
+When dom0's `default_user` is not the signed-in Windows account, menu entries still start nothing, as
+in stock QWT, but dom0 is now told so and what to set. A StandaloneVM made from a template without its
+private volume gets a working profile on a fresh `Q:`, and `qvm-volume extend` grows `Q:` or `C:` inside
+the guest. On a template the updates proxy stays configured between passes, gated by process; elsewhere
+it is removed at boot. Every dom0 notice is short. Full story, and what was not measured, in
+[`docs/RELEASE-NOTES-4.3.45.md`](docs/RELEASE-NOTES-4.3.45.md).
 
 **What changed in 4.3.44 — an uninstall leaves a guest that boots, and dialogs show on a slow Windows 11.**
 Control Panel's uninstall keeps the Xen PV drivers while Xen will unplug the emulated disk, so a
