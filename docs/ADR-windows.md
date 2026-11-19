@@ -266,16 +266,9 @@ mapped. Caveat: PASS-UNPROVEN per SG11 - the naive-cloak fail-proof build is sti
    broker on its full render; the crop resolves BEFORE the map (`MapDeferred`, bound
    `CROP_BEFORE_SHOW_TIMEOUT_MS` = 400). The residual rounded-corner black triangles are fundamental (dom0
    windows are rectangular); the owner declined a background fill.
-4. **Start is a regular dom0 app-menu entry, presented as a normal window, on Win10 and Win11** - owner
-   2026-11-19: «I want native windows menu to be a regular qubes app menu entry, both on win10 and win11.
-   bettwer it be normal window.» This supersedes the 2026-08-13 decision (Start not presented in seamless
-   mode, the installer removing the Start Menu appmenu shortcut, Open-Shell the supported answer), which was
-   taken because on 25H2 Start parked off-screen, morphed between card and work-area size, and its content
-   was not captured faithfully - those are now defects to fix, not reasons to hide it. The dom0-forwarded
-   Windows key stays dropped (`BlockMenuKey=1`, section 9); the entry opens Start guest-side. NOT SHIPPED as
-   of this amendment: `SeamlessStart` still defaults to 0 and the installer still removes the shortcut, until
-   the presented Start is measured on Win10 and 25H2 (findings/issues.md STARTASAPPMENUWINDOW). Toasts are
-   not affected.
+4. **Start is a regular dom0 app-menu entry, presented as a normal window, on Win10 and Win11.** The entry
+   opens Start guest-side; the dom0-forwarded Windows key stays dropped (`BlockMenuKey=1`, section 9). Toasts
+   are not affected.
 5. **Genuine-open gate:** a shell-host surface (StartMenuExperienceHost, ShellExperienceHost, SearchHost) whose
    card measurement finished and found no card is not mapped; an in-flight measurement is never rejected.
 
