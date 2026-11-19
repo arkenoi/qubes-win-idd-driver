@@ -947,6 +947,39 @@ New-Item -Path $au -Force | Out-Null
 Set-ItemProperty -Path $au -Name NoAutoUpdate -Value 1 -Type DWord
 Log 'set NoAutoUpdate=1 (dom0 owns updates; guest never installs on its own)'
 
+# 9b. ON A TEMPLATE THE UPDATES PROXY IS CONFIGURED FROM THE INSTALL ON (ADR-updater §18 point 1). Windows Update
+#     takes the proxy for its service-registration lookup from the per-machine policy present at SIGN-IN (§12.5
+#     row 1), and until now the first update pass was the only writer - mid-session, after that sign-in - so the
+#     first scan of every fresh template failed 0x8024402C and dom0 said "The Windows Update scan task failed".
+#     Measured 2026-11-19 on 4.3.45 installed inside a TemplateVM: first post-install scan 0x8024402C, task result 1;
+#     the next boot, signed in with what that pass left, scanned 6 offers, result 0. A template given these values
+#     before its first boot scanned at first contact. The values are Ensure-Proxy's (qubes-windows-update.ps1);
+#     every other class gets nothing here, and ensure-autologon.ps1 part 7 removes them from a qube made from this root.
+$qdbRead = Join-Path $SetupRoot 'qubesdb-read.ps1'
+$vmClassNow = $null
+if (Test-Path -LiteralPath $qdbRead) { . $qdbRead; $vmClassNow = Get-QubesVmClass }
+if ($vmClassNow -eq 'TemplateVM') {
+    try {
+        & netsh winhttp set proxy '127.0.0.1:8082' '<local>' | Out-Null
+        $polIs = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\CurrentVersion\Internet Settings'
+        $machIs = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Internet Settings'
+        New-Item -Path $polIs -Force | Out-Null
+        Set-ItemProperty -Path $polIs -Name ProxySettingsPerUser -Value 0 -Type DWord
+        Set-ItemProperty -Path $machIs -Name ProxyEnable -Value 1 -Type DWord
+        Set-ItemProperty -Path $machIs -Name ProxyServer -Value '127.0.0.1:8082' -Type String
+        Set-ItemProperty -Path $machIs -Name ProxyOverride -Value '<local>' -Type String
+        Log 'TemplateVM: updates proxy configured now (WinHTTP, per-machine policy, machine proxy -> 127.0.0.1:8082), so the first boot signs in with it'
+    } catch {
+        Log ("WARN TemplateVM: the updates proxy could not be configured at install ($($_.Exception.Message)) - " +
+             'the first update scan of this template will fail 0x8024402C and a restart after it clears that')
+    }
+} elseif ($vmClassNow) {
+    Log "updates proxy not configured at install: this is a $vmClassNow (template only, ADR-updater §18 point 4)"
+} else {
+    Log ("WARN the qube class could not be read from qubesdb at install - the updates proxy is not configured now; " +
+         'on a template its first update scan fails 0x8024402C and a restart after it clears that')
+}
+
 # 10. (Retired) The guest-side AppVM guard no longer needs a deploy-time RootIdentity stamp. The
 #     updater classifies the qube LIVE from qubesdb (/type) at every run - a derived AppVM reads
 #     back as 'AppVM' and exits before any proxy activity, a StandaloneVM as 'StandaloneVM', a
