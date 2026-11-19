@@ -1261,7 +1261,16 @@ added (9f9a4716).
 timed sweep (§4) runs there. On 25H2 and later a window whose capture cannot be opened is not shown, and the
 user is told; none has been measured.
 
-**Evidence.** Owed: an injected failed open reaching dom0 as the notice; a window closed before its capture
-opened reaching nobody; the shell surfaces and ordinary windows unchanged on 26200 and 26300.
+**Evidence** (release-package runs 44606861559 and, for the injection, 44607603550 from a branch that is never merged;
+short-cycle upgrades over the sealed goldens, 2026-11-19):
+- 26200 (win11de-a36c) and 26300 (win11r-a36c): the agent logs `WGCBROKER gate: enabled=1 ... (floor 26200)`;
+  Notepad reaches dom0 whole; no QGADIRECTSUPPRESS, notice, QGAWGCDEAF or failed slot; the error sweep is clean.
+- 26200, a capture open that throws 0x80FE0036 after its session exists (win11de-a36f): Notepad never reaches dom0;
+  the agent logs `QGADIRECTSUPPRESS ... (class Notepad) NOT SHOWN ... fault=slot-refused failHr=0x80fe0036`; inside
+  startup the notice is held as designed, after it `user notification sent (... fault slot-refused)` and dom0 shows
+  "Qubes: a window could not be shown".
+- 26200, four Notepads stopped 150-800 ms after launch: no QGADIRECTSUPPRESS and no notice.
+Owed: that one of those early closes was destroyed while its capture was opening (the info-level log does not show
+it); the shell surfaces (Start, Search) on 26200 and 26300.
 
 **Open.** Whether Windows 10 keeps the PrintWindow engine's timed sweep (§4) is unanswered.
