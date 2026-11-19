@@ -630,6 +630,5 @@ genuinely non-updateable and no dom0 bubbles should complain about the fact."*
    triggers) is written to the guest's logs and the status file, and nothing goes to dom0 as a notification.
 3. Who started a pass is read from which task ran it, never from a clock or a guess.
 
-**Open.** Whether the §17 warning that a policy lets Windows restart the qube by itself falls under point 2. It is sent
-by the scheduled scan too, but it warns about a policy in force rather than complaining that the qube cannot be
-updated, so it is unchanged until the owner decides.
+4. The §17 warning that a policy lets Windows restart the qube by itself is not a failure and is not covered by point 2:
+   the scheduled scan keeps sending it. The owner, asked the same day: *"no, it is genuinely useful warning."*
