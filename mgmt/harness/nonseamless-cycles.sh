@@ -90,6 +90,10 @@ for c in $(seq 1 "$CYCLES"); do
   else
     log "cycle $c return: no desktop-sized window left at t+$((SECONDS - t0))s"
   fi
+  # A USER DOES NOT TOGGLE TWICE IN TWO SECONDS. The agent defers a mode echo inside a settle window after the last
+  # mode change ("RESECHO 1280x800 suspect - deferring 1984 ms (settle window after 5120x1440)", win11r-c3c
+  # 2026-11-20 cycle 2, entered 2 s after the return), and that deferral reads as a stalled entry.
+  sleep 5
 done
 
 # HALTED FIRST: the host reads the guest's disk image as it is, and a line the guest wrote a second ago may not be on
@@ -133,7 +137,12 @@ else
   log "no Application error 1000/1001 or agent death 4001/4002 since the first entry"
 fi
 
-timeout 900 mgmt/harness/log-sweep.sh "$VM" "$T0" "$OUT/sweep" >"$OUT/sweep.log" 2>&1; src=$?
+# Every entry and return is a resolution change; the release campaign's per-cell sweep tolerates the same line for the
+# same cause, with the owner's ruling as its reason.
+timeout 900 mgmt/harness/log-sweep.sh "$VM" "$T0" "$OUT/sweep" \
+  --tolerate-error 'RecreateDuplication: .*BUT THE GEOMETRY CHANGED' \
+                   'owner 2026-10-17: a resolution change recovers in place (staging grant kept, work area re-applied) and DXGI signals staleness this way by design; every non-seamless entry and return this cell drives is a resolution change' \
+  >"$OUT/sweep.log" 2>&1; src=$?
 case "$src" in
   0) log "log sweep since the start: clean" ;;
   1) fail "the log sweep found undeclared errors: $(tail -1 "$OUT/sweep.log" | cut -c1-200)" ;;
