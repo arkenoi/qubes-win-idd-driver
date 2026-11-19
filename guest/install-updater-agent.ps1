@@ -947,8 +947,8 @@ New-Item -Path $au -Force | Out-Null
 Set-ItemProperty -Path $au -Name NoAutoUpdate -Value 1 -Type DWord
 Log 'set NoAutoUpdate=1 (dom0 owns updates; guest never installs on its own)'
 
-# 9b. ON A TEMPLATE THE UPDATES PROXY IS CONFIGURED FROM THE INSTALL ON (ADR-updater §18 point 1). Windows Update
-#     takes the proxy for its service-registration lookup from the per-machine policy present at SIGN-IN (§12.5
+# 9b. ON A TEMPLATE THE UPDATES PROXY IS CONFIGURED FROM THE INSTALL ON (ADR-updater section 18 point 1). Windows Update
+#     takes the proxy for its service-registration lookup from the per-machine policy present at SIGN-IN (section 12.5
 #     row 1), and until now the first update pass was the only writer - mid-session, after that sign-in - so the
 #     first scan of every fresh template failed 0x8024402C and dom0 said "The Windows Update scan task failed".
 #     Measured 2026-11-19 on 4.3.45 installed inside a TemplateVM: first post-install scan 0x8024402C, task result 1;
@@ -974,7 +974,7 @@ if ($vmClassNow -eq 'TemplateVM') {
              'the first update scan of this template will fail 0x8024402C and a restart after it clears that')
     }
 } elseif ($vmClassNow) {
-    Log "updates proxy not configured at install: this is a $vmClassNow (template only, ADR-updater §18 point 4)"
+    Log "updates proxy not configured at install: this is a $vmClassNow (template only, ADR-updater section 18 point 4)"
 } else {
     Log ("WARN the qube class could not be read from qubesdb at install - the updates proxy is not configured now; " +
          'on a template its first update scan fails 0x8024402C and a restart after it clears that')
