@@ -503,8 +503,8 @@ probe. Any fixed bound can be exceeded by a slower guest or a slower application
 wrong on a slow machine teaches the user to ignore the true one.
 
 **Cost.** A window whose capture session opens and never delivers a frame, with the broker up and the slot
-active, is not reported to the user: it does not appear, and the ERROR line is in the guest log. A window
-that is not mapped cannot receive the key or click §32's liveness check needs, so nothing else catches it.
+active, is not reported to the user: it does not appear, and the ERROR line is in the guest log.
+`ADR-capture` §32 tests no ordinary window's liveness, so nothing else catches it.
 Bound: no genuinely silent session in four acceptance chains on the target (`ADR-capture` §32); the rate on
 a slow real machine is unmeasured (Jev silent_first_session_rate 0.60 at conf 0.47, not a verdict).
 

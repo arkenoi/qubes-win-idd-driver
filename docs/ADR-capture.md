@@ -19,12 +19,12 @@ are rendered on demand, only when their pixels change or on input. Older builds 
 unobstructed window is copied from the screen, a partly covered one is painted whole on each change of its
 visible pixels, with a guard against applications that echo our own render.
 
-A capture session can stop delivering. For two days we built an elaborate detector that compared screen damage
-with window frames. It produced dozens of false alarms and found no real failure on the target build, so the
-owner had it removed. Liveness is now checked only when the user types or clicks into a window, since input is
-a promise of change: the session is reopened once, and if the fresh session delivers nothing the window is
-declared deaf and the user is told in dom0 to close and reopen it. The accepted cost is that a window changing
-on its own, without input, could stay frozen unnoticed.
+A capture session can stop delivering. An ordinary window's session is trusted and never tested: Windows sends a
+frame for every change, and a key or a click is no promise of change. Two stops are repaired: a capture Windows
+closes is reopened at once, and a Start or Search window (the relay route) whose source measurably changed with
+no frame following gets a fresh session. A reopened capture closed again before its first frame, or a fresh
+relay session that delivers nothing, is declared deaf, and the user is told in dom0 to close and reopen the
+window. The accepted cost is that an ordinary window whose capture stops silently stays frozen unnoticed.
 
 The record also keeps the paths not taken: copying resting windows from the desktop (rejected as slicing in
 disguise), bypassing Windows' compositor (not feasible without changing the security model), and timed re-
@@ -52,14 +52,14 @@ How a capture that has stopped is noticed on build 26100 and later (§32):
 flowchart TD
     A["A WGC slot"] --> B{"What happened?"}
     B -->|"Windows closed the capture item<br/>(QGAWGCITEMCLOSED)"| C["Reopen the session - event-driven"]
-    B -->|"desktop damage, or pointer motion"| N["No poke. WGC delivers real changes by itself."]
-    B -->|"a key or a click delivered to the window<br/>(input is a promise of change)"| D{"Did the session deliver before the quiet deadline?"}
-    D -->|yes| OK["Alive"]
-    D -->|no| R["Recreate the session once (QGAWGCRECREATE)"]
-    R --> F{"The next key or click goes unanswered, and the fresh session has delivered nothing?<br/>(no timer on its first frame)"}
-    F -->|no| OK
-    F -->|yes| G["DEAF (QGAWGCDEAF), the session kept open. The user is told in dom0 through the error route:<br/>'a window of app stopped updating ... close and reopen that window',<br/>once per application per boot, at most 8 error notices per boot"]
-    G -->|"the session delivers after all"| V["Live again (QGAWGCREVIVED)"]
+    C -->|"closed again before its first frame"| G
+    B -->|"desktop damage, pointer motion,<br/>or a key or a click on an ordinary window"| N["Nothing. Windows delivers every change by itself;<br/>a key or a click is no promise of change."]
+    B -->|"a key or a click on a relay window (Start, Search)<br/>unanswered by the quiet deadline"| D{"Did a sampled hash of its source change?"}
+    D -->|"no - the window is static"| OK["Alive"]
+    D -->|yes| R["Re-open the relay session (QGAWGCRECREATE)"]
+    R --> F{"Does the fresh session deliver by the quiet deadline?"}
+    F -->|yes| OK
+    F -->|no| G["DEAF (QGAWGCDEAF), held until the window is registered again. The user is told in dom0 through the error route:<br/>'a window of app stopped updating ... close and reopen that window',<br/>once per application per boot, at most 8 error notices per boot"]
 ```
 
 ## The decisions at a glance
@@ -97,7 +97,7 @@ flowchart TD
 | 29 | Regions a window changes invisibly to WGC are learned | premise RETRACTED 2026-10-02; SUPERSEDED by §32 | 2026-10-02 |
 | 30 | A window's own untracked popups occlude its liveness damage | SUPERSEDED by §32 | 2026-10-02 |
 | 31 | Alt-nav key-tip badges are dropped fully | ACCEPTED (owner) | 2026-10-02 |
-| 32 | Liveness from input and Windows' own events only; the damage-comparison detector goes | ACCEPTED (owner); the deaf hold amended 2026-11-19 | 2026-10-02 |
+| 32 | Liveness from Windows' own events and the relay's measured change; the damage-comparison detector goes | ACCEPTED (owner); amended 2026-11-19 | 2026-10-02 |
 | 33 | Desktop duplication is a window-0 engine, created on demand - not the capture path | TARGET STATE (owner 2026-10-18) | 2026-10-18 |
 | 35 | The shell's drag image is shown by the windows beneath it, never as a window of its own | ACCEPTED (Jev) | 2026-11-15 |
 
@@ -777,9 +777,8 @@ fix 0.94, PrintWindow renders kept 0.97.
 (menus and the other classes WGC cannot capture), where the poke is the render trigger - a menu's highlight
 follows the pointer. A WGC or relay slot is not poked on motion; keys and buttons still poke every slot.
 
-**Cost.** On classes desktop-duplication damage does not cover (Settings being driven reported a two-pixel
-dirty area), a session that is already deaf during hover-only interaction is caught at the next key or click,
-not on motion: a highlight late by one click (Jev: acceptable trade 0.81).
+**Cost.** A relay session that is already deaf during hover-only interaction is caught at the next key or
+click, not on motion: a highlight late by one click. An ordinary window's session is not tested at all (§32).
 
 **Evidence.** Seen to fail: the owner's hover over a focused Notepad on the build before (+2555 pokes, 3
 recreates). Seen to pass (repo 468a351, 18:53-18:56): +8 pokes (four clicks), the damage path refused 1280
@@ -1001,7 +1000,7 @@ recreate on rz28. One rz27 arm recreated Paint once for its title-bar corner at 
 badge (occ=27 counted them): a DWM-drawn part that WGC rightly does not deliver, the false-positive class of
 the damage-driven liveness pokes that §32 removed.
 
-## 32. Liveness from input and Windows' own events only; the damage-comparison detector goes
+## 32. Liveness from Windows' own events and the relay's measured change; the damage-comparison detector goes
 
 **Status:** ACCEPTED (owner), 2026-10-02. Agent 9c709f5 (damage pokes no longer reach WGC slots;
 `DeafNotifyUser`), broker 7eb2bf43 (the relay leaves the deaf ladder, stays a capture route), cleanup agent
@@ -1023,27 +1022,29 @@ events only 0.07).
 
 **Decision.**
 
-1. The event-driven reopen of a capture item Windows closes (QGAWGCITEMCLOSED) stays.
-2. Liveness is checked only when a key or a click is delivered to a window: input is a promise of change. An
-   unanswered one recreates the session. No session's first frame is timed: the fresh session is DEAF only
-   when a later key or click goes unanswered while it has delivered nothing. A key or click made before a
-   session opened is not that session's to answer.
+1. The event-driven reopen of a capture item Windows closes (QGAWGCITEMCLOSED) stays. A reopened item closed
+   again before its first frame is DEAF.
+2. An ordinary window's capture session is never tested for liveness. Windows sends a frame for every change of
+   the window, and a key or a click is no promise of change: one that changes nothing is rightly answered by no
+   frame. A relay window (Start, Search) is tested when a key or a click goes unanswered: only if a sampled hash
+   of its source shows a real change is its session re-opened, and a re-opened session that delivers nothing by
+   the quiet deadline is DEAF.
 3. The liveness pokes driven by desktop-duplication damage are removed for WGC and relay slots, and with them
    the filter stack built against their false positives (§21 item 1, §24, §26-§30 for those slots). The
    PrintWindow route for menus keeps damage as its render trigger, with its own Route re-check kept verbatim
    (Jev 0.84).
-4. The relay leaves the deaf ladder. It is kept only as a capture route, if a window class needs it.
+4. The relay is not a rung for other windows: it is a capture route, kept for the window classes that need it
+   (Start, Search).
 5. **Fail loudly (owner: "go on. and fail loudly (including user facing message) if capture really goes
-   "deaf" someday. we have "no silent regressions" directive").** When a window is declared DEAF (QGAWGCDEAF)
-   the user is told in dom0 through the error route: "a window of <app> stopped updating ... close and reopen
-   that window" (generic wording when the name fails redaction; once per application per boot, at most 8 error
-   notices per boot). The deaf session stays open: if it delivers after all, the window is live again
-   (QGAWGCREVIVED).
+   "deaf" someday. we have "no silent regressions" directive").** A window declared DEAF (QGAWGCDEAF) is held
+   until it is registered again, and the user is told in dom0 through the error route: "a window of <app>
+   stopped updating ... close and reopen that window" (generic wording when the name fails redaction; once per
+   application per boot, at most 8 error notices per boot).
 
-**Cost** (Jev 0.97). If Windows' capture ever stops on a window that changes WITHOUT input (a video, an
-animation), that window stays frozen in dom0 until the user's next key or click into it, or until it is
-re-registered (a resize, an agent restart). The owner's ruling narrows this, it does not remove it. The fact
-that would most change this decision: the stop rate over long real use on 26300 (0.65).
+**Cost.** If Windows' capture ever stops silently on an ordinary window - frames stop while the window changes,
+and Windows reports no closure - that window stays frozen in dom0, unreported, until it is registered again (a
+resize, an agent restart). The fact that would most change this decision: the stop rate over long real use on
+26300.
 
 **Cleanup done** (agent cda961d, first in rz30): the code 9c709f5's gate left unreachable is removed - the
 owned-popup occluders (§30), the desktop-band skip (§26), the live-coverage walk and its previous-rect tracking
