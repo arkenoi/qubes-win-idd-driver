@@ -10,10 +10,10 @@
 #   entry   the guest's dom0 windows are photographed (w_screen, per window) until the largest is the desktop
 #           (verdict DESKTOP) - a black, missing or recovery desktop at the deadline is a FAIL;
 #   return  photographed until no window of the entry's desktop size is left - one still there is a FAIL.
-# After the cycles, from the log volume read on the host:
+# After the cycles, a clean shutdown, then from the log volume read on the host (halted: everything is on it):
 #   on 26200+ (the agent's "WGCBROKER gate: enabled=1"), one QGADESKENGINE "created" and one "released" line and one
 #   "STAGING cleared" per cycle, no QGADESKENGINE ERROR and no CAPTUREABANDON; below the floor none of those lines.
-# Then a clean shutdown and boot (GRANTOWNERREVOKECRASH, findings/issues.md: the access violation came at the session
+# Then a boot (GRANTOWNERREVOKECRASH, findings/issues.md: the access violation came at the session
 # end after non-seamless use): a crash record of one of our executables (Application 1000/1001) or an agent death
 # record (4001/4002) newer than the newest one read before the first cycle is a FAIL. Records are compared by
 # RecordId, never by the guest's clock. Last, mgmt/harness/log-sweep.sh from the start: undeclared errors FAIL.
@@ -92,6 +92,11 @@ for c in $(seq 1 "$CYCLES"); do
   fi
 done
 
+# HALTED FIRST: the host reads the guest's disk image as it is, and a line the guest wrote a second ago may not be on
+# it yet - measured on win11r-c3c, the third return's release was logged 01:18:51.217 and missing from a read at
+# 01:18:53 (it was there in the guest's own copy). The clean shutdown flushes it, and the session end is part of the test.
+log "clean shutdown, then the log volume, then boot"
+qwt_shutdown "$VM" 300 >"$OUT/shutdown.out" 2>&1 || { log "INSTRUMENT $VM did not halt within 300 s - left as it is, NOT killed"; exit 2; }
 img=$(logvol_image "$VM")
 logvol_pull "$img" "$OUT/logvol" >"$OUT/logvol-pull.out" 2>&1 \
   || { log "INSTRUMENT the log volume could not be read: $(tail -1 "$OUT/logvol-pull.out" | cut -c1-140)"; exit 2; }
@@ -116,8 +121,6 @@ esac
 [ "$ne" = 0 ] || fail "$ne QGADESKENGINE error line(s)"
 [ "$na" = 0 ] || fail "$na CAPTUREABANDON line(s): a capture thread did not stop"
 
-log "clean shutdown, then boot"
-qwt_shutdown "$VM" 300 >"$OUT/shutdown.out" 2>&1 || { log "INSTRUMENT $VM did not halt within 300 s - left as it is, NOT killed"; exit 2; }
 timeout -k 10 150 qvm-start "$VM" >"$OUT/start.out" 2>&1 & disown
 w_session "$VM" 600 boot "$OUT" log || { log "INSTRUMENT no session after the boot"; exit 2; }
 timeout 120 tools/qtest ps "$APPEVT_PS | Where-Object { \$_.RecordId -gt $rec0 } | ForEach-Object { 'APPEVT ' + \$_.RecordId + ' ' + \$_.Id + ' ' + ((\$_.Message -split [char]10)[0]) }; 'APPEVT-END'" \
