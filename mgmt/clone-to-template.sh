@@ -255,8 +255,17 @@ prime_latch() {
     # UPDATE_SCAN=off skips it.
     if latch_ok "$rb" && [ "${UPDATE_SCAN:-soft}" != off ]; then
         log "scan-only updater check (WU COM scan must survive NoAutoUpdate=1)"
-        local scanout
-        scanout="$(QTEST_VM=$vm timeout 600 "$repo/tools/qtest" pushrun "$repo/guest/qubes-windows-update.ps1" -Action scan 2>/dev/null | tr -d '\r' | grep -E 'scan: [0-9]+ update|SCAN FAILED' | tail -1)"
+        # THE INSTALLED UPDATER, NOT A PUSHED COPY. Pushing guest/qubes-windows-update.ps1 alone has
+        # been dead since 43e95083 (2026-11-02) made it dot-source log.ps1 from its own directory:
+        # the copy in QubesIncoming refused with "cannot load ...\log.ps1" in under a second, the
+        # stderr that said so went to /dev/null, and every template build since logged "no scan
+        # output" (de26-tpl, de26-tplb, de26-t54, tiny11-tpl) - measured 2026-11-19 on tiny11-app.
+        # The deployment is what this check is about, and the installed copy is what dom0 drives.
+        local scanall scanout
+        scanall="$(QTEST_VM=$vm timeout 600 "$repo/tools/qtest" run 'powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "C:\Program Files\Qubes Tools\bin\qubes-windows-update.ps1" -Action scan 2>&1' 2>&1 | tr -d '\r')"
+        scanout="$(printf '%s\n' "$scanall" | grep -E 'scan: [0-9]+ update|SCAN FAILED' | tail -1)"
+        # No result line: say what the guest DID say, not "no scan output".
+        [ -n "$scanout" ] || scanout="$(printf '%s\n' "$scanall" | grep -E 'Windows Update failed|ERROR|cannot load|not a template' | grep -v 'ERROR-STACK' | tail -1 | cut -c1-240)"
         case "$scanout" in
             *'scan: '*update*) log "  updater scan ok: ${scanout#*] }" ;;
             *)  log "WARNING: updater scan did not complete (${scanout:-no scan output})."
