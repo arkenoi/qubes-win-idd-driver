@@ -905,6 +905,12 @@ static void OpenChannel(int i) {
                 g_slots[i].FramesPublished++;
                 PublishFrame(i, f);
             });
+        // FI ONE-SHOT, NEVER MERGED (ADR-capture 36 evidence): a Notepad open fails late, with the pool and session stored.
+        if (!monitor) {
+            WCHAR fiCls[32] = {};
+            GetClassNameW(hwnd, fiCls, 32);
+            if (lstrcmpW(fiCls, L"Notepad") == 0) throw_hresult(hresult(static_cast<int32_t>(0x80FE0036u)));
+        }
         session.StartCapture();
         s->StartTick = QpcNow();
         // ABI 14: a session is now live on this slot, and this is which one. ChanGen lets a reader
