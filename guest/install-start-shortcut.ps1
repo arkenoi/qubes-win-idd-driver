@@ -63,6 +63,9 @@ if ($Remove -or ($thirdPartyShell -and -not $Force)) {
     return
 }
 $vbsPath = Join-Path $qtBin 'open-start-menu.vbs'
+# A quote inside a VBScript string is DOUBLED; a backslash escape does not compile - measured 2026-11-19 on
+# st11: "open-start-menu.vbs(12, 76) Microsoft VBScript compilation error: Expected end of statement", so
+# wscript //B exited 1 silently and the "Start Menu" entry opened nothing.
 @'
 ' Open the Windows Start menu (dom0 qube-app shortcut target).
 ' wscript.exe is windowless and Run(...,0) hides the powershell console, so nothing ever
@@ -75,7 +78,7 @@ Set fso = CreateObject("Scripting.FileSystemObject")
 ps = fso.GetSpecialFolder(2) & "\qwt-winkey.ps1"
 Dim f
 Set f = fso.CreateTextFile(ps, True)
-f.WriteLine "Add-Type -Namespace W -Name K -MemberDefinition '[DllImport(\"user32.dll\")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);'"
+f.WriteLine "Add-Type -Namespace W -Name K -MemberDefinition '[DllImport(""user32.dll"")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);'"
 f.WriteLine "Start-Sleep -Milliseconds 400"
 f.WriteLine "[W.K]::keybd_event(0x5B,0,0,[UIntPtr]::Zero)"
 f.WriteLine "Start-Sleep -Milliseconds 80"
