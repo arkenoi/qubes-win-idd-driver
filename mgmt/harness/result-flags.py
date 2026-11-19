@@ -144,6 +144,7 @@ ERROR_FLAGS = [
     # -- PV network / console / NIC priming
     ('pv_xenvif',               starts('failed'),                         'L2609 WARN pnputil rc; L3656 ERROR the unplug latch is refused over it'),
     ('pv_xencons',              starts('failed'),                         'L2646 WARN: DEV_CONS stays at code 28, no out-of-band console'),
+    ('pv_xencons_tty',          starts('failed', 'not shipped', 'deferred: monitor'), 'Set-ConsoleTty WARN: the console keeps upstream xencons_tty (input dies after ~1 KB); deferred: staged-only is the staged arm, not an error'),
     ('pvnic_prime_failed',      is_true,                                  'L3612/L3617 ERROR: PV NIC priming failed or threw'),
     ('pvnic_prime',             starts('FAILED', 'error:'),               'L3611/L3616: narrative of pvnic_prime_failed'),
     ('pvnic_latch',             starts('not-armed', 'unconfirmed', 'error:'), 'L3662 ERROR not armed / L3673 WARN NICS did not read back 1 / L3677 WARN threw'),
