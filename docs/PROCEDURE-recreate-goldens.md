@@ -10,6 +10,7 @@ current set, which is what `mgmt/goldens/` holds a seal record for:
 | `win11r-qwt` | retail Win11 QWT golden, built from the clock-corrected `win11r-base` |
 | `win11de-qwt` | German 25H2 QWT golden |
 | `win11de26-base` | pristine base, German Win11 26H2 26300.9457, PRIMER=1, no QWT |
+| `tiny11-base` | pristine base, Tiny11 (legacy `tiny11maker.ps1` over `Win11_26300_English_x64.iso`, Pro) as `Tiny11_26300_English_x64.iso`, root 30 GiB (`ROOT_GIB=30`), PRIMER=1, no QWT |
 
 This list named `win11-base`, `win11-qwt` and `win10-qwt` until 2026-10-27. All three are gone —
 `win11-base`'s seal was deleted in `d5781e55` because the image was gone, `win11-qwt` in `b1fb0cea`

@@ -1,0 +1,33 @@
+{
+  "note": "pristine Tiny11 base (legacy tiny11maker.ps1 over Win11_26300_English_x64.iso, Pro), root 30 GiB, PRIMER=1, no QWT - specimen source for the first-template-boot 0x8024402C work",
+  "props": {
+    "klass": "StandaloneVM",
+    "maxmem": "8192",
+    "memory": "8192",
+    "vcpus": "4",
+    "virt_mode": "hvm"
+  },
+  "reseal_reason": "first seal of the 30 GiB rebuild",
+  "sealed_utc": "2026-11-19T08:21:28Z",
+  "vm": "tiny11-base",
+  "volumes": {
+    "private": {
+      "revisions": [
+        "1795076306-back",
+        "1795076466-back"
+      ],
+      "revisions_to_keep": "2",
+      "size": "21474836480",
+      "usage": "2147483"
+    },
+    "root": {
+      "revisions": [
+        "1795076306-back",
+        "1795076466-back"
+      ],
+      "revisions_to_keep": "2",
+      "size": "32212254720",
+      "usage": "19768660721"
+    }
+  }
+}
