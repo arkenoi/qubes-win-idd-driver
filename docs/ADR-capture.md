@@ -56,9 +56,10 @@ flowchart TD
     B -->|"a key or a click delivered to the window<br/>(input is a promise of change)"| D{"Did the session deliver before the quiet deadline?"}
     D -->|yes| OK["Alive"]
     D -->|no| R["Recreate the session once (QGAWGCRECREATE)"]
-    R --> F{"Does the fresh session deliver?"}
-    F -->|yes| OK
-    F -->|no| G["DEAF (QGAWGCDEAF). The user is told in dom0 through the error route:<br/>'a window of app stopped updating ... close and reopen that window',<br/>once per application per boot, at most 8 error notices per boot"]
+    R --> F{"The next key or click goes unanswered, and the fresh session has delivered nothing?<br/>(no timer on its first frame)"}
+    F -->|no| OK
+    F -->|yes| G["DEAF (QGAWGCDEAF), the session kept open. The user is told in dom0 through the error route:<br/>'a window of app stopped updating ... close and reopen that window',<br/>once per application per boot, at most 8 error notices per boot"]
+    G -->|"the session delivers after all"| V["Live again (QGAWGCREVIVED)"]
 ```
 
 ## The decisions at a glance
@@ -96,7 +97,7 @@ flowchart TD
 | 29 | Regions a window changes invisibly to WGC are learned | premise RETRACTED 2026-10-02; SUPERSEDED by §32 | 2026-10-02 |
 | 30 | A window's own untracked popups occlude its liveness damage | SUPERSEDED by §32 | 2026-10-02 |
 | 31 | Alt-nav key-tip badges are dropped fully | ACCEPTED (owner) | 2026-10-02 |
-| 32 | Liveness from input and Windows' own events only; the damage-comparison detector goes | ACCEPTED (owner) | 2026-10-02 |
+| 32 | Liveness from input and Windows' own events only; the damage-comparison detector goes | ACCEPTED (owner); the deaf hold amended 2026-11-19 | 2026-10-02 |
 | 33 | Desktop duplication is a window-0 engine, created on demand - not the capture path | TARGET STATE (owner 2026-10-18) | 2026-10-18 |
 | 35 | The shell's drag image is shown by the windows beneath it, never as a window of its own | ACCEPTED (Jev) | 2026-11-15 |
 
@@ -1023,18 +1024,21 @@ events only 0.07).
 **Decision.**
 
 1. The event-driven reopen of a capture item Windows closes (QGAWGCITEMCLOSED) stays.
-2. Liveness is checked only when a key or a click is delivered to a window: input is a promise of change. One
-   recreate, then DEAF.
+2. Liveness is checked only when a key or a click is delivered to a window: input is a promise of change. An
+   unanswered one recreates the session. No session's first frame is timed: the fresh session is DEAF only
+   when a later key or click goes unanswered while it has delivered nothing. A key or click made before a
+   session opened is not that session's to answer.
 3. The liveness pokes driven by desktop-duplication damage are removed for WGC and relay slots, and with them
    the filter stack built against their false positives (§21 item 1, §24, §26-§30 for those slots). The
    PrintWindow route for menus keeps damage as its render trigger, with its own Route re-check kept verbatim
    (Jev 0.84).
 4. The relay leaves the deaf ladder. It is kept only as a capture route, if a window class needs it.
 5. **Fail loudly (owner: "go on. and fail loudly (including user facing message) if capture really goes
-   "deaf" someday. we have "no silent regressions" directive").** When the fresh session delivers nothing the
-   window is declared DEAF (QGAWGCDEAF) and the user is told in dom0 through the error route: "a window of <app>
-   stopped updating ... close and reopen that window" (generic wording when the name fails redaction; once per
-   application per boot, at most 8 error notices per boot).
+   "deaf" someday. we have "no silent regressions" directive").** When a window is declared DEAF (QGAWGCDEAF)
+   the user is told in dom0 through the error route: "a window of <app> stopped updating ... close and reopen
+   that window" (generic wording when the name fails redaction; once per application per boot, at most 8 error
+   notices per boot). The deaf session stays open: if it delivers after all, the window is live again
+   (QGAWGCREVIVED).
 
 **Cost** (Jev 0.97). If Windows' capture ever stops on a window that changes WITHOUT input (a video, an
 animation), that window stays frozen in dom0 until the user's next key or click into it, or until it is

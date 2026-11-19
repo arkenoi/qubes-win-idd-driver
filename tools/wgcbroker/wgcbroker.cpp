@@ -160,9 +160,6 @@ struct Channel {
     // A visible window whose feed has been silent since it opened is one WGC is not serving.
     ULONGLONG openTick = 0;
     ULONGLONG lastArrivalTick = 0;
-    // The fresh session the quiet ladder opened after an unanswered key or click - the only session whose first
-    // frame is timed (R2). Every other open waits for its first frame however long the window takes to paint.
-    bool      ladderFresh = false;
     // A frame FrameArrived dropped for size with nothing published since: when (0 = none owed) and its content size.
     // The recreated pool delivers the window at that size only when the window next changes; see SizeDropOwed.
     ULONGLONG sizeDropTick = 0;
@@ -372,8 +369,9 @@ static inline void Due(ULONGLONG t) { if (t && (!g_nextDue || t < g_nextDue)) g_
 // for its own poke like any other.
 static const ULONGLONG WGCBRK_PW_FIRST_MS[] = { 0, 50, 100, 200, 400 };
 // DEAFNESS HOLD (rest-zero E). A slot whose WGC session stayed quiet, was recreated once and stayed quiet again goes
-// FAILED with WGCBRK_E_DEAF and is held - not reopened - until the agent asks again (its ControlSeq moves). Reopening on
-// the broker's own initiative would be a timed retry loop on a window nothing is changing.
+// FAILED with WGCBRK_E_DEAF and is held - not reopened - until its session delivers after all (the quiet ladder leaves it
+// open) or the agent asks again (its ControlSeq moves). Reopening on the broker's own initiative would
+// be a timed retry loop on a window nothing is changing.
 static bool g_deafHold[WGCBRK_MAX_SLOTS] = {};
 static LONG g_deafCtl[WGCBRK_MAX_SLOTS]  = {};
 static void DeclareDeaf(int i) {
@@ -773,8 +771,10 @@ static bool PublishCard(int i, ID3D11Texture2D* full, int texW, int texH, const 
     MemoryBarrier();
     if (_InterlockedCompareExchange(&s->Seq, (q | 1) + 1, q | 1) != (q | 1)) return false;  // -> EVEN
     if (!s->FirstPublishTick) s->FirstPublishTick = QpcNow();
-    SignalFramePublished();                     // after the seq bump: a woken agent sees it whole
+    // ACTIVE BEFORE THE SIGNAL. The agent reads no frame from a slot that is not ACTIVE (BrokerFreshFrame), and on a
+    // deaf-held slot this frame is the revival: signalled first, a static window's only late frame would go unread.
     s->AckState = WGCBRK_ACTIVE;
+    SignalFramePublished();                     // after the seq bump: a woken agent sees it whole
     g_ch[i].pubCtlSeq = ctl;
     // The buffer that just became the spare holds the frame before this one: it differs from the new active buffer
     // only inside this arrival's regions - or, after a whole write, anywhere.
@@ -1260,8 +1260,6 @@ static void OpenChannel(int i) {
     WaitSameWindowTeardown(i, (HWND)(ULONG_PTR)g_slots[i].Hwnd);
     WGCBRK_SLOT* s = &g_slots[i];
     Channel& c = g_ch[i];
-    // Every open starts untimed, a failed one included; the quiet ladder marks its own fresh session after this returns.
-    c.ladderFresh = false;
     // First-frame attribution. The tick block is NOT touched yet: a slot is recycled, and this
     // open may fail below on a window that has already been destroyed (menus are short-lived).
     // Overwriting the block first is what made this probe destroy the record of the SUCCESSFUL
@@ -1508,6 +1506,10 @@ static void OpenChannel(int i) {
                 g_slots[i].FramesPublished++;
                 PublishFrame(i, f);
             });
+        // A NEW SESSION OWES NO POKE MADE BEFORE IT OPENED. PokeSeq is cumulative over every window and session the slot
+        // has held, and CloseChannel's wipe leaves this at 0; its first frame is the window's current content, which
+        // answers every earlier poke. Set before StartCapture, so no arrival of this session can race it.
+        c.pokeAtLastArrival = s->PokeSeq;
         session.StartCapture();
         s->StartTick = QpcNow();
         // ABI 14: a session is now live on this slot, and this is which one. ChanGen lets a reader
@@ -1747,9 +1749,24 @@ static void Reconcile() {
         const LONG ctl0 = s->ControlSeq;
         MemoryBarrier();
         HWND want = (HWND)(ULONG_PTR)s->Hwnd;
-        if (g_deafHold[i] && ctl0 != g_deafCtl[i]) g_deafHold[i] = false;   // the agent asked again: one more ladder
-        bool wantOpen = (s->ReqState == WGCBRK_REQUESTED) && want && !g_deafHold[i];
         Channel& c = g_ch[i];
+        // The agent asked again: one more ladder, on a fresh session. First, so a revival below never writes ACTIVE over
+        // a slot the agent has just re-registered.
+        if (g_deafHold[i] && ctl0 != g_deafCtl[i]) { g_deafHold[i] = false; if (c.hwnd) CloseChannel(i); }
+        // A HELD SESSION THAT DELIVERED AFTER ALL IS LIVE AGAIN. The quiet ladder's deaf hold keeps its session open, so a
+        // first frame that was only late lands: PublishFrame makes the slot ACTIVE, this clears the hold (and makes a
+        // frame dropped for size count too), and the agent says so (QGAWGCREVIVED).
+        if (g_deafHold[i] && c.hwnd && c.hwnd == want && c.lastArrivalTick) {
+            PubLock lk(i);                        // against a PublishFrame in flight
+            g_deafHold[i] = false;
+            s->FailHr = 0;
+            MemoryBarrier();
+            s->AckState = WGCBRK_ACTIVE;
+            SignalFramePublished();               // wake the agent: it reports the revival on that wake
+        }
+        // While held, nothing below opens, reopens or tests this slot; an unregister still closes it.
+        const bool held = g_deafHold[i];
+        bool wantOpen = (s->ReqState == WGCBRK_REQUESTED) && want;
         // PENDING DAMAGE, TIMED FROM THE POKE (2026-09-30). The quiet test below demotes a channel when damage has gone
         // unanswered by a frame. It used to time that silence from the LAST ARRIVAL - so on a window that had been still
         // for 2 s the very first poke of its next change satisfied "damage, and 2 s without a frame" at once, before WGC
@@ -1778,7 +1795,7 @@ static void Reconcile() {
             else if (!c.pokePendingSince)
                 c.pokePendingSince = nowP;                            // the first unanswered poke
         }
-        if (wantOpen && c.hwnd != want) { if (c.hwnd) CloseChannel(i); g_relayReopened[i] = false; g_wgcReopened[i] = false; g_closedReopened[i] = false; g_relaySizeCtlValid[i] = false; g_relaySeenTick[i] = 0; g_sizeReopenValid[i] = false; OpenChannel(i); }
+        if (wantOpen && !held && c.hwnd != want) { if (c.hwnd) CloseChannel(i); g_relayReopened[i] = false; g_wgcReopened[i] = false; g_closedReopened[i] = false; g_relaySizeCtlValid[i] = false; g_relaySeenTick[i] = 0; g_sizeReopenValid[i] = false; OpenChannel(i); }
         else if (!wantOpen && c.hwnd)   { CloseChannel(i); g_relayReopened[i] = false; g_wgcReopened[i] = false; g_closedReopened[i] = false; g_relaySizeCtlValid[i] = false; g_relaySeenTick[i] = 0; g_sizeReopenValid[i] = false; }
         // WINDOWS CLOSED THIS SESSION'S CAPTURE ITEM: reopen at once. Observed first (2026-09-30, Jev 0.96 observe-first) and
         // now measured: on 26100.1742 a UWP app's first item is closed as it launches - Settings (2026-09-30) and Calculator
@@ -1786,7 +1803,7 @@ static void Reconcile() {
         // stayed on its splash in dom0 until something poked it (the owner watched Calculator do it for a minute, and found its
         // first menu render slow). The Closed handler wakes this loop; the reopen costs one session. A reopened item closed
         // again before it delivered anything is not reopened again: DEAF, loud (Jev: repair now 0.99, loop risk bounded 0.30).
-        else if (wantOpen && c.hwnd == want && !c.pw && !c.relay && g_closedGen[i] == g_slots[i].ChanGen &&
+        else if (wantOpen && !held && c.hwnd == want && !c.pw && !c.relay && g_closedGen[i] == g_slots[i].ChanGen &&
                  IsWindow(want) && IsWindowVisible(want) && !IsIconic(want)) {
             const bool delivered = (c.lastArrivalTick != 0);
             g_slots[i].Reroutes++;
@@ -1795,7 +1812,7 @@ static void Reconcile() {
                 DeclareDeaf(i);
             else { g_closedReopened[i] = true; g_forcePw[i] = false; OpenChannel(i); }
         }
-        else if (SIZE live{}; wantOpen && c.hwnd == want && c.relay && c.relayThumb && RelayOutgrown(i, c, s, &live)) {
+        else if (SIZE live{}; wantOpen && !held && c.hwnd == want && c.relay && c.relayThumb && RelayOutgrown(i, c, s, &live)) {
             g_slots[i].Reroutes++;                          // visible in the peek; RelayOk counts the re-open
             const LONG ctl = s->ControlSeq;
             CloseChannel(i);                                // wipes the Channel - survivors are set after it
@@ -1806,7 +1823,7 @@ static void Reconcile() {
         }
         // A FRAME DROPPED FOR SIZE, NOTHING PUBLISHED SINCE: one fresh session serves the window at its new size (see
         // g_sizeReopenCtl). The plain-WGC counterpart of the relay re-open above, bounded the same way.
-        else if (LONG dw = 0, dh = 0; wantOpen && c.hwnd == want && !c.pw && !c.relay &&
+        else if (LONG dw = 0, dh = 0; wantOpen && !held && c.hwnd == want && !c.pw && !c.relay &&
                  IsWindow(want) && IsWindowVisible(want) && !IsIconic(want) && SizeDropOwed(i, s, &dw, &dh)) {
             g_slots[i].Reroutes++;                          // visible in the peek, next to dropsize
             const LONG ctl = s->ControlSeq;
@@ -1815,7 +1832,7 @@ static void Reconcile() {
             g_forcePw[i] = false;
             OpenChannel(i);
         }
-        else if (wantOpen && c.hwnd == want && !c.pw &&
+        else if (wantOpen && !held && c.hwnd == want && !c.pw &&
                  IsWindow(want) && IsWindowVisible(want) && !IsIconic(want) &&
                  (GetTickCount64() - (c.lastArrivalTick ? c.lastArrivalTick : c.openTick))
                      >= WGCBRK_WGC_QUIET_MS &&
@@ -1836,15 +1853,11 @@ static void Reconcile() {
                  // Jev: quiet-rule-demotes-healthy-static-relays 1.00, require-evidence-the-source-
                  // changed 0.76. g_relayNoDemote is the control, not a product setting.
                  !(c.relay && g_relayNoDemote) &&
-                 // R2: THIS session has delivered nothing (lastArrivalTick is per channel; FramesArrived is cumulative
-                 // across every session the slot ever had, so a recreated session inherited the first one's frames).
-                 // Asked only of the ladder's fresh session: liveness comes from a key or a click (ADR-capture 32), and a
-                 // session a registration opened has been promised no change. Timing its first frame would recreate, then
-                 // hold DEAF, a window whose app paints late on a slow guest, and a DEAF window that never had a frame
-                 // is withheld until it is registered again.
-                 ((c.lastArrivalTick == 0 && c.ladderFresh) ||
-                  (c.pokePendingSince && GetTickCount64() - c.pokePendingSince >= WGCBRK_WGC_QUIET_MS &&
-                   (!c.relay || RelaySrcDecides(i))))) {
+                 // NO SESSION'S FIRST FRAME IS TIMED: a loaded guest paints late, and a first frame owed is no evidence of
+                 // deafness. Only a key or click made after this session opened (OpenChannel seeds the baseline) and left
+                 // unanswered decides anything.
+                 c.pokePendingSince && GetTickCount64() - c.pokePendingSince >= WGCBRK_WGC_QUIET_MS &&
+                 (!c.relay || RelaySrcDecides(i))) {
             // BEHAVIOURAL DETECTION - this, not the structural test, is what decides.
             //
             // A visible, unminimised window whose WGC feed has said NOTHING since it opened is a
@@ -1867,7 +1880,7 @@ static void Reconcile() {
             // order as the single-window cost already called unacceptable. Jev rated that
             // blocking at 0.87 and this refinement at 0.96.
             g_slots[i].Reroutes++;
-            const bool wasRelay = c.relay;   // read BEFORE CloseChannel wipes it
+            const bool wasRelay = c.relay;
             const bool wasPlainWgc = !c.relay && !c.pw;
             // A SESSION THAT DELIVERED IS NOT DEAF. This one produced at least its StartCapture frame, so WGC does serve
             // this window; an unanswered poke after that is either a false poke (DWM recomposed the window's area without
@@ -1876,12 +1889,11 @@ static void Reconcile() {
             // cost its content for as long as it lives. So the deaf hold is reserved for a FRESH session that delivered
             // nothing at all; each recreate is counted (QuietReroutes) and reported by the agent (QGAWGCRECREATE).
             const bool delivered = (c.lastArrivalTick != 0);
-            CloseChannel(i);          // wipes the Channel - so set the survivors AFTER it
             // THE LADDER ON 26100+ (rest-zero E, c2). A quiet plain-WGC channel gets ONE fresh plain-WGC session
             // (g_wgcReopened); then the relay, only where the probe showed its destination can be captured
             // (RelayUsable, G), with one re-open of its own (its session is what dies after a cold boot - see
-            // g_relayReopened); past that the window is DEAF: FAILED + WGCBRK_E_DEAF, held until the agent asks again
-            // (DeclareDeaf). The PrintWindow rung and its probe are gone - a polled render was the last rung, and on a
+            // g_relayReopened); past that the window is DEAF: FAILED + WGCBRK_E_DEAF, its session held open until it
+            // delivers or the agent asks again (DeclareDeaf). The PrintWindow rung and its probe are gone - a polled render was the last rung, and on a
             // window that is merely static it rendered for ever (c2: 0.05).
             // QuietReroutes counts SESSIONS RECREATED - the agent reports each one as QGAWGCRECREATE - so it moves only on a
             // rung that reopens, and only if that open did not itself end in the deaf hold (OpenChannel declares DEAF when a
@@ -1889,26 +1901,37 @@ static void Reconcile() {
             // reported as a recreate that never happened, next to its QGAWGCDEAF (rest-zero M7 deaf cell, 2026-10-01).
             // ADR-capture 32 (owner 2026-10-02): THE RELAY IS NO LONGER A RUNG OF THIS LADDER. A plain WGC channel that stays
             // quiet gets ONE fresh session (a session that delivered gets one on every quiet episode); a fresh session that
-            // delivers nothing is DEAF, which the agent now reports to the user. The relay's invisible destination sits over
-            // other windows and its recompositions got a neighbour falsely recreated (rz27 FI cell); the relay remains a
-            // CAPTURE ROUTE for a window opened on it (cross-process content), with its own re-open below.
-            bool reopened = true;
-            if (wasPlainWgc && (!g_wgcReopened[i] || delivered)) { g_wgcReopened[i] = true; g_forcePw[i] = false; OpenChannel(i); g_ch[i].ladderFresh = true; }
-            else if (wasRelay && (!g_relayReopened[i] || delivered)) { g_relayReopened[i] = true; g_forcePw[i] = true; OpenChannel(i); g_ch[i].ladderFresh = true; }
-            else                                       { reopened = false; DeclareDeaf(i); }
-            if (reopened && !g_deafHold[i]) g_slots[i].QuietReroutes++;   // an open that itself ended DEAF recreated nothing
+            // has delivered nothing when a later key or click goes unanswered is DEAF, which the agent reports to the user.
+            // The relay's invisible destination sits over other windows and its recompositions got a neighbour falsely
+            // recreated (rz27 FI cell); the relay remains a CAPTURE ROUTE for a window opened on it (cross-process
+            // content), with its own re-open below.
+            // THE DEAF SESSION IS KEPT OPEN, so a frame it delivers late revives the slot (the top of this loop). Only the
+            // recreate rung closes it, so the rung is decided first.
+            const bool plainRung = wasPlainWgc && (!g_wgcReopened[i] || delivered);
+            const bool relayRung = wasRelay && (!g_relayReopened[i] || delivered);
+            if (plainRung || relayRung) {
+                CloseChannel(i);      // wipes the Channel - so set the survivors AFTER it
+                if (plainRung) { g_wgcReopened[i] = true;   g_forcePw[i] = false; }
+                else           { g_relayReopened[i] = true; g_forcePw[i] = true;  }
+                OpenChannel(i);
+                if (!g_deafHold[i]) g_slots[i].QuietReroutes++;   // an open that itself ended DEAF recreated nothing
+            } else {
+                PubLock lk(i);        // a first frame landing while this pass decided answers the poke: not deaf
+                if (!c.lastArrivalTick) DeclareDeaf(i);
+            }
         }
         // THE NEXT MOMENT THIS SLOT'S ANSWER CAN CHANGE WITHOUT A NEW REQUEST (rest-zero D) - armed only while something
-        // is owed: a first frame (R2), an unanswered poke (R3), a throttled relay source test, a relay size settling. At
+        // is owed: an unanswered poke (R3), a throttled relay source test, a size drop or a relay size settling. At
         // rest none of these hold, so nothing is armed and the loop sleeps until an event.
         {
             const Channel& n = g_ch[i];
-            if (wantOpen && n.hwnd == want && !n.pw && !(n.relay && g_relayNoDemote) &&
+            // A held slot arms nothing: none of its tests runs, and a deadline already past would wake this loop at once,
+            // every pass, for as long as the hold lasts. A revival needs no deadline: PublishFrame makes the slot ACTIVE
+            // itself, and the next pass clears the hold.
+            if (wantOpen && !g_deafHold[i] && n.hwnd == want && !n.pw && !(n.relay && g_relayNoDemote) &&
                 IsWindow(want) && IsWindowVisible(want) && !IsIconic(want)) {
                 const ULONGLONG since = n.lastArrivalTick ? n.lastArrivalTick : n.openTick;
-                if (!n.lastArrivalTick && n.ladderFresh)
-                    Due(since + WGCBRK_WGC_QUIET_MS);                                                     // R2
-                else if (n.pokePendingSince) {
+                if (n.pokePendingSince) {
                     ULONGLONG due = (n.pokePendingSince > since ? n.pokePendingSince : since) + WGCBRK_WGC_QUIET_MS; // R3
                     // A relay's quiet test also needs its source test, which is throttled: the deadline is the LATER of
                     // the two - the earlier one would wake this loop to a test that cannot run yet, every pass, until the
@@ -1919,7 +1942,7 @@ static void Reconcile() {
                 if (!n.relay && n.sizeDropTick)
                     Due(n.sizeDropTick + RELAY_SIZE_SETTLE_MS);                                           // size drop
             }
-            if (wantOpen && n.hwnd == want && n.relay && g_relaySeenTick[i])
+            if (wantOpen && !g_deafHold[i] && n.hwnd == want && n.relay && g_relaySeenTick[i])
                 Due(g_relaySeenTick[i] + RELAY_SIZE_SETTLE_MS);
         }
         s->CtlAck = ctl0;   // after any open/close above: for an unregister, the slot's buffers are no longer ours
