@@ -91,7 +91,7 @@ flowchart TD
 | 30 | A window's own untracked popups occlude its liveness damage | SUPERSEDED by §32 | 2026-10-02 |
 | 31 | Alt-nav key-tip badges are dropped fully | ACCEPTED (owner) | 2026-10-02 |
 | 32 | Liveness from Windows' own events and the relay's measured change; the damage-comparison detector goes | ACCEPTED (owner); amended 2026-11-19; the relay retired by §36 | 2026-10-02 |
-| 33 | On 25H2+ a seamless guest captures per window only; desktop duplication is a window-0 engine, created on demand | ACCEPTED (owner), not yet implemented | 2026-11-19 |
+| 33 | On 25H2+ a seamless guest captures per window only; desktop duplication is a window-0 engine, created on demand | ACCEPTED (owner), implemented, evidence owed | 2026-11-19 |
 | 35 | The shell's drag image is shown by the windows beneath it, never as a window of its own | ACCEPTED (Jev) | 2026-11-15 |
 | 36 | The broker's floor is 25H2; below it the legacy path; the PrintWindow route, the relay and the poke are retired, and a capture the broker cannot open fails loudly | ACCEPTED (owner) | 2026-11-19 |
 
@@ -1056,8 +1056,8 @@ limit that the dom0 -> vchan key hop itself was not exercised.
 
 ## 33. On 25H2 and later a seamless guest captures per window only; desktop duplication is a window-0 engine, created on demand
 
-**Status:** ACCEPTED (owner), 2026-11-19. Not yet implemented. Jev, per item against the owner's words: 3, 4, 5, 6
-follow (0.77, 0.72, 0.91, 0.77); the others under floor, not verdicts.
+**Status:** ACCEPTED (owner), 2026-11-19. Implemented 2026-11-20; the evidence below is owed. Jev, per item against the
+owner's words: 3, 4, 5, 6 follow (0.77, 0.72, 0.91, 0.77); the others under floor, not verdicts.
 
 **Context.** The owner, 2026-11-19: «i want to drop every path that is not per-window», «can we retire whole
 monitor capure slot too», «non-seamless is not touched»; and, ruling on the design the same evening: create the
@@ -1109,7 +1109,8 @@ minutes with no duplication client and every slot still delivering, the IDD outp
 10 and 24H2 capture-path lines unchanged against their baseline.
 
 **Open.** Whether part of the ~550 ms novel-size repaint (`ADR-display.md` §4) disappears in seamless is
-unmeasured.
+unmeasured. The per-window frame ledger (`QGALEDGER`) counts frame walks, which a seamless guest on 26200+ no longer
+makes, so it is silent there.
 
 ## 34. A frame dropped for size is served by one fresh session
 
