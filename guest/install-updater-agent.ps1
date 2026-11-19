@@ -239,7 +239,7 @@ $UpdScanWaitGrace = 'PT3M'
 #     planned servicing reboot is already terminal and needs nothing extra.
 # ---- DEPLOY-PREVPASS-BEGIN   (tools/tests/wu-deploy-prevpass-test.ps1 runs this region)
 $UpdaterStatusFile = 'C:\ProgramData\Qubes\update-status.json'
-$UpdTerminalPhases = @('done','error','skipped-unknown','skipped-standalone','skipped-appvm')
+$UpdTerminalPhases = @('done','error','skipped-unknown','skipped-standalone','skipped-appvm','skipped-signin')
 $updPrev = $null
 try { if (Test-Path -LiteralPath $UpdaterStatusFile) { $updPrev = Get-Content -LiteralPath $UpdaterStatusFile -Raw | ConvertFrom-Json } } catch { $updPrev = $null }
 if ($updPrev -and $updPrev.phase -and ($UpdTerminalPhases -notcontains $updPrev.phase)) {

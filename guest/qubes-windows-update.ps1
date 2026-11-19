@@ -386,7 +386,7 @@ function Save {
 # stamp - changes no update state, so a pass killed in it leaves nothing unknown to inherit. dom0's handler still treats it as
 # NOT terminal and waits for the final error (guest/wu-update.ps1 Test-TerminalPhase). Jev review 2026-10-02: without this, a kill in
 # that ~3 s window would make every later pass refuse.
-$WU_TERMINAL_PHASES = @('done','error','diagnosing','skipped-unknown','skipped-standalone','skipped-appvm')
+$WU_TERMINAL_PHASES = @('done','error','diagnosing','skipped-unknown','skipped-standalone','skipped-appvm','skipped-signin')
 
 function Test-WuOwnerAlive([int]$ownerPid, [string]$ownerStart) {
     if ($ownerPid -le 0) { return $false }
@@ -832,6 +832,35 @@ function Update-UpdaterRegistration([switch]$Add, [switch]$Remove) {
   SetV $key 'UpdaterPids' ([string[]]$keep) 'MultiString'
   Log ("relay registration: " + $(if ($Add) { "this pass $me registered" } else { "this pass $me unregistered" }) + "; $($keep.Count) entr$(if ($keep.Count -eq 1) { 'y' } else { 'ies' }) now")
 }
+# The updates proxy CONFIGURATION alone - no relay, no registration. Ensure-Proxy writes it before starting the relay, and a
+# scheduled scan deferred by Test-ProxyPolicyMissedSignIn writes it so the next sign-in has it. The same four values as
+# install-updater-agent.ps1 step 9b; ensure-autologon part 7 and QwtngNetSetup remove them on every class but a template.
+function Set-ProxyConfiguration {
+  & netsh winhttp set proxy '127.0.0.1:8082' '<local>' | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw "netsh winhttp set proxy exited $LASTEXITCODE" }
+  SetV $POL 'ProxySettingsPerUser' 0 'DWord'; SetV $IS 'ProxyEnable' 1 'DWord'
+  SetV $IS 'ProxyServer' '127.0.0.1:8082' 'String'; SetV $IS 'ProxyOverride' '<local>' 'String'
+}
+
+# Was the per-machine proxy policy in force when the console user signed in, this boot? Windows Update takes its proxy from
+# that policy as it stood at sign-in (ADR-updater section 12.5 row 1); a value written mid-session is not used before the next
+# sign-in. A template made from a StandaloneVM (its root imported) boots without it, because install-updater-agent step 9b
+# writes it only when QWT is installed inside a template. $true = it was NOT in force: absent now with a user signed in, or an
+# earlier pass this boot found it absent. That earlier finding lives in a VOLATILE key - the kernel discards it at shutdown, so
+# its existence IS this boot (the same device as qwt-notify-error.ps1's boot token), with no clock to compare.
+function Test-ProxyPolicyMissedSignIn {
+  $mk = 'SOFTWARE\Qubes\UpdatesProxy\PolicyMissedSignInThisBoot'
+  $hklm = [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::LocalMachine, [Microsoft.Win32.RegistryView]::Registry64)
+  $k = $hklm.OpenSubKey($mk)
+  if ($null -ne $k) { $k.Close(); return $true }
+  if ((Get-ItemProperty -LiteralPath $POL -Name ProxySettingsPerUser -EA SilentlyContinue).ProxySettingsPerUser -eq 0) { return $false }
+  # Nobody signed in yet: the coming sign-in finds what this pass writes.
+  if (-not (Get-CimInstance Win32_ComputerSystem -EA SilentlyContinue).UserName) { return $false }
+  $k = $hklm.CreateSubKey($mk, [Microsoft.Win32.RegistryKeyPermissionCheck]::ReadWriteSubTree, [Microsoft.Win32.RegistryOptions]::Volatile)
+  if ($null -ne $k) { $k.Close() }
+  return $true
+}
+
 function Ensure-Proxy {
   # NEVER ADOPT (ADR-updater 12.4). Until 2026-10-03 this started a relay only if no process NAMED qubes-updates-relay existed and
   # otherwise served through whatever answered on 8082 - measured that day: the boot scan adopted a relay another process had
@@ -839,9 +868,7 @@ function Ensure-Proxy {
   # a refusal naming the owner, before any proxy setting is touched.
   $owner = Get-RelayPortOwner
   if ($owner -ne 0) { throw (Format-RelayRefusal $owner) }   # GUARD:relayrefuse
-  & netsh winhttp set proxy '127.0.0.1:8082' '<local>' | Out-Null
-  SetV $POL 'ProxySettingsPerUser' 0 'DWord'; SetV $IS 'ProxyEnable' 1 'DWord'
-  SetV $IS 'ProxyServer' '127.0.0.1:8082' 'String'; SetV $IS 'ProxyOverride' '<local>' 'String'
+  Set-ProxyConfiguration
   Update-UpdaterRegistration -Add
   Start-Relay
   # Serviceability probe: a relay that exists but is not accepting would fail the pass 0x80072EFD. Stop and respawn ONLY the relay
@@ -3072,6 +3099,20 @@ if ($selfUpdating) {
   } catch {
     Log "StandaloneVM with direct internet, but AUOptions=4 and NoAutoRebootWithLoggedOnUsers=1 could not be written ($($_.Exception.Message)) - NoAutoUpdate is left as it is." 'ERROR'
   }
+} elseif ($vmClassLive -ne 'StandaloneVM') {
+  # THE OTHER HALF, read from the class at THIS pass (owner 2026-11-19: "we may convert between vm types and it should be picked
+  # up boot time"). The branch above removes NoAutoUpdate on a self-updating StandaloneVM, and nothing else ever wrote it back:
+  # a template made from such a standalone kept Windows' own automatic updating ON, and so did every AppVM and DispVM booted
+  # from it - against dom0 owning every install. On those classes it is the installer's value (install-updater-agent step 9)
+  # and is restored here. An offline StandaloneVM is left as it is: it updates itself when it has a route.
+  if ((Get-ItemProperty -LiteralPath $wuAuKey -Name NoAutoUpdate -EA SilentlyContinue).NoAutoUpdate -ne 1) {
+    try {
+      & { $ErrorActionPreference = 'Stop'; SetV $wuAuKey 'NoAutoUpdate' 1 'DWord' }
+      Log "$vmClassLive - Windows' own automatic updating was ON (NoAutoUpdate absent or 0, left by a self-updating StandaloneVM this qube was made from); NoAutoUpdate=1 restored, dom0 drives updates"
+    } catch {
+      Log "$vmClassLive - Windows' own automatic updating is ON and NoAutoUpdate=1 could not be written: $($_.Exception.Message)" 'ERROR'
+    }
+  }
 }
 # ADR-updater 17 decision 2, on every class: warn when what is in force lets Windows restart this guest by itself. It
 # runs after the write above, so the first pass after an upgrade does not warn about the values it has just set.
@@ -3101,7 +3142,22 @@ elseif ($wuCauses) {
   Log "WUAUTORESTART notice: $sent"
 }
 if ($vmClassLive -eq 'TemplateVM') {
-  # the proxy updater's home - fall through to Ensure-Proxy below
+  # the proxy updater's home - fall through to Ensure-Proxy below, unless this session signed in without the proxy policy
+  # (a template made from a StandaloneVM, first boot): a search now would fail 0x8024402C and dom0 would be told "the Windows
+  # Update scan task failed". The configuration is written, the scheduled scan does not search this boot, and the next boot -
+  # signed in with it - scans. Nothing is reported to dom0 as an answer: a pass that did not search is never "no updates", and
+  # phase skipped-signin is not 'done', so the scan-debounce does not suppress the next boot's scan. A pass dom0 starts in the
+  # same boot is not deferred; it meets the restart remedy (GUARD:proxystateremedy). Jev design defer_scan_this_boot 0.82.
+  if ($Scheduled -and $Action -eq 'scan' -and (Test-ProxyPolicyMissedSignIn)) {
+    $configured = $false
+    try { & { $ErrorActionPreference = 'Stop'; Set-ProxyConfiguration }; $configured = $true }
+    catch { Log "the proxy policy was not in force at this sign-in, and the configuration could not be written ($($_.Exception.Message)) - searching anyway" 'ERROR' }
+    if ($configured) {
+      Log 'TemplateVM signed in without the updates proxy policy (made from a StandaloneVM, or the policy was removed): configuration written now; Windows Update reads it at sign-in, so this scheduled scan does not search this boot and the next boot scans'
+      $script:St.phase='skipped-signin'; Save
+      exit 0
+    }
+  }
 } elseif ($vmClassLive -eq 'StandaloneVM') {
   if (-not $selfUpdating) {
     Log 'StandaloneVM, offline - the qubes proxy updater is template-only and never runs here; this VM must update itself. Doing nothing.'

@@ -73,7 +73,7 @@ $preamble = @'
 $ErrorActionPreference = 'Continue'
 $StatusFile = '__STATUS__'
 $Action = '__ACTION__'; $Scheduled = $false
-$WU_TERMINAL_PHASES = @('done','error','diagnosing','skipped-unknown','skipped-standalone','skipped-appvm')
+$WU_TERMINAL_PHASES = @('done','error','diagnosing','skipped-unknown','skipped-standalone','skipped-appvm','skipped-signin')
 $script:St = [ordered]@{ action = 'full'; phase = 'init'; recovered = '' }
 $script:OwnerAlive = __ALIVE__
 function Test-WuOwnerAlive([int]$ownerPid, [string]$ownerStart) { return $script:OwnerAlive }
