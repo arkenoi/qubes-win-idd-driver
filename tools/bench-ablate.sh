@@ -33,7 +33,6 @@ CONFIGS=(
   "noslice:InputDragSlice=0"
   "noevtprio:DragEventPriority=0"
   "nofreeze:InputDragFreezeContent=0"
-  "nopw:PerWindowCapture=0"
 )
 
 echo "== ablation on $VM, $ROUNDS rounds, out=$OUTDIR"
@@ -49,7 +48,7 @@ restart_agent(){  # <tag> -> rc 1 when the restart was not proven
 
 # Every knob any configuration touches, reset before each run, so a configuration can never
 # inherit a switch the previous one set. Forgetting this is how a "ladder" measures itself.
-ALL_KNOBS=(InputDragSlice DragEventPriority InputDragFreezeContent PerWindowCapture)
+ALL_KNOBS=(InputDragSlice DragEventPriority InputDragFreezeContent)
 
 run_cfg() {  # run_cfg <name> <knobspec> <round>
     local name="$1" spec="$2" round="$3" tag="r${3}-${1}"

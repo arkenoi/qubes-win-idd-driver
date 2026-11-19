@@ -301,8 +301,8 @@ captures on this rig** were this condition - a live broker with the window regis
 WARNING here was the project's single largest source of log noise for correct behaviour. The fault is still
 reported, and louder than before: a hold that outlasts `QGA_HOLD_STARVE_MS` is `QGAHOLDSTARVED` at **ERROR**,
 naming the stale pixels, and that is the bound this INFO line escalates through. `QGADESLICEDOWN` and the
-registry flag are unchanged, so nothing about the de-slice verdict rests on this level. The sanctioned quiet paths are the deliberate `WgcBroker=0`
-opt-out, and builds below the floor.
+registry flag are unchanged, so nothing about the de-slice verdict rests on this level. The sanctioned quiet path is a build below the floor (the
+`WgcBroker` opt-out is retired, ADR-capture 33).
 
 **Evidence** (three arms, same toast, package agent bd9f410 on win11 26100): 4.3.17 with NO broker present
 rendered the toast (the fallback, and the proof the check can fail); fix + broker alive rendered correctly; fix

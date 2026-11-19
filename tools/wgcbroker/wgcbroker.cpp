@@ -7,9 +7,8 @@
 // S4). Build: mirror tools/wgcprobe (v143, /MT, stdcpp17,
 // windowsapp.lib, no WDK/nuget).
 //
-// SCOPE (adversary): the broker exists for OCCLUDED app/NRB windows where the composited slice
-// bleeds the occluder. Topmost surfaces (toasts, o-r menus) stay on the slice - the agent does
-// not register them. The broker just captures whatever HWNDs the agent asks for.
+// SCOPE: the broker captures whatever HWNDs the agent asks for, each from its own window capture;
+// it never captures the monitor (ADR-capture 33).
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
@@ -739,10 +738,10 @@ static void OpenChannel(int i) {
     // the earlier open was being consumed. So the block is claimed only once this open has a real
     // capture item, and a failed open now leaves the working one's record intact.
     const LONGLONG openT = QpcNow();
-    bool monitor = (s->Hwnd == WGCBRK_MONITOR_HWND);
-    HWND hwnd = monitor ? nullptr : (HWND)(ULONG_PTR)s->Hwnd;
+    // A slot is always one window (ADR-capture 33): no value of Hwnd means the monitor.
+    HWND hwnd = (HWND)(ULONG_PTR)s->Hwnd;
     // A window that is gone is E_HANDLE - the agent does not report it as refused (DirectSuppressFault).
-    if (!monitor && (!hwnd || !IsWindow(hwnd))) { HoldFailed(i, E_HANDLE); return; }
+    if (!hwnd || !IsWindow(hwnd)) { HoldFailed(i, E_HANDLE); return; }
     // A UWP-STYLE FRAME (ApplicationFrameWindow with its CoreWindow in another process) IS CAPTURED ON THE WINDOW ITSELF,
     // like any other window: measured 2026-09-30 on 26100.1742 with our agent and broker stopped, a direct session on the
     // Settings frame returns the full page and delivers a burst on each navigation.
@@ -751,19 +750,8 @@ static void OpenChannel(int i) {
     try {
         auto interop = get_activation_factory<GraphicsCaptureItem, IGraphicsCaptureItemInterop>();
         GraphicsCaptureItem item{ nullptr };
-        if (monitor)
-        {
-            // EXACTLY wgcprobe's proven call: CreateForMonitor takes only the HMONITOR, so the
-            // handle is the sole variable, and MonitorFromPoint({0,0}, DEFAULTTOPRIMARY) is what
-            // captured the monitor successfully from a Task-Scheduler /it launch. (MonitorFromWindow
-            // (GetDesktopWindow()) was an earlier wrong theory - the real fix was the launch path.)
-            HMONITOR hmon = MonitorFromPoint(POINT{0,0}, MONITOR_DEFAULTTOPRIMARY);
-            check_hresult(interop->CreateForMonitor(hmon,
-                          guid_of<GraphicsCaptureItem>(), reinterpret_cast<void**>(put_abi(item))));
-        }
-        else
-            check_hresult(interop->CreateForWindow(hwnd, guid_of<GraphicsCaptureItem>(),
-                          reinterpret_cast<void**>(put_abi(item))));
+        check_hresult(interop->CreateForWindow(hwnd, guid_of<GraphicsCaptureItem>(),
+                      reinterpret_cast<void**>(put_abi(item))));
         // This open has a real capture item: claim the tick block for it, in order.
         s->TickHwnd  = s->Hwnd;
         s->TickOpenOk = 0;
@@ -803,15 +791,14 @@ static void OpenChannel(int i) {
         // window and is unaffected, because it is still captured and announced as before.
         try { session.IncludeSecondaryWindows(true); } catch (...) {}
         
-        // DIRTY REGIONS (rest-zero S1) on a window session only: the monitor keeps the whole-frame path. ReportOnly:
-        // complete surfaces, regions reported; PublishFrame reads only the regions.
-        if (g_dirtyApi && !monitor) {
+        // DIRTY REGIONS (rest-zero S1). ReportOnly: complete surfaces, regions reported; PublishFrame reads only the regions.
+        if (g_dirtyApi) {
             if (g_dirtyModeOn) { try { session.DirtyRegionMode(GraphicsCaptureDirtyRegionMode::ReportOnly); c.dirty = true; } catch (...) {} }
             if (g_minUpdateApi && g_minUpdateMs >= 0) {
                 try { session.MinUpdateInterval(winrt::Windows::Foundation::TimeSpan{ std::chrono::milliseconds(g_minUpdateMs) }); } catch (...) {}
             }
         }
-        c.hwnd = monitor ? (HWND)(ULONG_PTR)WGCBRK_MONITOR_HWND : hwnd;
+        c.hwnd = hwnd;
         c.item = item; c.pool = pool; c.session = session; c.slot = i;
         // WGC can CLOSE a capture item, after which FrameArrived never fires again for that session. The handler records
         // it and wakes this loop, and Reconcile reopens the channel (g_closedReopened).
@@ -926,7 +913,7 @@ static void OpenChannel(int i) {
     // the code that refused it, and the agent reports it (DirectSuppressFault). A window that closed while it was being
     // opened is E_HANDLE, so it is not reported as refused. A throw after the pool and session were stored left them on
     // the channel: they are closed first, because CloseChannel frees the slot and the hold must come after it.
-    if (!monitor && !IsWindow(hwnd)) hr = E_HANDLE;
+    if (!IsWindow(hwnd)) hr = E_HANDLE;
     if (c.hwnd) CloseChannel(i);
     HoldFailed(i, hr);
 }
