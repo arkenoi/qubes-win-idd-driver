@@ -58,7 +58,10 @@ qvm-prefs "$VM" maxmem 8192
 qvm-prefs "$VM" vcpus 4
 qvm-prefs "$VM" qrexec_timeout 300
 qvm-prefs "$VM" netvm ''
-qvm-volume extend "$VM:root" 80GiB
+# ROOT_GIB: 80 for the retail bases; a stripped image such as Tiny11 holds ~16 GB after QWT and
+# gets 30 (owner 2026-11-19: «you do not need tiny11 disks to be that huge»). A thin volume
+# cannot be shrunk and every clone inherits its size, so it is chosen here, once.
+qvm-volume extend "$VM:root" "${ROOT_GIB:-80}GiB"
 # EXTEND THE PRIVATE VOLUME TOO. This is the THIRD script to need this fix, which is the point:
 # scratchpad/reprovision.sh and mgmt/clone-to-template.sh both already do it, and this one - the
 # script that builds the GOLDENS - did not, so every golden and every clone taken from it carried

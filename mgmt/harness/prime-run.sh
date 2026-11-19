@@ -254,7 +254,12 @@ qvm-remove -f "$CHURN" >/dev/null 2>&1
 # create -> TAG -> copy volumes, in that order. A single qvm-clone copies volumes before the tags
 # exist, and dom0 policy here is TAG-based, so the volume call lands on a qube policy does not yet
 # cover and is refused.
-qvm-create --class StandaloneVM --label red --property virt_mode=hvm --property kernel='' "$CHURN" \
+# PRIME_CLASS=TemplateVM installs the payload INSIDE a template - the owner's own path (install.cmd in
+# a TemplateVM), which a StandaloneVM converted afterwards does not reproduce (2026-11-19). Default
+# unchanged; netvm is '' below either way, as a template's must be.
+PRIME_CLASS="${PRIME_CLASS:-StandaloneVM}"
+case "$PRIME_CLASS" in StandaloneVM|TemplateVM) ;; *) log "[ERROR] TERMINAL: PRIME_CLASS=$PRIME_CLASS (StandaloneVM or TemplateVM)"; exit 1 ;; esac
+qvm-create --class "$PRIME_CLASS" --label red --property virt_mode=hvm --property kernel='' "$CHURN" \
   || { log "[ERROR] TERMINAL: could not create $CHURN"; exit 1; }
 qvm-tags "$CHURN" add win-idd-testbed || { log "[ERROR] TERMINAL: could not tag $CHURN"; exit 1; }
 qvm-features "$CHURN" os Windows
