@@ -1096,7 +1096,9 @@ and the hold and ledger accounting.
 10. Below build 26200 nothing else changes: the duplication is the capture engine there.
 
 **Cost.** Entering the non-seamless desktop takes the time to create the duplication, and can be refused. A second
-entry starts from a cleared buffer.
+entry starts from a cleared buffer. While the non-seamless desktop is shown on 26200+, its capture thread wakes once
+a second at rest (`FRAME_TIMEOUT`), as it always has below 26200: the release on the return has to reach a thread
+that no frame may wake, and an acquire with no timeout would leave it abandoned with the buffer uncleared.
 
 **Evidence.** Owed, each able to fail, on the short cycle over the sealed 26200 and 26300 goldens: a cold boot with
 autologon shows its windows, 10 boots each, with the input desktop seen on a notification; a lock and unlock and a
