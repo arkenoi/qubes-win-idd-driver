@@ -189,8 +189,7 @@ function Get-LswLogDirCandidates {
     # .ToArray(), NOT `return ,$out`: the comma idiom used elsewhere in this file wraps a List so the
     # pipeline does NOT enumerate it, which is right for Read-LswLines and wrong here - the caller
     # does `foreach ($d in (Get-LswLogDirCandidates))`, so a non-enumerating return binds $d to the
-    # List itself and Test-Path is handed an object instead of a path. Caught by the functional leg
-    # in tools/tests/collector-logdir-default-selftest.sh, which read Count=1 for three candidates.
+    # List itself and Test-Path is handed an object instead of a path.
     return $out.ToArray()
 }
 
