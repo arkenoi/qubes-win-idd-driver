@@ -252,6 +252,48 @@ public class QwtngNetSetup : ServiceBase {
         }
     }
 
+    // THE TEMPLATE'S UPDATES PROXY IS GONE BEFORE THE ADDRESS EXISTS (ADR-updater section 18 point 4). A template keeps
+    // the proxy configured on its root (point 1), so every qube made from it boots with it, and nothing serves
+    // 127.0.0.1:8082 there. This service is the only thing that gives the PV NIC an address (manual, DHCP disabled), so
+    // removing the proxy here - from the LIVE qubesdb class, never the Q: cache an AppVM inherits from its template's
+    // private volume - and before Apply means no process in this qube ever has a network while that proxy is set.
+    // Measured 2026-11-19 on t11-fa (AppVM of a TemplateVM): sign-in at +33.5 s, ensure-autologon part 7 removed the
+    // proxy at +86 s, and a page fetch in between failed "Unable to connect to the remote server". Part 7 stays as the
+    // backstop for a boot whose qubesdb never answered (the cache path below, already Loud). OURS only, part 7's tests:
+    // a WinHTTP or WinINET proxy that is not ours, and the policy value when the machine proxy is someone else's, stay.
+    static void RemoveTemplateProxy(string vmClass) {
+        const string ours = "127.0.0.1:8082";
+        var done = new List<string>();
+        try {
+            string d;
+            if (Netsh("winhttp show proxy", out d) == 0 && d.Contains(ours) && Netsh("winhttp reset proxy", out d) == 0)
+                done.Add("WinHTTP proxy");
+            string ps = null;
+            using (RegistryKey k = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Internet Settings", true)) {
+                if (k != null) {
+                    ps = k.GetValue("ProxyServer") as string;
+                    if (ps == ours) {
+                        k.SetValue("ProxyEnable", 0, RegistryValueKind.DWord);
+                        k.DeleteValue("ProxyServer", false); k.DeleteValue("ProxyOverride", false);
+                        done.Add("machine WinINET proxy");
+                    }
+                }
+            }
+            if (string.IsNullOrEmpty(ps) || ps == ours)
+                using (RegistryKey k = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Policies\Microsoft\Windows\CurrentVersion\Internet Settings", true)) {
+                    if (k != null && k.GetValue("ProxySettingsPerUser") != null) { k.DeleteValue("ProxySettingsPerUser", false); done.Add("per-machine proxy policy"); }
+                }
+            using (RegistryKey k = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Qubes\UpdatesProxy", true)) {
+                if (k != null && k.GetValue("UpdaterPids") != null) { k.DeleteValue("UpdaterPids", false); done.Add("relay registration"); }
+            }
+        } catch (Exception e) {
+            Log('E', "updates proxy: removing it on this " + vmClass + " failed - " + e.Message + " (ensure-autologon part 7 removes it after sign-in)");
+            return;
+        }
+        Log(done.Count > 0 ? "updates proxy: removed on this " + vmClass + " before its address - " + string.Join(", ", done.ToArray())
+                           : "updates proxy: none of ours on this " + vmClass);
+    }
+
     // 1 = a PRESENT XENBUS VIF PDO (pre-driver) or XENVIF devnode exists, 0 = none, -1 = the probe
     // itself failed. PRESENT-filtered on purpose, exactly like the payload's Get-PnpDevice
     // -PresentOnly: a netvm once attached then removed leaves a GHOST devnode that must not count
@@ -445,6 +487,11 @@ public class QwtngNetSetup : ServiceBase {
                     ip = k.ip; mask = k.mask; gw = k.gw; d1 = k.d1; d2 = k.d2;
                     keysVerdict = k.verdict; keysWhy = k.why;
                     Log("qubesdb " + k.verdict + ": ip=" + ip + " gw=" + gw + (k.why.Length > 0 ? " (" + k.why + ")" : ""));
+                    // Before the adapter wait and Apply below: see RemoveTemplateProxy.
+                    string vmClass = Rd(hh, "/type") ?? Rd(hh, "/qubes-vm-type");
+                    if (vmClass == null) Log("updates proxy: the qube class is unreadable from qubesdb - left to ensure-autologon part 7");
+                    else if (vmClass != "TemplateVM") RemoveTemplateProxy(vmClass);
+                    else Log("updates proxy: kept on this TemplateVM (ADR-updater section 18 point 1)");
                 } finally { qdb_close(h); }
             } else Loud("qubesdb never opened within 180 s (QdbDaemon late or absent) - falling back to the Q: cache, which may be another boot's or lineage's addressing");
         } catch (Exception e) { Log('E', "qdb EXCEPTION " + e.Message); }
