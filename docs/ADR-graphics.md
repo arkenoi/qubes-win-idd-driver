@@ -12,7 +12,7 @@ and this row is wrong. Explanations for the reader live in `docs/design/DESIGN-g
 |---|---|---|---|
 | G1 | The IddCx driver ships on and is the guest's sole active output; the emulated adapter is disabled. | `ADR-display.md` §1 | ACCEPTED (owner) |
 | G2 | The mode list is ours: the agent is the sole writer, and nothing ever snaps to a nearby resolution. | `ADR-display.md` §4 | ACCEPTED |
-| G3 | On build 26100+ the WGC broker is latched at agent start and is the pixel source for every ordinary window. | `ADR-capture.md` §18 | ACCEPTED, measurement owed |
+| G3 | On build 26200+ the WGC broker is latched at agent start and is the pixel source for every window; a window whose capture cannot be opened is not shown, and the user is told. | `ADR-capture.md` §18, §36 | ACCEPTED, measurement owed |
 | G4 | Below 26100 the PrintWindow engine remains. No timed PrintWindow on any build. | `ADR-capture.md` §1, §4 | ACCEPTED |
 | G5 | Capabilities are latched at start and never re-read; a component that was working and stops is a failure, never a mode change. | `ADR-capture.md` §1; `ADR-toasts.md` §7; `ADR-README.md`, cross-cutting rules | ACCEPTED |
 | G6 | No silent fallback and no silent recovery: fail hard and visibly; a withheld window is reported only for a definitive fault. | `ADR-windows.md` §8 and §12; `ADR-README.md`, cross-cutting rules | ACCEPTED (owner) |
@@ -37,7 +37,7 @@ and this row is wrong. Explanations for the reader live in `docs/design/DESIGN-g
 
 | id | item | tracked in | status |
 |---|---|---|---|
-| P1 | Covered-window refresh below 26100: WGC is unavailable there, so the sweep remains until a per-window change event exists or the owner decides otherwise. | `ADR-capture.md` §7 | OPEN below 26100; answered on 26100+ by §18 |
+| P1 | Covered-window refresh below 26200: the broker does not run there (`ADR-capture.md` §36), so the sweep remains until a per-window change event exists or the owner decides otherwise. | `ADR-capture.md` §7 | OPEN below 26200; answered on 26200+ by §18 |
 | P2 | The echo guard's main cost on the PrintWindow path is unmeasured; the guard stays, and widening or retiring it waits for the number. | `ADR-capture.md` §9 | ACCEPTED, PROVISIONAL |
 | P3 | Non-seamless frame supply on later entries: the capture thread's departure is noticed (`QGACAPDEAD`); its root cause is open. | `ADR-windows.md` §5 | OPEN |
 

@@ -287,7 +287,7 @@ composite slice -> legacy (dom0 composites from the window-0 grant). Rung 2 was 
 so the composite served exactly the case that most needs a hard failure, the broker being DOWN, and a toast
 rendered fine out of the desktop map while nothing said so.
 
-**Decision.** `DirectRequired()` - broker gate && build >= 26100 && `PwEnabled` - is the single verdict, an
+**Decision.** `DirectRequired()` - broker gate && build >= 26200 (`ADR-capture.md` §36) && `PwEnabled` - is the single verdict, an
 ELIGIBILITY test, not an availability test. On an eligible guest with the broker down a window HOLDS its last
 content, `BROKERHOLD ... (direct required: composite fallback refused)` is logged, `QGADESLICEDOWN`
 and the `DesliceBrokerDown` registry flag say why, and the window stays MAPPED - black if it never had content -

@@ -20,7 +20,6 @@
 #include <future>
 #include <chrono>
 #include <dxgi.h>
-#include <dwmapi.h>
 #include <wtsapi32.h>   // WTSRegisterSessionNotification (rest-zero S4: the console-session check is an event)
 #include <winrt/base.h>
 #include <winrt/Windows.Foundation.h>
@@ -44,17 +43,12 @@ static void PublishSignature(int i, const BYTE* buf, int w, int h);
 
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxgi.lib")
-#pragma comment(lib, "dwmapi.lib")
 #pragma comment(lib, "wtsapi32.lib")
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "gdi32.lib")
 #pragma comment(lib, "advapi32.lib")
 #pragma comment(lib, "kernel32.lib")
 #pragma comment(lib, "windowsapp.lib")
-
-#ifndef PW_RENDERFULLCONTENT
-#define PW_RENDERFULLCONTENT 0x00000002
-#endif
 
 using namespace winrt;
 using namespace winrt::Windows::Graphics::Capture;
@@ -95,32 +89,6 @@ static HANDLE            g_agent= nullptr;
 // REST-ZERO S1: GraphicsCaptureSession.DirtyRegionMode and Direct3D11CaptureFrame.DirtyRegions are present (24H2+),
 // latched once at start like every capability (CLAUDE.md: decided at START). Absent, every arrival is read whole.
 static bool              g_dirtyApi = false;
-#ifndef WGCBRK_FAULT_INJECTION
-#define WGCBRK_FAULT_INJECTION 0
-#endif
-#if WGCBRK_FAULT_INJECTION
-// TEST BUILDS ONLY (qwt-full fault_injection=true; a release broker has none of this). The deaf-session test: every WGC
-// arrival of the window whose HWND (hex) is written in C:\Users\Public\qwt-fi-deaf-hwnd.txt is dropped before the broker
-// counts it as delivered. On a relay window the quiet test then sees a session that stopped delivering, re-opens it, sees
-// the fresh one deliver nothing, and declares DEAF (QGAWGCRECREATE, then QGAWGCDEAF in the agent's log); a plain-WGC
-// window just stops updating, which nothing tests for. Re-read at most twice a second, and only when an arrival asks (no
-// timer). Arrivals of different slots run on different WGC threadpool threads under different locks: one caller wins the
-// refresh, the others return the last value it published.
-static HWND FiDeafHwnd() {
-    static volatile LONG64 at = 0; static HWND volatile h = nullptr;
-    const LONG64 now = (LONG64)GetTickCount64(), last = at;
-    if (now - last >= 500 && _InterlockedCompareExchange64(&at, now, last) == last) {
-        HWND v = nullptr;
-        if (FILE* f = _wfopen(L"C:\\Users\\Public\\qwt-fi-deaf-hwnd.txt", L"r")) {
-            unsigned long long x = 0;
-            if (fscanf_s(f, "%llx", &x) == 1) v = (HWND)(ULONG_PTR)x;
-            fclose(f);
-        }
-        h = v;
-    }
-    return h;
-}
-#endif
 static DWORD             g_mySession = 0;
 static DWORD             g_launcherPid = 0;
 static com_ptr<ID3D11Device>        g_d3d;
@@ -136,85 +104,18 @@ struct Channel {
     Direct3D11CaptureFramePool::FrameArrived_revoker rev;
     GraphicsCaptureItem::Closed_revoker closedRev;   // ABI 16: see ItemClosed in wgcbroker_ipc.h
     int slot = -1;
-    // PrintWindow fallback: WGC CreateForWindow rejects override-redirect menus/popups
-    // (itemCreated fails), but PrintWindow(PW_RENDERFULLCONTENT) captures them from THIS user
-    // session (proven). When WGC fails, the channel switches to a polled PrintWindow into a
-    // top-down 32bpp DIB, published through the same seqlock. True-black results (CoreWindows,
-    // NRB/ULW) fail the non-black check and fall back to the agent's slice.
-    bool    pw     = false;   // this channel is PrintWindow-polled, not WGC
-    HDC     pwDC   = nullptr;  // memory DC holding pwBmp
-    HBITMAP pwBmp  = nullptr;  // top-down 32bpp DIB section (BGRX)
-    void*   pwBits = nullptr;  // pixels of pwBmp
-    int     pwW = 0, pwH = 0;  // current DIB dimensions
     // WGC pool size, tracked so FrameArrived can follow the window's CONTENT size instead of
     // the agent's requested (possibly CROPPED) size - see the FrameArrived comment.
     int     poolW = 0, poolH = 0;
-    // Last PrintWindow render: the poke coalescing interval runs from here (a deadline, never a tick).
-    ULONGLONG pwLastTick = 0;
-    // REST-ZERO S3: a PrintWindow slot renders on open and on its own pokes ONLY - the staleness backstop, its adaptive
-    // backoff and the futile-poke stretch are gone with the timer they tuned. What stays bounded is the FIRST frame: a
-    // popup rendered before it painted comes back black (FAILED, 0x103) and its own paint may land inside the pass whose
-    // damage the agent attributes to its appearance, so the open is retried on a short schedule (WGCBRK_PW_FIRST_MS)
-    // until one render publishes - a request deadline (R2), armed by the open and ended by the frame or the schedule.
-    int       pwTries = 0;
-    // BEHAVIOURAL DETECTION. When this WGC channel opened, and when it last delivered a frame.
-    // A visible window whose feed has been silent since it opened is one WGC is not serving.
-    ULONGLONG openTick = 0;
+    // When this channel last delivered a frame (0 = never): a reopened item that Windows closes again before it
+    // delivered anything goes DEAF (see g_closedReopened).
     ULONGLONG lastArrivalTick = 0;
-    // The fresh session the quiet ladder opened after an unanswered key or click - the only session whose first
-    // frame is timed (R2). Every other open waits for its first frame however long the window takes to paint.
-    bool      ladderFresh = false;
     // A frame FrameArrived dropped for size with nothing published since: when (0 = none owed) and its content size.
     // The recreated pool delivers the window at that size only when the window next changes; see SizeDropOwed.
     ULONGLONG sizeDropTick = 0;
     LONG      sizeDropW = 0, sizeDropH = 0;
-    // ABI 10: the source-change test used before demoting a RELAY. A hash of the SOURCE window's
-    // own pixels at the moment of the last demotion question, plus when it was taken, so the test
-    // is throttled rather than run on every loop tick.
-    unsigned long long srcHash     = 0;
-    ULONGLONG          srcHashTick = 0;
-    bool               srcHashSeen = false;
-    // ADAPTIVE INTERVAL between source-change tests, same philosophy as the PrintWindow backoff
-    // below and for the same reason. The demotion question is asked on EVERY loop tick once a
-    // channel is quiet, so a fixed short throttle would run PrintWindow several times a second per
-    // static window - at a measured p50 of 31-49 ms on the target's own UI thread that is worse
-    // than the polled fallback this work exists to remove. Unchanged doubles it to the ceiling;
-    // a change resets it, so detection stays prompt exactly when something is happening.
-    ULONG              srcHashMs   = 500;
-    // CONSECUTIVE measured source changes with no frame in between. A SINGLE change must not demote:
-    // measured 2026-09-26 on win11de-led4, the one class that still fell back did so on
-    // srcChanged=1 pwFail=0 - one differing render, permanently onto the polled path, while the
-    // control (demotion disabled) held every class on an arrival-driven route. The founding symptom
-    // this detector exists for was FramesArrived frozen at 3 while a control ran 637->678 over 23 s,
-    // i.e. damage repeatedly with NO frames at all - not one sample. Jev:
-    // require-repeated-changes-with-no-frames 0.93. Reset by any arriving frame and by any measured
-    // SAME, so the streak only ever counts an unbroken run of "the source moved and nothing came".
-    int                srcChangeStreak = 0;
-    // ---- THE DWM-THUMBNAIL RELAY (ABI 8) ----------------------------------------------------
-    // A window whose own surface is empty has nothing for WGC to capture, and PrintWindow is a PULL
-    // api, so a slot that falls back to it has no arrival event and must be driven by an invented
-    // clock. DWM will draw a live copy of ANY window it composites into a destination window we
-    // own; capturing THAT destination is arrival-driven again. Measured with tools/thumbprobe on
-    // win11de-led (German 25H2), 11/11 rogue windows at oneToOne=1, including the toast
-    // (Windows.UI.Core.CoreWindow) that CreateForWindow refuses outright.
-    //
-    // The destination is WS_EX_LAYERED at alpha 0, NOT off-screen: both composite, but off-screen
-    // returned alphaZero=511/2640 where alpha-0 and on-screen both returned a uniform 255.
-    // PokeSeq as it stood when this channel last delivered a frame. The difference against the live
-    // PokeSeq is "damage the agent saw since our last frame" - the only thing that separates an IDLE
-    // arrival-driven channel from a BROKEN one. Without it the quiet detector demoted channels that
-    // had delivered thousands of frames and simply gone quiet (measured: 2934 on one slot), and
-    // demoting idle to polled is backwards on cost (Jev 0.84).
-    LONG        pokeAtLastArrival = 0;
-    // When the broker first saw damage that no frame has answered yet (0 = none pending). The quiet test times the
-    // silence from HERE, not from the last arrival - see the pending-damage tracker in Reconcile.
-    ULONGLONG   pokePendingSince = 0;
-    HWND        relayDest  = nullptr;   // the window we own that carries the thumbnail
-    HTHUMBNAIL  relayThumb = nullptr;
-    bool        relay      = false;     // this channel captures relayDest, not c.hwnd
-    int         relayW = 0, relayH = 0; // relayDest's size = the thumbnail source size when it was opened
     // ---- THE LAST FULL-WINDOW CAPTURE, KEPT FOR REPUBLISHING --------------------------------
-    // WGC and the relay publish only inside FrameArrived, and a static window sends no arrival.
+    // WGC publishes only inside FrameArrived, and a static window sends no arrival.
     // Every agent (re-)registration or retarget writes a new card geometry, fresh buffers and a
     // reset Seq/Ack, and bumps ControlSeq - so a static window whose card moved was never served
     // again. Measured 2026-09-27 on win11de-v5, three cold boots: the toast host re-registered at
@@ -248,51 +149,11 @@ struct Channel {
     bool        triedValid  = false;
 };
 static std::vector<Channel> g_ch(WGCBRK_MAX_SLOTS);
-// These two MUST outlive a channel. CloseChannel does `c = Channel{}`, so anything kept in the
-// Channel is erased by the very close that precedes a re-open - measured 2026-09-25: forcePw was
-// set, then wiped by CloseChannel, so the re-route reopened on WGC and did nothing, the probe
-// never ran (probeBounces stayed 0) and the hysteresis never applied, leaving an idle window's
-// channel closed and reopened every quiet period for ever - 38 times on a window whose feed was
-// perfectly healthy. Per-slot, not per-channel.
-static bool      g_forcePw[WGCBRK_MAX_SLOTS]      = {};
-// A RELAY THAT WENT QUIET MUST BE ABLE TO REACH PRINTWINDOW. The quiet re-route sets g_forcePw and
-// reopens, but g_forcePw only means "do not try WGC on the window itself" - the reopen then chose the
-// RELAY again, so a relay delivering nothing looped back onto itself for ever and the polled fallback
-// was unreachable. This veto is what lets the ladder finish: WGC -> relay -> PrintWindow.
-// Set AFTER CloseChannel, never before: CloseChannel wipes the Channel, which is exactly how the
-// earlier g_forcePw assignment got erased and cost 38 needless re-routes on a healthy window.
-static bool      g_noRelay[WGCBRK_MAX_SLOTS] = {};
-// A RELAY DESTINATION IS SIZED ONCE (2026-09-30). RelayOpenDest sizes it to the thumbnail source size at open, and
-// DWM draws the source scaled into it. When the source window later changes size, the agent retargets the card (a
-// new ControlSeq) but the destination never followed: a LARGER card can never be cut from it (PublishCard and the
-// retained republish both refuse a card the capture does not cover, and a static window brings no arrival), and a
-// smaller one would be cut from a scaled image. Measured on a German 25H2 cold boot: a relay window grew 346x233 ->
-// 348x234 when its caption was restyled, the agent retargeted at once, and its frames were rejected for 16.4 s until
-// the agent's stuck detector forced a full re-registration - whose re-open served the new size 3 ms later. So a relay
-// whose thumbnail source size no longer equals its destination is re-opened through the ordinary Close/OpenChannel
-// path. AT MOST ONCE PER (AGENT REQUEST, SOURCE SIZE): the ControlSeq and the live source size a size re-open was done
-// for survive the close, so even if the open-time probe and the live thumbnail were ever to disagree about the size,
-// this cannot re-open every pass - while a source that changes size AGAIN (with or without a new request) still is.
-// SETTLED, NOT EVERY STEP: a drag-resize makes the agent retarget on every step, and re-opening per step would be the
-// tear-down-and-rebuild-every-pass churn this file has paid for before. The new size must hold for
-// RELAY_SIZE_SETTLE_MS (tracked below, across passes) before the re-open.
-static LONG      g_relaySizeCtl[WGCBRK_MAX_SLOTS]      = {};
-static bool      g_relaySizeCtlValid[WGCBRK_MAX_SLOTS] = {};
-static LONG      g_relayReopenW[WGCBRK_MAX_SLOTS] = {}, g_relayReopenH[WGCBRK_MAX_SLOTS] = {};
-static LONG      g_relaySeenW[WGCBRK_MAX_SLOTS] = {}, g_relaySeenH[WGCBRK_MAX_SLOTS] = {};
-static ULONGLONG g_relaySeenTick[WGCBRK_MAX_SLOTS] = {};
-#define RELAY_SIZE_SETTLE_MS 150
-// ONE FRESH SESSION BEFORE THE LADDER DROPS A RELAY (2026-09-27). After a cold boot, with the full
-// window set and an all-window PrintWindow sweep, a relay's OWN capture session stops delivering while
-// DWM keeps compositing its destination - measured: a fresh session on that destination captures the
-// source every second, restarting the broker cures it, and the capture item is never Closed. Demoting
-// such a relay to PrintWindow (the old and only answer) fails the arrival-driven acceptance bar, so the
-// first "source changed, no frame" on a relay RE-OPENS it as a relay instead - new destination,
-// thumbnail, pool and session through the ordinary Close/OpenChannel path. Once per window: set here,
-// cleared when the slot is given a different window; after it, the 3-change demotion applies as before.
-static bool      g_relayReopened[WGCBRK_MAX_SLOTS] = {};
+// How long a new content size must hold before the size reopen below (g_sizeReopenCtl): a drag-resize makes the agent
+// retarget on every step, and it costs one reopen once the size settles, not one per step.
+#define SIZE_SETTLE_MS 150
 // The channel generation (WGCBRK_SLOT::ChanGen) whose capture item Windows CLOSED last, per slot; 0 = none. Written by the
-// item.Closed handler (a WGC thread), read by Reconcile: a channel whose own item closed gets no trailing-poke absorption.
+// item.Closed handler (a WGC thread), read by Reconcile, which reopens a channel whose own item closed (g_closedReopened).
 static volatile LONG g_closedGen[WGCBRK_MAX_SLOTS] = {};
 // A CLOSED ITEM IS REPAIRED AT ONCE (2026-10-01): set when Reconcile reopened a channel because Windows closed its capture
 // item; a reopened item that is closed again before it delivered anything goes DEAF instead (no loop). Cleared with the
@@ -302,11 +163,10 @@ static bool      g_closedReopened[WGCBRK_MAX_SLOTS] = {};
 // publishes nothing, and a recreated pool delivers again only when the window changes: a window resized after its
 // session opened and then left alone - a dialog the agent's caption restyle grows right after registration - is never
 // published at its new size, and one with nothing published at all stays withheld (SIZEDROPPEDFIRSTFRAMEWITHHOLDSWINDOW).
-// A fresh session delivers the window's current content without a repaint. So a plain-WGC channel that dropped a frame
-// for size and has published nothing for RELAY_SIZE_SETTLE_MS is reopened through Close/OpenChannel, bounded as
-// RelayOutgrown is: the settle makes a drag-resize cost one reopen after it settles, and an (agent request, dropped size)
-// pair is reopened at most once - a window that drops again at that size stays on the recreated pool, which delivers on
-// its next change. These survive the close; cleared with the other per-registration flags.
+// A fresh session delivers the window's current content without a repaint. So a channel that dropped a frame for size
+// and has published nothing for SIZE_SETTLE_MS is reopened through Close/OpenChannel, and an (agent request, dropped
+// size) pair is reopened at most once - a window that drops again at that size stays on the recreated pool, which
+// delivers on its next change. These survive the close; cleared with the other per-registration flags.
 static LONG      g_sizeReopenCtl[WGCBRK_MAX_SLOTS] = {};
 static bool      g_sizeReopenValid[WGCBRK_MAX_SLOTS] = {};
 static LONG      g_sizeReopenW[WGCBRK_MAX_SLOTS] = {}, g_sizeReopenH[WGCBRK_MAX_SLOTS] = {};
@@ -339,162 +199,32 @@ struct StageScope {
     StageScope& operator=(const StageScope&) = delete;
 };
 
-// A HUNG TARGET BLOCKS PrintWindow WITH NO TIMEOUT, and both PrintWindow calls run on this main loop - so
-// one hung window stopped the heartbeat and the agent reaped the whole broker (QGABROKERDIED). Measured
-// 2026-09-27: every death began within seconds of a window disappearing, DWM "Ghost" stand-ins for hung
-// windows were in the same censuses, and moving the WGC teardown out of the slot lock changed nothing (Jev:
-// PrintWindow into a hung window 0.98). IsHungAppWindow catches a window hung for >= 5 s; the WM_NULL probe
-// one that is not answering right now, bounded to 100 ms. Unresponsive = skip this pass, counted in
-// HungSkips: a window that stays hung costs one bounded probe per pass, never the loop.
 static void WaitSameWindowTeardown(int i, HWND hwnd);   // defined with CloseChannel; used by OpenChannel
+static void CloseChannel(int i);                        // used by OpenChannel when an open fails late
 
-static bool WindowResponsive(int i, HWND hwnd) {
-    StageScope st(WGCBRK_STG_PROBE, i);
-    DWORD_PTR res = 0;
-    if (!IsHungAppWindow(hwnd) &&
-        SendMessageTimeoutW(hwnd, WM_NULL, 0, 0, SMTO_ABORTIFHUNG | SMTO_BLOCK, 100, &res)) return true;
-    InterlockedIncrement(&g_slots[i].HungSkips);
-    return false;
-}
 // REST-ZERO (docs/DESIGN-rest-zero-capture.md C/D): the earliest deadline any pending request armed this pass; the main
 // loop waits until then, or INFINITE when nothing is pending. Recomputed from state on every pass, so a deadline whose
 // request was answered simply is not armed again - nothing to disarm, nothing that can leak into a rest wake.
 static ULONGLONG g_nextDue = 0;
 static inline void Due(ULONGLONG t) { if (t && (!g_nextDue || t < g_nextDue)) g_nextDue = t; }
-// The first-frame retry schedule of a PrintWindow slot (ms after its open). Bounded: past the last try the slot waits
-// for its own poke like any other.
-static const ULONGLONG WGCBRK_PW_FIRST_MS[] = { 0, 50, 100, 200, 400 };
-// DEAFNESS HOLD (rest-zero E). A slot whose WGC session stayed quiet, was recreated once and stayed quiet again goes
-// FAILED with WGCBRK_E_DEAF and is held - not reopened - until the agent asks again (its ControlSeq moves). Reopening on
-// the broker's own initiative would be a timed retry loop on a window nothing is changing.
-static bool g_deafHold[WGCBRK_MAX_SLOTS] = {};
-static LONG g_deafCtl[WGCBRK_MAX_SLOTS]  = {};
-static void DeclareDeaf(int i) {
+// A FAILED SLOT IS HELD (rest-zero E, ADR-capture 36). A slot whose capture cannot be opened, or whose reopened capture
+// item Windows closed again before it delivered anything (DEAF), goes FAILED with the code that says why and is held - not
+// reopened - until the agent asks again (its ControlSeq moves). Reopening on the broker's own initiative would be a retry
+// in hope, and between two attempts the agent could read the slot as pending and never report it.
+static bool g_failHold[WGCBRK_MAX_SLOTS] = {};
+static LONG g_failHoldCtl[WGCBRK_MAX_SLOTS] = {};
+static void HoldFailed(int i, LONG hr) {
     WGCBRK_SLOT* s = &g_slots[i];
-    s->FailHr = WGCBRK_E_DEAF;
+    s->FailHr = hr;
     MemoryBarrier();                         // FailHr first: an agent that reads FAILED reads why
     s->AckState = WGCBRK_FAILED;
-    InterlockedIncrement(&s->DeafHolds);
-    g_deafHold[i] = true;
-    g_deafCtl[i] = s->ControlSeq;
-    SignalFramePublished();                  // wake the agent: it reports the hold (QGAWGCDEAF) on that wake
+    g_failHold[i] = true;
+    g_failHoldCtl[i] = s->ControlSeq;
+    SignalFramePublished();                  // wake the agent (a deaf hold is reported on that wake, QGAWGCDEAF)
 }
-// LATCHED AT STARTUP, never re-read. Capabilities are decided at START here: a runtime re-read that
-// failed transiently would silently downgrade an eligible guest, which is the forbidden silent
-// fallback arriving by the back door.
-static bool g_RelayOn = false;
-static DWORD g_RelayBuild = 0;   // the build the decision was made from, published for the record
-
-// ---- THE RELAY ------------------------------------------------------------------------------
-// Give a window whose own surface WGC cannot capture a per-window source anyway: let DWM draw a live
-// copy of it into a destination window we own, and capture THAT. Returns the destination, or null.
-//
-// Destination properties are not arbitrary - each was measured with tools/thumbprobe:
-//   * WS_EX_LAYERED at alpha 0. It must be a real top-level window DWM composites; SW_HIDE yields
-//     nothing at all. Off-screen also works but returned alphaZero=511/2640 where alpha-0 returned a
-//     uniform 255, so alpha-0 is the one that hands the agent fully blended pixels.
-//   * sized to DwmQueryThumbnailSourceSize, not to the source's window rect. Sizing it to the window
-//     rect made the content land 1:1 inside a larger surface and misreported as scaled.
-//   * WS_EX_TOOLWINDOW|WS_EX_NOACTIVATE so it never takes focus or appears in the taskbar, and
-//     WS_EX_TRANSPARENT so it cannot swallow a click meant for what is underneath.
-// The agent refuses to MAP any window owned by this process (ShouldAcceptWindow, keyed on the
-// validated broker pid), which is what keeps these destinations out of dom0.
-static HWND RelayOpenDest(HWND src, HTHUMBNAIL* outThumb, int* outW, int* outH)
-{
-    static bool reg = false;
-    if (!reg) {
-        WNDCLASSEXW wc{}; wc.cbSize = sizeof(wc); wc.lpfnWndProc = DefWindowProcW;
-        wc.hInstance = GetModuleHandleW(nullptr); wc.lpszClassName = L"QubesWgcRelayDest";
-        wc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
-        RegisterClassExW(&wc); reg = true;
-    }
-    if (!src || !IsWindow(src)) return nullptr;
-    // The source size is only knowable from a registration, so a scratch destination is registered
-    // purely to ask, then thrown away. Cheap, and it removes the sizing guess.
-    RECT sr{}; if (!GetWindowRect(src, &sr)) return nullptr;
-    int w = sr.right - sr.left, h = sr.bottom - sr.top;
-    if (w < 8 || h < 8) return nullptr;
-    HWND probe = CreateWindowExW(WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
-                                 L"QubesWgcRelayDest", L"", WS_POPUP, 0, 0, 16, 16,
-                                 nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
-    if (probe) {
-        HTHUMBNAIL t0 = nullptr;
-        if (SUCCEEDED(DwmRegisterThumbnail(probe, src, &t0)) && t0) {
-            SIZE q{};
-            if (SUCCEEDED(DwmQueryThumbnailSourceSize(t0, &q)) && q.cx > 0 && q.cy > 0) { w = q.cx; h = q.cy; }
-            DwmUnregisterThumbnail(t0);
-        }
-        DestroyWindow(probe);
-    }
-    HWND dest = CreateWindowExW(WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT,
-                                L"QubesWgcRelayDest", L"", WS_POPUP, 0, 0, w, h,
-                                nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
-    if (!dest) return nullptr;
-    SetLayeredWindowAttributes(dest, 0, 0, LWA_ALPHA);   // invisible to a human, still composited
-    ShowWindow(dest, SW_SHOWNA);
-    HTHUMBNAIL th = nullptr;
-    if (FAILED(DwmRegisterThumbnail(dest, src, &th)) || !th) { DestroyWindow(dest); return nullptr; }
-    DWM_THUMBNAIL_PROPERTIES p{};
-    p.dwFlags = DWM_TNP_RECTDESTINATION | DWM_TNP_VISIBLE | DWM_TNP_OPACITY;
-    p.rcDestination = RECT{ 0, 0, w, h };
-    p.fVisible = TRUE; p.opacity = 255;
-    if (FAILED(DwmUpdateThumbnailProperties(th, &p))) {
-        DwmUnregisterThumbnail(th); DestroyWindow(dest); return nullptr;
-    }
-    *outThumb = th; *outW = w; *outH = h;
-    return dest;
-}
-
-// THE RELAY CAPABILITY IS MEASURED, NOT ASSUMED (rest-zero G, c6 0.81). Build >= 26100 is necessary but not sufficient:
-// 26100.1742 refuses a WS_EX_TOOLWINDOW / WS_EX_NOACTIVATE destination at CreateForWindow (E_INVALIDARG), so on that
-// build every ladder descent paid a relay open that could not succeed. One destination-shaped window, one
-// CreateForWindow, ONCE; the RESULT is what is latched (RelayUsable) and published.
-// MEASURED AT THE FIRST LADDER DESCENT, NOT AT PROCESS START (a deviation from G's "at broker start", for the reason G
-// could not see): the agent tells a broker window from a user window only by the broker's VALIDATED pid, which it takes
-// after this process has published it - and a destination-shaped window from an unvalidated broker is an ordinary
-// window to it (measured 2026-09-26: a probe's destinations were accepted, given a slot and MAPPED to dom0). By the
-// first descent the agent has registered windows with this broker, so it has validated it.
-static int g_relayProbe = -1;   // -1 not measured yet, 0 refused, 1 capturable
-static bool RelayDestCapturable();
-// UNUSED since ADR-capture 32 (the relay left the deaf ladder, its only caller); kept, not deleted, in the same change -
-// removing the probe also removes what publishes RelayCapable=2, which the agent and the harness read.
-[[maybe_unused]] static bool RelayUsable() {
-    if (!g_RelayOn) return false;
-    if (g_relayProbe < 0) {
-        g_relayProbe = RelayDestCapturable() ? 1 : 0;
-        if (!g_relayProbe) g_RelayOn = false;
-        g_hdr->RelayCapable = g_relayProbe ? 1 : 2;   // 1 on, 0 off by build/opt-out, 2 eligible but the probe refused
-    }
-    return g_relayProbe == 1;
-}
-static bool RelayDestCapturable() {
-    WNDCLASSEXW wc{}; wc.cbSize = sizeof(wc); wc.lpfnWndProc = DefWindowProcW;
-    wc.hInstance = GetModuleHandleW(nullptr); wc.lpszClassName = L"QubesWgcRelayProbe";
-    wc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
-    RegisterClassExW(&wc);
-    HWND d = CreateWindowExW(WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT,
-                             L"QubesWgcRelayProbe", L"", WS_POPUP, 0, 0, 64, 64,
-                             nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
-    if (!d) return false;
-    SetLayeredWindowAttributes(d, 0, 0, LWA_ALPHA);   // exactly RelayOpenDest's destination
-    ShowWindow(d, SW_SHOWNA);
-    bool ok = false;
-    try {
-        auto interop = get_activation_factory<GraphicsCaptureItem, IGraphicsCaptureItemInterop>();
-        GraphicsCaptureItem item{ nullptr };
-        check_hresult(interop->CreateForWindow(d, guid_of<GraphicsCaptureItem>(),
-                      reinterpret_cast<void**>(put_abi(item))));
-        ok = (item != nullptr);
-    } catch (...) { ok = false; }
-    DestroyWindow(d);
-    return ok;
-}
-
-static void RelayCloseDest(Channel& c)
-{
-    if (c.relayThumb) { DwmUnregisterThumbnail(c.relayThumb); c.relayThumb = nullptr; }
-    if (c.relayDest)  { DestroyWindow(c.relayDest);           c.relayDest  = nullptr; }
-    c.relay = false;
+static void DeclareDeaf(int i) {
+    InterlockedIncrement(&g_slots[i].DeafHolds);
+    HoldFailed(i, WGCBRK_E_DEAF);
 }
 
 static bool InitD3D() {
@@ -576,7 +306,7 @@ static bool PublishCard(int i, ID3D11Texture2D* full, int texW, int texH, const 
     // BufOffset before Reconcile has closed this channel, and those are that window's buffers.
     if ((HWND)(ULONG_PTR)s->Hwnd != g_ch[i].hwnd) return false;
     // Publish the agent's REQUESTED (card) rect, lifted from the full-window capture at the
-    // agent's crop offset - exactly what the PrintWindow path does. Before this the WGC path
+    // agent's crop offset. Before this the WGC path
     // published the whole texture and FrameArrived dropped every frame whose ContentSize did
     // not equal ReqWidth/ReqHeight, so a WGC-capturable window with a nonzero crop (a shell
     // toast/menu whose shadow margin the agent trims) could NEVER publish: pool recreate,
@@ -686,9 +416,8 @@ static bool PublishCard(int i, ID3D11Texture2D* full, int texW, int texH, const 
             bytes += (LONGLONG)rb * (y1 - y0);
         });
     }
-    // THE OPAQUE BOUNDING BOX, ON THIS PATH TOO. PublishPrintWindow has always measured it and the
-    // agent tightens its crop to it "instead of UIA's +/-1-2px estimate"; the WGC path never did,
-    // so a WGC-captured popup fell back to that estimate and kept a rim of its transparent shadow
+    // THE OPAQUE BOUNDING BOX. The agent tightens its crop to it "instead of UIA's +/-1-2px estimate";
+    // without it a WGC-captured popup fell back to that estimate and kept a rim of its transparent shadow
     // margin - which a premultiplied capture delivers as OPAQUE BLACK. Photographed 2026-10-17 on
     // a Notepad teaching tip (Microsoft.UI.Content.PopupWindowSiteBridge): scanning in from the
     // announced edge gave 2 px of dom0's label border, then 3 px (left) and 6 px (top) of
@@ -696,8 +425,7 @@ static bool PublishCard(int i, ID3D11Texture2D* full, int texW, int texH, const 
     // pop up could be either properly synthesized or properly cut, and it is neither."
     //
     // Measured on a WHOLE publish only - a registration answer, a resize, or a first frame - so a
-    // static popup pays for it once rather than on every arrival, which is the same discipline the
-    // PrintWindow path uses. Non-black is any channel > 16, as there.
+    // static popup pays for it once rather than on every arrival. Non-black is any channel > 16.
     if (whole) {
         int minx = texW, miny = texH, maxx = -1, maxy = -1;
         for (int y = 0; y < texH; y++) {
@@ -852,11 +580,11 @@ static void PublishFrame(int i, Direct3D11CaptureFrame const& frame) {
 // changed has already had its channel (and its retained capture) closed.
 static void RepublishRetained() {
     for (int i = 0; i < WGCBRK_MAX_SLOTS; i++) {
-        if (!g_ch[i].hwnd || g_ch[i].pw) continue;          // hwnd/pw are written on this thread only
+        if (!g_ch[i].hwnd) continue;                         // hwnd is written on this thread only
         PubLock lk(i);                                       // lastFull is written by FrameArrived
         Channel& c = g_ch[i];
         WGCBRK_SLOT* s = &g_slots[i];
-        if (!c.hwnd || c.pw || !c.lastFull) continue;
+        if (!c.hwnd || !c.lastFull) continue;
         const LONG ctl = s->ControlSeq;
         if (ctl == c.pubCtlSeq) continue;                    // nothing asked that was not served
         if (c.triedValid && ctl == c.triedCtlSeq) continue;  // already failed for this request and capture
@@ -869,151 +597,14 @@ static void RepublishRetained() {
     }
 }
 
-// (re)create the channel's top-down 32bpp DIB section to match w x h.
-static bool EnsurePwDib(Channel& c, int w, int h) {
-    if (c.pwDC && c.pwW == w && c.pwH == h) return true;
-    if (c.pwBmp) { DeleteObject(c.pwBmp); c.pwBmp = nullptr; c.pwBits = nullptr; }
-    if (!c.pwDC) { HDC scr = GetDC(nullptr); c.pwDC = CreateCompatibleDC(scr); ReleaseDC(nullptr, scr); }
-    if (!c.pwDC) return false;
-    BITMAPINFO bi = {};
-    bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-    bi.bmiHeader.biWidth = w;
-    bi.bmiHeader.biHeight = -h;          // top-down, so rows match the agent's expected layout
-    bi.bmiHeader.biPlanes = 1;
-    bi.bmiHeader.biBitCount = 32;
-    bi.bmiHeader.biCompression = BI_RGB; // BGRX, same channel order as B8G8R8A8
-    c.pwBmp = CreateDIBSection(c.pwDC, &bi, DIB_RGB_COLORS, &c.pwBits, nullptr, 0);
-    if (!c.pwBmp || !c.pwBits) return false;
-    SelectObject(c.pwDC, c.pwBmp);
-    c.pwW = w; c.pwH = h;
-    return true;
-}
-
-// Poll one PrintWindow-mode channel: render the window into its DIB and publish if the pixels
-// changed. Non-black check filters the classes PrintWindow cannot capture (they slice instead).
-// Returns true if this render produced a CHANGED card (i.e. it was worth doing). The adaptive
-// backoff in the main loop keys on that: a window whose renders keep coming back identical is a
-// window nobody is looking at changing, and rendering it is pure waste - measured 2026-09-25 at
-// 30 renders per 30 s producing ZERO published frames on an idle window, about 3.2% of a core
-// spent inside the captured application for nothing.
-// CONTROL KNOB. `QubesWgcRelayNoDemote=1` (same registry key as the other broker switches) stops a
-// relay channel being demoted at all. It exists because Jev required a CONTROL before the demotion
-// rule was changed (needs_a_control 0.74): with it set, a relay that would have been demoted keeps
-// running, which is what shows the relay WOULD have kept delivering these classes. It is not a
-// product setting and defaults OFF.
-static bool g_relayNoDemote = false;
 // TEST SWITCHES for the typing-latency regression (2026-10-01: key -> damage p90 ~190-200 ms from the build that brought
-// DirtyRegionMode, against ~20 ms before it; bisected to that range). Read ONCE at start like QubesWgcRelay, never again:
+// DirtyRegionMode, against ~20 ms before it; bisected to that range). Read ONCE at start, never again:
 //   QubesWgcDirtyMode = 0     direct sessions are NOT put in DirtyRegionMode (whole frames, as before S1b)
 //   QubesWgcMinUpdateMs = N   GraphicsCaptureSession.MinUpdateInterval = N ms on every direct session (absent: left alone)
 // Not product settings; absent = the shipped behaviour.
 static bool g_dirtyModeOn = true;
 static LONG g_minUpdateMs = -1;
 static bool g_minUpdateApi = false;
-
-// DID THE SOURCE ACTUALLY CHANGE? A poke only says something repainted inside this window's screen
-// rectangle; it does not say this window's own content moved. Before demoting a relay we render the
-// SOURCE once and compare a hash of its pixels with the last one we took. Unchanged => the relay is
-// correctly delivering nothing and must be left alone; changed => damage really did occur with no
-// frame behind it, which is the founding symptom the detector exists for.
-//
-// Cost is one PrintWindow per decision, not per frame, and it is throttled: the demotion question
-// is only asked after WGCBRK_WGC_QUIET_MS of silence anyway. On the FIRST call for a channel there
-// is no previous hash, so it records one and reports NO change - a relay is never demoted on the
-// strength of a measurement that has no baseline.
-// Returns SRC_CHANGED / SRC_SAME / SRC_UNMEASURED. The three are NOT interchangeable: SRC_SAME is
-// a measurement that says the window is static, while SRC_UNMEASURED means the test was throttled
-// or could not run. Collapsing them was a defect in the first cut of this function - the throttled
-// case returned "no change", so RelayStaticHolds counted a hold on every loop tick and the counter
-// that is supposed to be the EVIDENCE for this rule would have been inflated by orders of
-// magnitude. A counter that cannot be read is not instrumentation.
-enum { SRC_CHANGED = 1, SRC_SAME = 0, SRC_UNMEASURED = 2 };
-static int RelaySourceChanged(int i) {
-    Channel& c = g_ch[i];
-    HWND hwnd = c.hwnd;
-    if (!hwnd || !IsWindow(hwnd)) return SRC_CHANGED;   // gone: let the normal paths deal with it
-    const ULONGLONG now = GetTickCount64();
-    if (c.srcHashSeen && (now - c.srcHashTick) < c.srcHashMs) return SRC_UNMEASURED;  // too soon
-    RECT r{};
-    if (!GetWindowRect(hwnd, &r)) return SRC_CHANGED;
-    int w = r.right - r.left, h = r.bottom - r.top;
-    if (w <= 0 || h <= 0) return SRC_CHANGED;
-    if (w > 4096) w = 4096;
-    if (h > 4096) h = 4096;
-    if (!EnsurePwDib(c, w, h)) return SRC_CHANGED;      // cannot measure => do not suppress a demotion
-    if (!WindowResponsive(i, hwnd)) return SRC_UNMEASURED;   // hung: PrintWindow would block this loop
-    BOOL pwOk;
-    { StageScope st(WGCBRK_STG_SRC_PW, i); pwOk = PrintWindow(hwnd, c.pwDC, PW_RENDERFULLCONTENT); }
-    if (!pwOk) {
-        // ABI 11: counted separately. "The test could not render the source" and "the source
-        // changed" are different facts that this function used to collapse into one return value.
-        InterlockedIncrement(&g_slots[i].RelayPwFail);
-        return SRC_CHANGED;
-    }
-    const unsigned char* p = (const unsigned char*)c.pwBits;
-    if (!p) return SRC_CHANGED;
-    // FNV-1a over a strided sample: every 64th pixel is ample to notice a window repainting, and
-    // hashing 2.6 Mpx in full on every decision would cost more than the demotion it is guarding.
-    unsigned long long hsh = 1469598103934665603ull;
-    const size_t stride = 64 * 4, bytes = (size_t)w * (size_t)h * 4;
-    for (size_t off = 0; off + 4 <= bytes; off += stride) {
-        for (int b = 0; b < 4; ++b) { hsh ^= p[off + b]; hsh *= 1099511628211ull; }
-    }
-    const bool first = !c.srcHashSeen;
-    const bool changed = !first && hsh != c.srcHash;
-    c.srcHash = hsh; c.srcHashTick = now; c.srcHashSeen = true;
-    if (changed) c.srcHashMs = 500;
-    else if (c.srcHashMs < 8000) { c.srcHashMs *= 2; if (c.srcHashMs > 8000) c.srcHashMs = 8000; }
-    return changed ? SRC_CHANGED : SRC_SAME;
-}
-
-// Should a RELAY that has delivered be demoted now? Only on a MEASURED change of the source: damage
-// was signalled and no frame followed, which is the founding symptom. A measured SAME is a static
-// window and is counted, so the rule's effect is visible. UNMEASURED (throttled) neither demotes
-// nor counts - it simply waits for the next test.
-// How many CONSECUTIVE measured source changes, with no frame arriving in between, before a relay
-// is demoted. One is far too few (see Channel::srcChangeStreak); demotion is one-way, so a single
-// spurious difference costs the relay for the rest of that window's life.
-#define WGCBRK_RELAY_CHANGE_STREAK 3
-// How long after a frame arrived a poke still belongs to it (see the trailing-poke absorption in Reconcile): the agent
-// pokes from its desktop-duplication pass, tens of milliseconds behind WGC; 500 ms is an order of magnitude of margin
-// and still far inside WGCBRK_WGC_QUIET_MS, so a change that really went undelivered is caught one poke later.
-#define WGCBRK_POKE_TRAIL_MS 500
-
-static bool RelaySrcDecides(int i) {
-    Channel& c = g_ch[i];
-    const bool hadBaseline = c.srcHashSeen;   // the first test only records one and reports SAME
-    const int r = RelaySourceChanged(i);
-    if (r == SRC_SAME) {
-        c.srcChangeStreak = 0;
-        InterlockedIncrement(&g_slots[i].RelayStaticHolds);
-        // A MEASURED SAME ANSWERS THE POKE (rest-zero S3). The damage that poked this relay was not its source's: left
-        // pending, the quiet test asked again at every throttle interval - a PrintWindow of the source every 0.5-8 s for
-        // as long as nothing changed, which is a timed render at rest. A baseline is not a measurement, so it answers
-        // nothing: the test after it does. Under the lock FrameArrived writes these with.
-        if (hadBaseline) {
-            PubLock lk(i);
-            c.pokeAtLastArrival = g_slots[i].PokeSeq;
-            c.pokePendingSince = 0;
-        }
-        return false;
-    }
-    if (r == SRC_UNMEASURED) { InterlockedIncrement(&g_slots[i].RelaySrcUnmeasured);  return false; }
-    InterlockedIncrement(&g_slots[i].RelaySrcChanged);
-    // Measured change with no frame behind it. Before an unbroken run of these is allowed to demote,
-    // try REPAIRING the channel once: a thumbnail registered while DWM was still coming up is accepted
-    // but never recomposed, which is exactly this symptom on a cold-booted guest.
-    // NO REPAIR HERE. A thumbnail re-registration was built on this line and is REVERTED unrun: the
-    // measurement that followed showed the DWM thumbnail and the destination window are both fine - a
-    // fresh WGC session on that same destination delivers the source's content every second - and that
-    // the broker's OWN capture session is the dead part, which re-registering a thumbnail cannot touch.
-    // Jev: brokers-own-capture-session-died 0.82, re-registration as the right repair 0.32, and
-    // "recreate the session now" 0.00 against "subscribe to item.Closed and OBSERVE" 0.96. The
-    // observation lands first (see ItemClosed in wgcbroker_ipc.h); the repair waits for it to speak.
-    // A relay not yet re-opened needs ONE measured change: what follows is a re-open, which is cheap
-    // and reversible. Demotion is one-way, so it keeps the full streak (see g_relayReopened).
-    return (++c.srcChangeStreak) >= (g_relayReopened[i] ? WGCBRK_RELAY_CHANGE_STREAK : 1);
-}
 
 // ABI 12: a signature of the frame we just published, sampled EXACTLY as the guest samples its own
 // render (guest/window-truth-survey.ps1 walks y += 9 { x += 9 } and counts distinct colours). Same
@@ -1136,125 +727,11 @@ static void FlushPendingSignatures() {
     }
 }
 
-static bool PublishPrintWindow(int i) {
-    bool changed = false;
-    PubLock pubLock(i);   // RAII, same reason
-    do {
-        WGCBRK_SLOT* s = &g_slots[i];
-        Channel& c = g_ch[i];
-        if (!c.pw) break;
-        if (s->ReqState != WGCBRK_REQUESTED && s->AckState != WGCBRK_ACTIVE) break;
-        if (!LiveProducing()) break;                         // secure desktop: live check, see PublishFrame
-        HWND hwnd = c.hwnd;
-        if (!hwnd || !IsWindow(hwnd)) break;
-        int w = s->ReqWidth, h = s->ReqHeight;               // published (card) size, agent-sized buffer
-        int cropX = s->ReqCropX, cropY = s->ReqCropY;        // agent's current crop offset
-        if (w <= 0 || h <= 0 || cropX < 0 || cropY < 0) break;
-        if ((LONGLONG)w * h * 4 > s->BufBytes) break;         // agent sized for ReqW*ReqH*4
-        // Render the FULL window: PrintWindow draws it at the DC origin and CLIPS to the DIB, so we
-        // need a DIB spanning the whole window to (a) lift the card sub-rect at (cropX,cropY) and
-        // (b) measure the menu's true OPAQUE bounds - the transparent shadow margin comes out black,
-        // so the opaque bounding box is the menu's exterior edge, which we report so the agent can
-        // crop pixel-exact instead of trusting UIA's +/-1-2px estimate.
-        RECT wr;
-        if (!GetWindowRect(hwnd, &wr)) break;
-        int fullW = wr.right - wr.left, fullH = wr.bottom - wr.top;
-        if (fullW < cropX + w) fullW = cropX + w;             // safety: must at least cover the card
-        if (fullH < cropY + h) fullH = cropY + h;
-        if (fullW <= 0 || fullH <= 0) break;
-        if (!EnsurePwDib(c, fullW, fullH)) break;
-        // Stage ticks (ABI 4), diagnostic only - the broker never decides on them. StartTick is the
-        // first poll ENTERED (so OpenTick->StartTick is the wait before this window is first looked
-        // at), FirstArrivedTick is the first PrintWindow RETURN (so the gap is the synchronous call
-        // on the menu's own UI thread), and PollCount says how many polls it took to get a frame
-        // worth publishing - which is how "the app had not painted yet" shows up.
-        const bool ticksMine = (s->TickPw && s->TickHwnd == (UINT64)(ULONG_PTR)hwnd);
-        if (ticksMine) {
-            if (!s->StartTick) s->StartTick = QpcNow();
-            if (s->PollCount < 0x7FFFFFFF) s->PollCount++;
-        }
-        if (!WindowResponsive(i, hwnd)) break;               // hung: no publish this pass (polled anyway)
-        BOOL pwOk;
-        { StageScope st(WGCBRK_STG_POLL_PW, i); pwOk = PrintWindow(hwnd, c.pwDC, PW_RENDERFULLCONTENT); }
-        if (!pwOk) break;
-        if (ticksMine && !s->FirstArrivedTick) s->FirstArrivedTick = QpcNow();
-        const BYTE* rend = (const BYTE*)c.pwBits;
-        const int fstride = fullW * 4;
-        const BYTE* card = rend + (size_t)cropY * fstride + (size_t)cropX * 4; // card top-left (agent crop)
-        // Non-black check (sampled) over the extracted card: a black/near-black capture is the
-        // "PrintWindow cannot do this class" signal (CoreWindow/NRB/ULW) - mark FAILED so the
-        // agent slices it instead.
-        size_t total = 0, nonblack = 0;
-        for (int y = 0; y < h; y += 8)
-            for (int x = 0; x < w; x += 8) {
-                const BYTE* p = card + (size_t)y * fstride + (size_t)x * 4;
-                total++;
-                if (p[0] > 16 || p[1] > 16 || p[2] > 16) nonblack++;
-            }
-        if (total == 0 || (nonblack * 100 / total) < 2) { s->AckState = WGCBRK_FAILED; s->FailHr = (LONG)0x00000103; break; }
-
-        int wbuf = 1 - s->ActiveBuffer;
-        if (wbuf < 0 || wbuf >= WGCBRK_RING) wbuf = 0;
-        BYTE* dst = WGCBRK_ARENA(g_base, s->BufOffset[wbuf]);
-        // Copy the card sub-rect (source stride fstride) into the contiguous w*h arena buffer.
-        for (int y = 0; y < h; y++)
-            memcpy(dst + (size_t)y * w * 4, card + (size_t)y * fstride, (size_t)w * 4);
-        PublishSignature(i, dst, w, h);
-
-        // Skip republish if the card is unchanged vs the active buffer (menus are static once open;
-        // republishing would flood dom0 with damage). The sub-rect copy has strides, so compare the
-        // just-written contiguous dst against the active buffer and, if identical, don't flip.
-        if (s->AckState == WGCBRK_ACTIVE && s->ActiveBuffer >= 0 && s->ActiveBuffer < WGCBRK_RING &&
-            s->FrameWidth == w && s->FrameHeight == h) {
-            const BYTE* cur = WGCBRK_ARENA(g_base, s->BufOffset[s->ActiveBuffer]);
-            if (memcmp(cur, dst, (size_t)w * h * 4) == 0) break;   // changed stays false
-        }
-
-        // Changed frame: measure the OPAQUE bounding box across the full render (one pass, non-black
-        // = any channel > 16) and report it as insets from the window rect. The agent tightens its
-        // crop to these - they only ever remove transparent margin, never opaque content. Done here,
-        // after the unchanged-skip, so a static menu pays for it once, not every poll.
-        {
-            int minx = fullW, miny = fullH, maxx = -1, maxy = -1;
-            for (int y = 0; y < fullH; y++) {
-                const BYTE* rr = rend + (size_t)y * fstride;
-                for (int x = 0; x < fullW; x++) {
-                    const BYTE* p = rr + (size_t)x * 4;
-                    if (p[0] > 16 || p[1] > 16 || p[2] > 16) {
-                        if (x < minx) minx = x; if (x > maxx) maxx = x;
-                        if (y < miny) miny = y; if (y > maxy) maxy = y;
-                    }
-                }
-            }
-            if (maxx >= minx && maxy >= miny) {
-                s->OpaqueL = minx; s->OpaqueT = miny;
-                s->OpaqueR = fullW - 1 - maxx; s->OpaqueB = fullH - 1 - maxy;
-            }
-        }
-
-        changed = true;
-        s->FrameWidth = w; s->FrameHeight = h; s->Stride = w * 4;
-        LONG q = s->Seq;
-        _InterlockedExchange(&s->Seq, q | 1);
-        MemoryBarrier();
-        s->ActiveBuffer = wbuf;
-        s->FrameId++;
-        s->CaptureTick = (LONGLONG)GetTickCount64();
-        MemoryBarrier();
-        _InterlockedExchange(&s->Seq, (q | 1) + 1);
-        s->AckState = WGCBRK_ACTIVE;
-        if (ticksMine && !s->FirstPublishTick) s->FirstPublishTick = QpcNow();
-        SignalFramePublished();                     // PrintWindow path: wake the agent too
-    } while (0);
-    return changed;
-}
 static void OpenChannel(int i) {
     StageScope stage(WGCBRK_STG_OPEN, i);
     WaitSameWindowTeardown(i, (HWND)(ULONG_PTR)g_slots[i].Hwnd);
     WGCBRK_SLOT* s = &g_slots[i];
     Channel& c = g_ch[i];
-    // Every open starts untimed, a failed one included; the quiet ladder marks its own fresh session after this returns.
-    c.ladderFresh = false;
     // First-frame attribution. The tick block is NOT touched yet: a slot is recycled, and this
     // open may fail below on a window that has already been destroyed (menus are short-lived).
     // Overwriting the block first is what made this probe destroy the record of the SUCCESSFUL
@@ -1264,64 +741,14 @@ static void OpenChannel(int i) {
     const LONGLONG openT = QpcNow();
     bool monitor = (s->Hwnd == WGCBRK_MONITOR_HWND);
     HWND hwnd = monitor ? nullptr : (HWND)(ULONG_PTR)s->Hwnd;
-    if (!monitor && (!hwnd || !IsWindow(hwnd))) { s->AckState = WGCBRK_FAILED; s->FailHr = E_HANDLE; return; }
-    // A UWP-STYLE FRAME IS CAPTURED ON THE WINDOW ITSELF, like any other window (2026-09-30). Until now a window whose
-    // content comes from a child in ANOTHER process (ApplicationFrameWindow + its CoreWindow) was routed up front to the
-    // relay and, when that failed, to polled PrintWindow, on the 2026-09-25 reading that a WGC session on such a frame
-    // "delivers a couple of frames and then nothing". That reading was taken on a Settings window nobody was changing.
-    // Measured 2026-09-30 on w11-ds (26100.1742) with our agent and broker STOPPED, so no render of ours was involved: a
-    // direct session on the Settings frame returns the full page (126-130 colours, 13933/13936 samples non-black),
-    // delivers `1 0 0 0 0 0 0 0 0 0` frames/s left alone, and bursts of 17-22 right after each navigation when driven.
-    // The frame is an ordinary WGC target, and the up-front re-route took its arrival-driven path away: on 26100.1742 the
-    // relay cannot even open (that build refuses a WS_EX_TOOLWINDOW or WS_EX_NOACTIVATE destination), so Settings sat on
-    // the polled route, re-rendered on its own UI thread up to ten times a second. A window WGC genuinely does not serve is
-    // still caught - by the behavioural ladder in Reconcile (quiet while the agent says it changed: one fresh session,
-    // then the relay, then PrintWindow), which keys on the symptom rather than on a shape.
-    c.openTick = GetTickCount64();
+    // A window that is gone is E_HANDLE - the agent does not report it as refused (DirectSuppressFault).
+    if (!monitor && (!hwnd || !IsWindow(hwnd))) { HoldFailed(i, E_HANDLE); return; }
+    // A UWP-STYLE FRAME (ApplicationFrameWindow with its CoreWindow in another process) IS CAPTURED ON THE WINDOW ITSELF,
+    // like any other window: measured 2026-09-30 on 26100.1742 with our agent and broker stopped, a direct session on the
+    // Settings frame returns the full page and delivers a burst on each navigation.
     c.lastArrivalTick = 0;
-    // Set only by that ladder: this window has already been found not to be served by a session on itself.
-    const bool fallback = g_forcePw[i];
-    g_forcePw[i] = false;
-    // THE RELAY IS TRIED WHERE THE PRINTWINDOW FALLBACK WOULD BE USED, and nowhere else. The ladder has
-    // found that a session on this slot's window does not serve it, so instead of dropping to a polled pull
-    // API we give DWM a destination we own and capture that - arrival-driven, like any other WGC channel.
-    // Routing is otherwise UNCHANGED: a window WGC can capture directly still is. Jev put this as
-    // the first step at 0.98 precisely because it replaces a path rather than displacing one.
-    HWND target = hwnd;
-    const bool relayVetoed = g_noRelay[i];
-    g_noRelay[i] = false;            // one-shot, same discipline as g_forcePw
-    // ABI 23: THE AGENT CAN ASK FOR THE RELAY AT OPEN TIME. Until now the only ways onto this route
-    // were a relay re-opening itself (RelayOutgrown) or a quiet relay re-opening - both of which
-    // require the slot to ALREADY be a relay - so no window could ever ENTER it. Measured on the live
-    // broker 2026-10-17: relayOk=0 AND relayFail=0 on every slot, i.e. zero attempts, while
-    // relayCapable=1 advertised the route as available. Meanwhile the class that needs it (shell
-    // CoreWindows: toast host, Start, Search) was served black frames by a session on itself, which
-    // the quiet ladder cannot detect because the frames DO arrive. The agent classifies the window
-    // anyway and now says so in ReqRoute. This is the "route for a window OPENED on it" that
-    // ADR-capture 32 kept when it removed the relay as a LADDER RUNG; the ladder is untouched here.
-    const bool wantRelay = (s->ReqRoute == (LONG)WGCBRK_ROUTE_RELAY);
-    if (fallback && g_RelayOn && !relayVetoed && !monitor && hwnd) {
-        int rw = 0, rh = 0; HTHUMBNAIL th = nullptr;
-        HWND dest;
-        { StageScope st(WGCBRK_STG_RELAY_DWM, i); dest = RelayOpenDest(hwnd, &th, &rw, &rh); }
-        if (dest) {
-            c.relayDest = dest; c.relayThumb = th; c.relay = true;
-            c.relayW = rw; c.relayH = rh;
-            target = dest;
-            s->RelayOk++; s->RelayDest = (UINT64)(ULONG_PTR)dest;
-        } else {
-            s->RelayFail++;
-        }
-    }
-    // NO PRINTWINDOW RUNG. A ladder open is a relay's re-open; one whose relay did not open is DEAF: FAILED +
-    // WGCBRK_E_DEAF, held until the agent asks again, never a polled PrintWindow.
-    // FAIL HARD, DO NOT SERVE BLACK. A window that asked for the relay cannot be captured by a
-    // session on itself, so falling through to one would re-create the exact defect this fixes -
-    // frames that arrive and are empty, which nothing downstream can distinguish from a dark app.
-    // The deaf hold is the honest answer and the agent reports it (owner: "no fallback on a system
-    // that supports the direct path. just no. fail hard and investigate.").
-    if (fallback && !c.relay) { DeclareDeaf(i); return; }
-    if (!fallback || c.relay) try {
+    LONG hr = E_FAIL;
+    try {
         auto interop = get_activation_factory<GraphicsCaptureItem, IGraphicsCaptureItemInterop>();
         GraphicsCaptureItem item{ nullptr };
         if (monitor)
@@ -1335,13 +762,11 @@ static void OpenChannel(int i) {
                           guid_of<GraphicsCaptureItem>(), reinterpret_cast<void**>(put_abi(item))));
         }
         else
-            check_hresult(interop->CreateForWindow(target, guid_of<GraphicsCaptureItem>(),
+            check_hresult(interop->CreateForWindow(hwnd, guid_of<GraphicsCaptureItem>(),
                           reinterpret_cast<void**>(put_abi(item))));
         // This open has a real capture item: claim the tick block for it, in order.
         s->TickHwnd  = s->Hwnd;
         s->TickOpenOk = 0;
-        s->TickPw = 0;                   // this record describes the WGC path
-        s->PollCount = 0;
         s->OpenTick  = openT;
         s->PoolTick = s->StartTick = 0;
         s->FirstArrivedTick = s->FirstPublishTick = 0;
@@ -1378,9 +803,9 @@ static void OpenChannel(int i) {
         // window and is unaffected, because it is still captured and announced as before.
         try { session.IncludeSecondaryWindows(true); } catch (...) {}
         
-        // DIRTY REGIONS (rest-zero S1) on a direct window session only: the relay's destination and the monitor keep the
-        // whole-frame path. ReportOnly: complete surfaces, regions reported; PublishFrame reads only the regions.
-        if (g_dirtyApi && !monitor && !c.relay) {
+        // DIRTY REGIONS (rest-zero S1) on a window session only: the monitor keeps the whole-frame path. ReportOnly:
+        // complete surfaces, regions reported; PublishFrame reads only the regions.
+        if (g_dirtyApi && !monitor) {
             if (g_dirtyModeOn) { try { session.DirtyRegionMode(GraphicsCaptureDirtyRegionMode::ReportOnly); c.dirty = true; } catch (...) {} }
             if (g_minUpdateApi && g_minUpdateMs >= 0) {
                 try { session.MinUpdateInterval(winrt::Windows::Foundation::TimeSpan{ std::chrono::milliseconds(g_minUpdateMs) }); } catch (...) {}
@@ -1388,12 +813,8 @@ static void OpenChannel(int i) {
         }
         c.hwnd = monitor ? (HWND)(ULONG_PTR)WGCBRK_MONITOR_HWND : hwnd;
         c.item = item; c.pool = pool; c.session = session; c.slot = i;
-        // OBSERVATION ONLY. WGC can CLOSE a capture item, after which FrameArrived never fires again for
-        // that session - and until now nothing here subscribed, so that state looked exactly like a
-        // window whose content had stopped changing. Measured 2026-09-27: a deaf relay channel whose
-        // destination a FRESH session (another process) captured fine, every second, with the source's
-        // own content. This records whether Closed is what happened, and changes nothing: Jev put
-        // observe-first at 0.96 and any repair in the same build at 0.00.
+        // WGC can CLOSE a capture item, after which FrameArrived never fires again for that session. The handler records
+        // it and wakes this loop, and Reconcile reopens the channel (g_closedReopened).
         // The generation this channel will have once the open completes (ChanGen is bumped at the end of this try, and
         // only on this main thread): the Closed handler records it, so a Closed that belongs to an EARLIER item - its
         // teardown runs on another thread and can end after this open - is never taken for this channel's.
@@ -1402,7 +823,7 @@ static void OpenChannel(int i) {
             InterlockedIncrement(&g_slots[i].ItemClosed);
             g_slots[i].ItemClosedTick = (LONGLONG)GetTickCount64();
             InterlockedExchange(&g_closedGen[i], closeGen);
-            if (g_hWake) SetEvent(g_hWake);   // the repair is Reconcile's, now - not at the next poke (see g_closedReopened)
+            if (g_hWake) SetEvent(g_hWake);   // Reconcile reopens it (see g_closedReopened)
         });
         c.poolW = size.Width; c.poolH = size.Height;   // FrameArrived tracks content-size changes
         c.rev = pool.FrameArrived(auto_revoke,
@@ -1417,11 +838,6 @@ static void OpenChannel(int i) {
                 // vectored or unhandled-exception filter. The broker dies, and on an eligible guest
                 // that is not cosmetic - the agent withholds toasts, menus and WinUI surfaces rather
                 // than falling back to the composite (QGABROKERDIED), for about 8 s until relaunch.
-                //
-                // The race is PRE-EXISTING - the handler is byte-identical in 5cb2dd9^ - but the
-                // relay is what put an HWND and a DWM thumbnail handle inside the struct being
-                // wiped, so it is no longer only pixels at stake. Jev: is_real 0.85,
-                // crashes-or-hangs 0.96.
                 //
                 // g_pubCs[i] is the lock CloseChannel already holds across the wipe, and a Windows
                 // CRITICAL_SECTION is recursive, so PublishFrame taking it again below is safe.
@@ -1438,18 +854,8 @@ static void OpenChannel(int i) {
                     _InterlockedIncrement(&g_slots[i].ArrivalRejected);
                     return;
                 }
-#if WGCBRK_FAULT_INJECTION
-                if (g_ch[i].hwnd && g_ch[i].hwnd == FiDeafHwnd()) {   // the injected deaf session (test builds only)
-                    auto dropped = sender.TryGetNextFrame();          // released, so the pool keeps delivering
-                    // In a test build ArrivalRejected also counts these drops; the deaf test reads QuietReroutes/DeafHolds
-                    // and the agent's QGAWGCRECREATE/QGAWGCDEAF lines, timed against when the harness armed the knob.
-                    _InterlockedIncrement(&g_slots[i].ArrivalRejected);
-                    return;
-                }
-#endif
                 if (!g_slots[i].FirstArrivedTick)
                     g_slots[i].FirstArrivedTick = QpcNow();
-                g_ch[i].pokeAtLastArrival = g_slots[i].PokeSeq;   // damage seen as of this frame
                 auto f = sender.TryGetNextFrame();
                 if (!f) return;
                 auto cs = f.ContentSize();
@@ -1465,8 +871,7 @@ static void OpenChannel(int i) {
                 // publishing can be told apart from a slot that never receives anything.
                 g_slots[i].FramesArrived++;
                 InterlockedIncrement(&g_slots[i].GenFrames);   // ABI 15: attributable to THIS session
-                ch.lastArrivalTick = GetTickCount64();   // behavioural detector: the feed is alive
-                ch.srcChangeStreak = 0;                  // a frame arrived: the run of "no frames" is broken
+                ch.lastArrivalTick = GetTickCount64();   // this channel has delivered (see g_closedReopened)
                 g_slots[i].LastContentW = cs.Width; g_slots[i].LastContentH = cs.Height;
                 g_slots[i].PoolW = ch.poolW;        g_slots[i].PoolH = ch.poolH;
                 // A frame rendered before a Recreate keeps that pool's surface size (the surface is always the pool's
@@ -1510,58 +915,24 @@ static void OpenChannel(int i) {
         InterlockedIncrement(&s->ChanGen);
         s->SessionLive = 1;
         s->GenFrames = 0;   // ABI 15: this session's own frame count starts here
-        // WHICH WRITER IS FEEDING THIS SLOT (ABI 8). Both of these are arrival-driven; only
-        // WGCBRK_ROUTE_PW below is polled. "How many slots are still on PW" is the number that says
-        // whether the fallback is going away, and it cannot be read if the two are collapsed.
-        s->Route = c.relay ? WGCBRK_ROUTE_RELAY : WGCBRK_ROUTE_WGC;
         s->AckState = WGCBRK_ACTIVE; s->FailHr = 0;
         return;
     } catch (hresult_error const& e) {
-        s->FailHr = e.code();
+        hr = e.code();
     } catch (...) {
-        s->FailHr = E_FAIL;
+        hr = E_FAIL;
     }
-    // WGC could not capture this window (o-r menu / CoreWindow / popup). For a real window, fall
-    // back to polled PrintWindow instead of giving up - redirected & modern XAML menus render that
-    // way, so they leave the slice. The monitor slot never falls back here. Non-black check in
-    // PublishPrintWindow marks FAILED (agent slices) for the classes PrintWindow also cannot do.
-    // A relay that opened but whose capture failed leaks its destination and thumbnail unless it is
-    // closed here: the PrintWindow fallback below never touches them, and CloseChannel is not
-    // reached on this path. One leaked top-level window per failed open, for the broker's lifetime.
-    if (c.relay) { RelayCloseDest(c); s->RelayFail++; }
-    if (fallback) { DeclareDeaf(i); return; }   // a ladder open (the relay's capture failed): no PrintWindow rung, see above
-    if (!monitor && hwnd && IsWindow(hwnd)) {
-        c.hwnd = hwnd; c.slot = i; c.pw = true; s->FailHr = 0;
-        // Claim the tick block for the PrintWindow path (ABI 4). Until this existed, a window landing
-        // here (in 2026-09 every menu did: WGC rejected override-redirect popups on that build) left
-        // the block holding the last WGC window's ticks, and the agent reported a false "slot
-        // reopened" for it.
-        s->TickHwnd  = s->Hwnd;
-        s->TickOpenOk = 0;
-        s->TickPw = 1;
-        s->Route = WGCBRK_ROUTE_PW;   // the polled fallback - the thing the relay exists to retire
-        s->PollCount = 0;
-        s->OpenTick = openT;
-        // ItemTick on this path = the moment the WGC attempt was abandoned and we fell back. The
-        // gap OpenTick->ItemTick is therefore what the window PAYS for a CreateForWindow that
-        // failed. In 2026-09 that was every menu (WGC rejected override-redirect popups on that
-        // build), measured as part of a 31-78 ms "first poll" that the loop structure says contains
-        // no waiting at all. On 26300.9457 WGC captured all 13 popups tried and none reached this
-        // path (2026-11-01, ADR-capture section 19 item 6).
-        s->ItemTick = QpcNow();
-        s->PoolTick = s->StartTick = 0;
-        s->FirstArrivedTick = s->FirstPublishTick = 0;
-        MemoryBarrier();
-        s->TickOpenOk = 1;                // published last
-        s->AckState = WGCBRK_REQUESTED;   // pending until the first PrintWindow poll publishes
-    } else {
-        s->AckState = WGCBRK_FAILED;
-    }
+    // THE CAPTURE COULD NOT BE OPENED, AND NOTHING ELSE CAPTURES THE WINDOW (ADR-capture 36): the slot is held FAILED with
+    // the code that refused it, and the agent reports it (DirectSuppressFault). A window that closed while it was being
+    // opened is E_HANDLE, so it is not reported as refused. A throw after the pool and session were stored left them on
+    // the channel: they are closed first, because CloseChannel frees the slot and the hold must come after it.
+    if (!monitor && !IsWindow(hwnd)) hr = E_HANDLE;
+    if (c.hwnd) CloseChannel(i);
+    HoldFailed(i, hr);
 }
 
 // EVERYTHING A CLOSED WGC CHANNEL STILL OWNS, torn down OFF THE MAIN LOOP. Measured 2026-09-27 (build
-// 3be5415, win11de-v7): with PrintWindow no longer able to hang the loop (the guard fired ~90 times in one
-// census), the two remaining broker deaths were both named by BrokerStage as close-channel, one on a slot
+// 3be5415, win11de-v7): two broker deaths were both named by BrokerStage as close-channel, one on a slot
 // whose window was hung - and moving revoke/Close out of the slot lock had not helped, so the teardown call
 // itself blocks (Jev: WGC teardown 0.62). Each teardown gets its own detached thread: one that never
 // returns (a window that never answers) pins only itself, not the loop and not the next close.
@@ -1626,17 +997,8 @@ static void CloseChannel(int i) {
     d->item = c.item;       c.item = nullptr;
     d->lastFull = std::move(c.lastFull);
     g_pubSigPending[i] = false;                 // nothing of this channel is left to sign
-    if (c.pwBmp)   { DeleteObject(c.pwBmp); }
-    if (c.pwDC)    { DeleteDC(c.pwDC); }
-    // The relay's destination is a real top-level window and its thumbnail is a DWM handle; `c =
-    // Channel{}` below would forget both and leak them for the broker's lifetime. Released BEFORE
-    // the struct is wiped, for the same reason g_forcePw had to be set after it (that assignment
-    // erased state the re-route depended on and cost 38 needless re-routes on a healthy window).
-    { StageScope st(WGCBRK_STG_RELAY_DWM, i); RelayCloseDest(c); }
     c = Channel{};
     g_slots[i].AckState = WGCBRK_FREE;
-    g_slots[i].Route = WGCBRK_ROUTE_WGC;   // a free slot claims no writer
-    g_slots[i].RelayDest = 0;
     // ABI 14: the session is gone. The FRAME counters are deliberately left alone - their history is
     // useful - but without this flag a slot showing FramesArrived=53 and no movement was
     // indistinguishable from a slot whose session had been closed and never reopened. Jev rated that
@@ -1644,7 +1006,7 @@ static void CloseChannel(int i) {
     InterlockedIncrement(&g_slots[i].ChanCloses);
     g_slots[i].SessionLive = 0;
     }   // PubLock released: an in-flight FrameArrived can now take it, see the wiped pool and return
-    if (!d->session && !d->pool && !d->item && !d->lastFull) return;   // PrintWindow channel: nothing to reap
+    if (!d->session && !d->pool && !d->item && !d->lastFull) return;   // nothing to reap
     StageScope reap(WGCBRK_STG_CLOSE_REAP, i);
     std::promise<void> done;
     g_teardownDone[i] = done.get_future().share();
@@ -1666,31 +1028,14 @@ static void CloseChannel(int i) {
     }
 }
 
-// True when the relay on slot i should be re-opened because its thumbnail source no longer has the destination's
-// size (see g_relaySizeCtl). Main thread only: the thumbnail was registered here, in OpenChannel.
-static bool RelayOutgrown(int i, const Channel& c, const WGCBRK_SLOT* s, SIZE* live) {
-    SIZE q{};
-    if (FAILED(DwmQueryThumbnailSourceSize(c.relayThumb, &q)) || q.cx <= 0 || q.cy <= 0) return false;
-    if (q.cx == c.relayW && q.cy == c.relayH) { g_relaySeenTick[i] = 0; return false; }   // in step
-    if (g_relaySizeCtlValid[i] && g_relaySizeCtl[i] == s->ControlSeq &&
-        q.cx == g_relayReopenW[i] && q.cy == g_relayReopenH[i]) return false;              // done for this request+size
-    *live = q;
-    const ULONGLONG now = GetTickCount64();
-    if (!g_relaySeenTick[i] || q.cx != g_relaySeenW[i] || q.cy != g_relaySeenH[i]) {    // a new size: start its clock
-        g_relaySeenW[i] = q.cx; g_relaySeenH[i] = q.cy; g_relaySeenTick[i] = now;
-        return false;
-    }
-    return now - g_relaySeenTick[i] >= RELAY_SIZE_SETTLE_MS;                             // settled: re-open
-}
-
-// True when the plain-WGC channel on slot i dropped a frame for size, has published nothing since, that size has held
-// RELAY_SIZE_SETTLE_MS, and the channel was not reopened yet for this agent request and size (see g_sizeReopenCtl); *w and
+// True when the channel on slot i dropped a frame for size, has published nothing since, that size has held
+// SIZE_SETTLE_MS, and the channel was not reopened yet for this agent request and size (see g_sizeReopenCtl); *w and
 // *h get the size. A drop already answered for that request and size is cleared here, so it arms no deadline: the recreated
 // pool delivers on the window's next change. Under the slot's PubLock, because FrameArrived writes these fields under it.
 static bool SizeDropOwed(int i, const WGCBRK_SLOT* s, LONG* w, LONG* h) {
     PubLock lk(i);
     Channel& c = g_ch[i];
-    if (!c.sizeDropTick || GetTickCount64() - c.sizeDropTick < RELAY_SIZE_SETTLE_MS) return false;
+    if (!c.sizeDropTick || GetTickCount64() - c.sizeDropTick < SIZE_SETTLE_MS) return false;
     if (g_sizeReopenValid[i] && g_sizeReopenCtl[i] == s->ControlSeq &&
         c.sizeDropW == g_sizeReopenW[i] && c.sizeDropH == g_sizeReopenH[i]) { c.sizeDropTick = 0; return false; }
     *w = c.sizeDropW; *h = c.sizeDropH;
@@ -1731,7 +1076,7 @@ static void AckFirstRegistrations() {
 
 static void Reconcile() {
     StageScope stage(WGCBRK_STG_RECONCILE, 0);
-    AckFirstRegistrations();   // GUARD:ackfirst - before any open, so no slot's work delays another slot's ack
+    AckFirstRegistrations();   // before any open, so no slot's work delays another slot's ack
     for (int i = 0; i < WGCBRK_MAX_SLOTS; i++) {
         WGCBRK_SLOT* s = &g_slots[i];
         // R1/R4 (rest-zero D): the request this pass answers, acknowledged in CtlAck once the slot has been handled below.
@@ -1739,114 +1084,43 @@ static void Reconcile() {
         const LONG ctl0 = s->ControlSeq;
         MemoryBarrier();
         HWND want = (HWND)(ULONG_PTR)s->Hwnd;
-        if (g_deafHold[i] && ctl0 != g_deafCtl[i]) g_deafHold[i] = false;   // the agent asked again: one more ladder
-        bool wantOpen = (s->ReqState == WGCBRK_REQUESTED) && want && !g_deafHold[i];
+        if (g_failHold[i] && ctl0 != g_failHoldCtl[i]) g_failHold[i] = false;   // the agent asked again: one more open
+        bool wantOpen = (s->ReqState == WGCBRK_REQUESTED) && want && !g_failHold[i];
         Channel& c = g_ch[i];
-        // A RELAY'S UNANSWERED POKE, TIMED FROM THE POKE. Only a relay is held to its pokes, and its quiet test below
-        // measures whether the source really changed before it acts. A plain-WGC session is trusted to deliver every change
-        // of its window - Windows sends a frame for each - and a key or a click is no promise of change, so its pokes are
-        // not tracked and nothing is armed for them. The silence is timed from the first poke no frame has answered; a poke
-        // first seen within WGCBRK_POKE_TRAIL_MS of an arrival is that arrival's (the agent pokes from its desktop-duplication
-        // pass, behind WGC), unless the channel's capture item was closed, which delivers nothing more. Under the slot's
-        // PubLock, because the FrameArrived handler writes pokeAtLastArrival/lastArrivalTick under it.
-        if (wantOpen && c.hwnd == want && c.relay) {
-            PubLock pend(i);
-            const LONG pk = g_slots[i].PokeSeq;
-            const ULONGLONG nowP = GetTickCount64();
-            if (pk == c.pokeAtLastArrival)
-                c.pokePendingSince = 0;                               // every poke is answered by a frame
-            else if (g_closedGen[i] != g_slots[i].ChanGen && c.lastArrivalTick &&
-                     nowP - c.lastArrivalTick < WGCBRK_POKE_TRAIL_MS) {
-                c.pokeAtLastArrival = pk;                             // it trails a frame: that frame's
-                c.pokePendingSince = 0;
-            }
-            else if (!c.pokePendingSince)
-                c.pokePendingSince = nowP;                            // the first unanswered poke
-        }
-        if (wantOpen && c.hwnd != want) { if (c.hwnd) CloseChannel(i); g_relayReopened[i] = false; g_closedReopened[i] = false; g_relaySizeCtlValid[i] = false; g_relaySeenTick[i] = 0; g_sizeReopenValid[i] = false; OpenChannel(i); }
-        else if (!wantOpen && c.hwnd)   { CloseChannel(i); g_relayReopened[i] = false; g_closedReopened[i] = false; g_relaySizeCtlValid[i] = false; g_relaySeenTick[i] = 0; g_sizeReopenValid[i] = false; }
+        if (wantOpen && c.hwnd != want) { if (c.hwnd) CloseChannel(i); g_closedReopened[i] = false; g_sizeReopenValid[i] = false; OpenChannel(i); }
+        else if (!wantOpen && c.hwnd)   { CloseChannel(i); g_closedReopened[i] = false; g_sizeReopenValid[i] = false; }
         // WINDOWS CLOSED THIS SESSION'S CAPTURE ITEM: reopen at once. Observed first (2026-09-30, Jev 0.96 observe-first) and
         // now measured: on 26100.1742 a UWP app's first item is closed as it launches - Settings (2026-09-30) and Calculator
         // (rz8, 2026-10-01: 3 frames, the splash, then ITEM closed=1) - and a closed item delivers nothing more, so the window
         // stayed on its splash in dom0 until something poked it (the owner watched Calculator do it for a minute, and found its
         // first menu render slow). The Closed handler wakes this loop; the reopen costs one session. A reopened item closed
         // again before it delivered anything is not reopened again: DEAF, loud (Jev: repair now 0.99, loop risk bounded 0.30).
-        else if (wantOpen && c.hwnd == want && !c.pw && !c.relay && g_closedGen[i] == g_slots[i].ChanGen &&
+        else if (wantOpen && c.hwnd == want && g_closedGen[i] == g_slots[i].ChanGen &&
                  IsWindow(want) && IsWindowVisible(want) && !IsIconic(want)) {
             const bool delivered = (c.lastArrivalTick != 0);
             g_slots[i].Reroutes++;
             CloseChannel(i);          // wipes the Channel - survivors are set after it
             if (g_closedReopened[i] && !delivered)
                 DeclareDeaf(i);
-            else { g_closedReopened[i] = true; g_forcePw[i] = false; OpenChannel(i); }
-        }
-        else if (SIZE live{}; wantOpen && c.hwnd == want && c.relay && c.relayThumb && RelayOutgrown(i, c, s, &live)) {
-            g_slots[i].Reroutes++;                          // visible in the peek; RelayOk counts the re-open
-            const LONG ctl = s->ControlSeq;
-            CloseChannel(i);                                // wipes the Channel - survivors are set after it
-            g_relaySizeCtl[i] = ctl; g_relaySizeCtlValid[i] = true; g_relaySeenTick[i] = 0;
-            g_relayReopenW[i] = live.cx; g_relayReopenH[i] = live.cy;
-            g_forcePw[i] = true;                            // OpenChannel tries the relay where PrintWindow would be
-            OpenChannel(i);
+            else { g_closedReopened[i] = true; OpenChannel(i); }
         }
         // A FRAME DROPPED FOR SIZE, NOTHING PUBLISHED SINCE: one fresh session serves the window at its new size (see
-        // g_sizeReopenCtl). The plain-WGC counterpart of the relay re-open above, bounded the same way.
-        else if (LONG dw = 0, dh = 0; wantOpen && c.hwnd == want && !c.pw && !c.relay &&
+        // g_sizeReopenCtl).
+        else if (LONG dw = 0, dh = 0; wantOpen && c.hwnd == want &&
                  IsWindow(want) && IsWindowVisible(want) && !IsIconic(want) && SizeDropOwed(i, s, &dw, &dh)) {
             g_slots[i].Reroutes++;                          // visible in the peek, next to dropsize
             const LONG ctl = s->ControlSeq;
             CloseChannel(i);                                // wipes the Channel - survivors are set after it
             g_sizeReopenCtl[i] = ctl; g_sizeReopenW[i] = dw; g_sizeReopenH[i] = dh; g_sizeReopenValid[i] = true;
-            g_forcePw[i] = false;
             OpenChannel(i);
         }
-        // A RELAY THAT STOPPED DELIVERING: its source measurably changed (RelaySrcDecides hashes a sample of the source,
-        // so a static window never counts) and no frame followed a poke for WGCBRK_WGC_QUIET_MS - or the fresh session the
-        // re-open below gave it has delivered nothing. No plain-WGC channel is tested here (see the pending pokes above).
-        // g_relayNoDemote is the control, not a product setting.
-        else if (wantOpen && c.hwnd == want && c.relay && !g_relayNoDemote &&
-                 IsWindow(want) && IsWindowVisible(want) && !IsIconic(want) &&
-                 (GetTickCount64() - (c.lastArrivalTick ? c.lastArrivalTick : c.openTick))
-                     >= WGCBRK_WGC_QUIET_MS &&
-                 ((c.lastArrivalTick == 0 && c.ladderFresh) ||
-                  (c.pokePendingSince && GetTickCount64() - c.pokePendingSince >= WGCBRK_WGC_QUIET_MS &&
-                   RelaySrcDecides(i)))) {
-            g_slots[i].Reroutes++;
-            // One re-open per window, and one per quiet episode for a session that delivered; a re-opened relay that
-            // delivers nothing is DEAF: FAILED + WGCBRK_E_DEAF, held until the agent asks again (DeclareDeaf), and the
-            // agent tells the user. QuietReroutes counts sessions recreated (the agent's QGAWGCRECREATE), so it moves only
-            // when the re-open did not itself end in the deaf hold (OpenChannel declares DEAF when a ladder open fails).
-            const bool delivered = (c.lastArrivalTick != 0);
-            CloseChannel(i);          // wipes the Channel - so set the survivors AFTER it
-            if (!g_relayReopened[i] || delivered) {
-                g_relayReopened[i] = true; g_forcePw[i] = true; OpenChannel(i); g_ch[i].ladderFresh = true;
-                if (!g_deafHold[i]) g_slots[i].QuietReroutes++;
-            }
-            else DeclareDeaf(i);
-        }
-        // THE NEXT MOMENT THIS SLOT'S ANSWER CAN CHANGE WITHOUT A NEW REQUEST (rest-zero D) - armed only while something
-        // is owed: a first frame (R2), an unanswered poke (R3), a throttled relay source test, a relay size settling. At
-        // rest none of these hold, so nothing is armed and the loop sleeps until an event.
+        // THE NEXT MOMENT THIS SLOT'S ANSWER CAN CHANGE WITHOUT A NEW REQUEST (rest-zero D) - armed only while a frame
+        // dropped for size is settling. At rest nothing is owed, so nothing is armed and the loop sleeps until an event.
         {
             const Channel& n = g_ch[i];
-            if (wantOpen && n.hwnd == want && !n.pw && !(n.relay && g_relayNoDemote) &&
-                IsWindow(want) && IsWindowVisible(want) && !IsIconic(want)) {
-                const ULONGLONG since = n.lastArrivalTick ? n.lastArrivalTick : n.openTick;
-                if (!n.lastArrivalTick && n.ladderFresh)
-                    Due(since + WGCBRK_WGC_QUIET_MS);                                                     // R2
-                else if (n.pokePendingSince) {
-                    ULONGLONG due = (n.pokePendingSince > since ? n.pokePendingSince : since) + WGCBRK_WGC_QUIET_MS; // R3
-                    // A relay's quiet test also needs its source test, which is throttled: the deadline is the LATER of
-                    // the two - the earlier one would wake this loop to a test that cannot run yet, every pass, until the
-                    // throttle ends (a spin).
-                    if (n.relay && n.srcHashSeen && n.srcHashTick + n.srcHashMs > due) due = n.srcHashTick + n.srcHashMs;
-                    Due(due);
-                }
-                if (!n.relay && n.sizeDropTick)
-                    Due(n.sizeDropTick + RELAY_SIZE_SETTLE_MS);                                           // size drop
-            }
-            if (wantOpen && n.hwnd == want && n.relay && g_relaySeenTick[i])
-                Due(g_relaySeenTick[i] + RELAY_SIZE_SETTLE_MS);
+            if (wantOpen && n.hwnd == want && n.sizeDropTick &&
+                IsWindow(want) && IsWindowVisible(want) && !IsIconic(want))
+                Due(n.sizeDropTick + SIZE_SETTLE_MS);                                                   // size drop
         }
         s->CtlAck = ctl0;   // after any open/close above: for an unregister, the slot's buffers are no longer ours
     }
@@ -1879,11 +1153,7 @@ int wmain(int argc, wchar_t** argv) {
     {
         typedef HRESULT (WINAPI *PFN_STD)(HANDLE, PCWSTR);
         if (auto p = (PFN_STD)GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "SetThreadDescription"))
-#if WGCBRK_FAULT_INJECTION
-            p(GetCurrentThread(), L"wgcbroker: main [FAULT-INJECTION build]");   // a test binary says so where it runs
-#else
             p(GetCurrentThread(), L"wgcbroker: main");
-#endif
     }
     HANDLE mtx = CreateMutexW(nullptr, FALSE, WGCBRK_SINGLETON_NAME);   // first, and held for life: the agent reads it
     if (mtx) { DWORD w = WaitForSingleObject(mtx, 0);
@@ -1909,43 +1179,10 @@ int wmain(int argc, wchar_t** argv) {
     } catch (...) { g_dirtyApi = false; }
     if (!InitD3D())      return 3;
 
-    // THE RELAY CAPABILITY, LATCHED HERE AND NEVER RE-READ. Decided once, at start, from the build
-    // and an explicit opt-out - the project's rule, because a runtime re-read that failed
-    // transiently would silently downgrade an eligible guest, and a silent downgrade is exactly the
-    // fallback this work exists to remove. Default ON where it is known to work: the relay was
-    // measured on 26200 and every WGC prerequisite it leans on (border removal, DirtyRegions) needs
-    // 24H2+ anyway. Never on Win10, where WGC cannot serve a per-window path at all.
+    // THE TEST SWITCHES (g_dirtyModeOn, g_minUpdateMs), read ONCE at start from HKLM\SOFTWARE\Qubes\GuiAgent.
     {
-        // RtlGetVersion, NOT VerifyVersionInfo/GetVersionEx. Those are subject to the compatibility
-        // manifest shim and report an older build unless the binary declares supportedOS - the agent
-        // documents exactly this at main.c:11652 and uses RtlGetVersion for the same gate. The first
-        // R1 build used VerifyVersionInfo and the relay NEVER ENGAGED on a 26200.8037 guest: two
-        // slots sat on the polled fallback with relayOk=0 AND relayFail=0, i.e. not even attempted,
-        // and nothing said why. A capability that fails to latch has to be visible.
-        DWORD build = 0;
-        if (HMODULE nt = GetModuleHandleW(L"ntdll.dll")) {
-            typedef LONG (WINAPI *PFN_RTLGETVERSION)(OSVERSIONINFOW*);
-            auto pRtlGetVersion = (PFN_RTLGETVERSION)GetProcAddress(nt, "RtlGetVersion");
-            OSVERSIONINFOW ovi{}; ovi.dwOSVersionInfoSize = sizeof(ovi);
-            if (pRtlGetVersion && pRtlGetVersion(&ovi) == 0) build = ovi.dwBuildNumber;
-        }
-        g_RelayOn = (build >= 26100);
-        // Explicit opt-out, read ONCE: HKLM\SOFTWARE\Qubes\GuiAgent : QubesWgcRelay = 0.
         HKEY k = nullptr;
         if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Qubes\\GuiAgent", 0, KEY_READ, &k) == ERROR_SUCCESS) {
-            DWORD v = 1, cb = sizeof(v), ty = 0;
-            if (RegQueryValueExW(k, L"QubesWgcRelay", nullptr, &ty, (BYTE*)&v, &cb) == ERROR_SUCCESS
-                && ty == REG_DWORD && v == 0)
-                g_RelayOn = false;
-            // THE CONTROL, read the same way and latched the same way: QubesWgcRelayNoDemote = 1
-            // stops a relay channel being demoted at all. Jev required a control run before the
-            // demotion rule was changed (needs_a_control 0.74) - with this set, a relay that the old
-            // rule would have demoted keeps running, which is what shows it WOULD have kept
-            // delivering. Not a product setting; defaults off; never read again after start.
-            DWORD nd = 0; DWORD cbnd = sizeof(nd); DWORD tynd = 0;
-            if (RegQueryValueExW(k, L"QubesWgcRelayNoDemote", nullptr, &tynd, (BYTE*)&nd, &cbnd) == ERROR_SUCCESS
-                && tynd == REG_DWORD && nd == 1)
-                g_relayNoDemote = true;
             DWORD dm = 1, cbdm = sizeof(dm), tydm = 0;
             if (RegQueryValueExW(k, L"QubesWgcDirtyMode", nullptr, &tydm, (BYTE*)&dm, &cbdm) == ERROR_SUCCESS && tydm == REG_DWORD && dm == 0)
                 g_dirtyModeOn = false;
@@ -1954,7 +1191,6 @@ int wmain(int argc, wchar_t** argv) {
                 g_minUpdateMs = (LONG)mu;
             RegCloseKey(k);
         }
-        g_RelayBuild = build;   // published below, once the section is mapped
     }
 
     HANDLE hMap = OpenFileMappingW(FILE_MAP_READ | FILE_MAP_WRITE, FALSE, shmName);
@@ -1970,13 +1206,6 @@ int wmain(int argc, wchar_t** argv) {
     // adversary (c): a stale broker must not serve a newer agent's section.
     if (g_hdr->AgentPid && (DWORD)g_hdr->AgentPid != g_launcherPid) return 7;
     g_hdr->BrokerPid = (LONG)GetCurrentProcessId();
-    // PUBLISH THE LATCHED CAPABILITY AND THE BUILD IT WAS DECIDED FROM. Without this the first R1
-    // build's silent off was indistinguishable from "no rogue window appeared": every slot read
-    // relayOk=0 relayFail=0 and nothing said whether the relay was disabled or simply unused. Now
-    // guest/wgcbroker-peek.ps1 prints it, so "did the capability even latch" is answered before any
-    // route is interpreted.
-    g_hdr->RelayCapable = g_RelayOn ? 1 : 0;   // 2 once RelayUsable's probe has refused (rest-zero G)
-    g_hdr->RelayOsBuild = (LONG)g_RelayBuild;
     g_hCtl = OpenEventW(EVENT_MODIFY_STATE | SYNCHRONIZE, FALSE, ctlName);
     // FAIL LOUD. This handle is how the agent WAKES us the instant it registers a window; without
     // it the wait below falls back to its 250 ms timeout and every window - every menu, every
@@ -1988,7 +1217,7 @@ int wmain(int argc, wchar_t** argv) {
     // it (the agent then falls back to noticing frames on its capture pass, as it always did).
     if (frmName) g_hFrame = OpenEventW(EVENT_MODIFY_STATE | SYNCHRONIZE, FALSE, frmName);
     // TELL THE AGENT WE ARE UP. Everything it reads on this wake is already published above - the pid its adoption
-    // path keys on, the relay capability, and the two events it handed us - and the ctl open above has already
+    // path keys on and the two events it handed us - and the ctl open above has already
     // refused if we cannot serve, so this never announces a broker that will not run. Without it the agent learned
     // we were up on whichever main-loop pass next ran BrokerSupervise: over 229 launch->ready pairs that was a
     // median of 4.85 s but a 31.33 s maximum, against the agent's 30 s "broker not ready" warning to the user.
@@ -2067,15 +1296,9 @@ int wmain(int argc, wchar_t** argv) {
         if (g_agent) compact[n++] = g_agent;
         const DWORD aliveIdx = n;
         if (agentAlive) compact[n++] = agentAlive;
-        // THIS THREAD OWNS WINDOWS, SO IT MUST PUMP. The relay's destination windows are created here,
-        // and a window-owning thread that retrieves no messages for 5 s is HUNG by Windows' definition
-        // (IsHungAppWindow): Windows ghosted every relay destination - a "Ghost"-class twin of the exact
-        // size of each relayed window, which the agent then mapped and the broker relayed in turn
-        // (measured 2026-09-27, win11de-v7: five relayed windows, five Ghosts, same sizes; every census
-        // today had them) - and the owner's drag of an override-redirect window raised Windows' own
-        // not-responding warning for the broker (Jev: ghosts are ours 0.94, the warning 0.88). The wait
-        // also wakes for input (and now for the session and desktop-switch notifications), and the queue
-        // is drained every pass.
+        // THIS THREAD OWNS A WINDOW, SO IT MUST PUMP: the session notifications arrive as messages to msgWnd and the
+        // desktop-switch hook is delivered through this queue. The wait wakes for them, and the queue is drained every
+        // pass.
         DWORD wr = MsgWaitForMultipleObjects(n, compact, FALSE, timeout, QS_ALLINPUT);
         if (g_agent && wr == WAIT_OBJECT_0 + agentIdx) break; // agent exited
         if (agentAlive && (wr == WAIT_ABANDONED_0 + aliveIdx || wr == WAIT_OBJECT_0 + aliveIdx)) break;   // agent died
@@ -2090,56 +1313,6 @@ int wmain(int argc, wchar_t** argv) {
         Reconcile();
         RepublishRetained();   // after Reconcile: a slot whose window changed is closed by now
         FlushPendingSignatures();   // sign a burst's last frame once the burst is over
-        // Service PrintWindow-mode channels: ON OPEN AND ON THEIR OWN POKES, NOTHING ELSE (rest-zero S3).
-        //
-        // PrintWindow is not cheap and it is not ours to pay: it renders the full window
-        // SYNCHRONOUSLY ON THE CAPTURED APPLICATION'S UI THREAD. Measured 2026-09-25 on the
-        // Settings window, p50 31.7 ms (p90 38.9, max 53.3, n=40), against this loop's old fixed
-        // 33 ms tick - about 43% of one core, for one window, whether or not anything changed.
-        // Jev on those numbers: unacceptable-as-is 1.00, damage-driven-polling 0.87.
-        //
-        // The agent bumps PokeSeq when this window's own pixels changed and signals the control event.
-        // The 1 s staleness backstop that used to render anyway (SafetyPolls), its adaptive backoff and the
-        // futile-poke stretch are REMOVED: on a static desktop they were the broker's own timed renders, and a
-        // Windows 11 window asked to render repaints - which is the next change (ADR-capture section 8, 14).
-        // SafetyPolls stays as a counter and must read 0. Only a window WGC refused at CreateForWindow reaches
-        // this route - every o-r menu in 2026-09, none of 13 popups on 26300.9457 (2026-11-01, ADR-capture
-        // section 19 item 6) - and the relay's ladder no longer descends here. With no PrintWindow channel
-        // the loop below reads WGCBRK_PW_FIRST_MS for nothing and arms nothing.
-        const ULONGLONG nowTick = GetTickCount64();
-        for (int i = 0; i < WGCBRK_MAX_SLOTS; i++) {
-            if (!g_ch[i].pw || !g_ch[i].hwnd) continue;
-            WGCBRK_SLOT* ps = &g_slots[i];
-            const LONG poke = ps->PokeSeq;
-            const bool changed = (poke != ps->PokeAck);
-            // THE FIRST FRAME IS OWED (R2): rendered at open, then on WGCBRK_PW_FIRST_MS until one render publishes.
-            const bool owed = (ps->AckState != WGCBRK_ACTIVE) &&
-                              g_ch[i].pwTries < (int)(sizeof(WGCBRK_PW_FIRST_MS) / sizeof(WGCBRK_PW_FIRST_MS[0]));
-            if (!changed && !owed) continue;                  // REST: nothing asked, nothing rendered
-            // VISIBILITY GATE. A window dom0 is not showing - minimised, or gone - is not worth
-            // rendering at all; its own change (a restore paints it) pokes it again.
-            if (!IsWindow(g_ch[i].hwnd) || !IsWindowVisible(g_ch[i].hwnd) || IsIconic(g_ch[i].hwnd)) {
-                ps->PollsSkipped++;
-                continue;
-            }
-            ULONGLONG notBefore = 0;
-            if (owed && !changed)
-                notBefore = g_ch[i].openTick + WGCBRK_PW_FIRST_MS[g_ch[i].pwTries];
-            else if (g_ch[i].pwLastTick)
-                // Coalesce: however many pokes arrived, render at most every WGCBRK_POKE_MIN_INTERVAL_MS -
-                // a deadline for the rest of the interval, not a tick. The poke is not acknowledged meanwhile.
-                notBefore = g_ch[i].pwLastTick + WGCBRK_POKE_MIN_INTERVAL_MS;
-            if (nowTick < notBefore) { Due(notBefore); ps->PollsSkipped++; continue; }
-            ps->PokeAck = poke;              // before rendering: damage during the render re-pokes
-            g_ch[i].pwLastTick = nowTick;
-            if (owed) g_ch[i].pwTries++;
-            ps->PollsServiced++;
-            (void)PublishPrintWindow(i);
-            // Still owed after this try: the schedule's next step is a deadline.
-            if (ps->AckState != WGCBRK_ACTIVE &&
-                g_ch[i].pwTries < (int)(sizeof(WGCBRK_PW_FIRST_MS) / sizeof(WGCBRK_PW_FIRST_MS[0])))
-                Due(g_ch[i].openTick + WGCBRK_PW_FIRST_MS[g_ch[i].pwTries]);
-        }
         CheckAgentDeadline();
     }
     for (int i = 0; i < WGCBRK_MAX_SLOTS; i++) if (g_ch[i].hwnd) CloseChannel(i);

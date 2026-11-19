@@ -28,7 +28,7 @@
 # section's value $secAbi; tools/tests/peek-abi-assert-selftest.sh fails if they ever collide again.
 param([int]$Samples = 2, [int]$IntervalSec = 6, [switch]$All)
 
-$WANT_ABI = 28
+$WANT_ABI = 29
 $HDR    = 128     # sizeof(WGCBRK_HEADER)
 $STRIDE = 3480    # sizeof(WGCBRK_SLOT) at ABI 28, TAKEN FROM THE COMPILER, not from arithmetic by hand -
                   # tools/tests/wgcbroker-layout-selftest.sh derives it from the header with gcc and is what
@@ -89,8 +89,8 @@ for ($n = 0; $n -lt $Samples; $n++) {
   # now = THIS reader's GetTickCount64 at the reading - the clock frame ages are taken against (tools/frame-age.py),
   # the guest's own, with none of the rig's polling latency in it. agentFrameWakes/agentStalls: R5, the broker's
   # deadline on the agent waking for its frames.
-  Write-Output ("S{0} HDR shutdown={1} producing={2} agentHB={3} brokerHB={4} agentPid={5} brokerPid={6} ctlgen={7} pokeLockMiss={8} relayCapable={9} relayOsBuild={10} brokerStage=0x{11:x} now={12} agentFrameWakes={13} agentStalls={14} agentStallTick={15}" -f `
-    $n,(RdI 12),(RdI 16),(RdL 40),(RdL 48),(RdI 56),(RdI 60),(RdI 64),(RdI 68),(RdI 72),(RdI 76),(RdI 20),[WgcPeek]::GetTickCount64(),(RdI 80),(RdI 84),(RdL 88))
+  Write-Output ("S{0} HDR shutdown={1} producing={2} agentHB={3} brokerHB={4} agentPid={5} brokerPid={6} ctlgen={7} brokerStage=0x{8:x} now={9} agentFrameWakes={10} agentStalls={11} agentStallTick={12}" -f `
+    $n,(RdI 12),(RdI 16),(RdL 40),(RdL 48),(RdI 56),(RdI 60),(RdI 64),(RdI 20),[WgcPeek]::GetTickCount64(),(RdI 80),(RdI 84),(RdL 88))
   # ABI 21: the agent's main-loop wakes by what woke it (rest-zero M1 attribution).
   Write-Output ("S{0} WAKES frame={1} vchan={2} winevent={3} broker={4} deadline={5} helper={6} other={7}" -f `
     $n,(RdI 100),(RdI 104),(RdI 108),(RdI 112),(RdI 116),(RdI 120),(RdI 124))
@@ -110,21 +110,13 @@ for ($n = 0; $n -lt $Samples; $n++) {
     }
     Write-Output ("S{0} slot{1} hwnd=0x{2:x} req={3} ctlseq={4} ack={5} failhr=0x{6:x} req={7}x{8} frame={9}x{10} seq={11} fid={12} captick={13} crop={14},{15}" -f `
       $n,$i,$hw,(RdI ($b+24)),(RdI ($b+28)),(RdI ($b+56)),(RdI ($b+60)),(RdI ($b+8)),(RdI ($b+12)),(RdI ($b+64)),(RdI ($b+68)),(RdI ($b+80)),(RdL ($b+88)),(RdL ($b+96)),(RdI ($b+16)),(RdI ($b+20)),(RdI ($b+3468)))
-    Write-Output ("S{0} slot{1} FRAMES arrived={2} published={3} dropsize={4} recreateOk={5} recreateFail={6} lastContent={7}x{8} pool={9}x{10} pw={11} polls={12}" -f `
-      $n,$i,(RdI ($b+192)),(RdI ($b+196)),(RdI ($b+200)),(RdI ($b+204)),(RdI ($b+208)),(RdI ($b+212)),(RdI ($b+216)),(RdI ($b+220)),(RdI ($b+224)),(RdI ($b+132)),(RdI ($b+184)))
-    Write-Output ("S{0} slot{1} POKE seq={2} ack={3} serviced={4} skipped={5} safety={6} reroutes={7} sameFrames={8} quietReroutes={9} probeBounces={10}" -f `
-      $n,$i,(RdI ($b+232)),(RdI ($b+236)),(RdI ($b+240)),(RdI ($b+244)),(RdI ($b+248)),(RdI ($b+252)),(RdI ($b+256)),(RdI ($b+260)),(RdI ($b+264)))
+    Write-Output ("S{0} slot{1} FRAMES arrived={2} published={3} dropsize={4} recreateOk={5} recreateFail={6} lastContent={7}x{8} pool={9}x{10}" -f `
+      $n,$i,(RdI ($b+192)),(RdI ($b+196)),(RdI ($b+200)),(RdI ($b+204)),(RdI ($b+208)),(RdI ($b+212)),(RdI ($b+216)),(RdI ($b+220)),(RdI ($b+224)))
+    # reroutes = sessions the broker reopened on its own (a closed capture item, a frame dropped for size);
+    # sameFrames = arrivals byte-identical to the published card, not republished.
+    Write-Output ("S{0} slot{1} REOPEN reroutes={2} sameFrames={3}" -f $n,$i,(RdI ($b+252)),(RdI ($b+256)))
     # ABI 22, rest-zero S1 / M9(b): frames published from WGC dirty regions, arrivals read whole, bytes written to the ring.
     Write-Output ("S{0} slot{1} DIRTY publishes={2} fullCopies={3} bytes={4}" -f $n,$i,(RdI ($b+3424)),(RdI ($b+3428)),(RdL ($b+3432)))
-    # ABI 8. route: 0=WGC on the window, 1=RELAY (WGC on a destination carrying a DWM thumbnail),
-    # 2=polled PrintWindow. Routes 0 and 1 are arrival-driven; 2 is the fallback the relay exists to
-    # retire, so "how many slots are still on route 2" is the number that measures progress.
-    $rt = RdI ($b+268)
-    $rn = switch ($rt) { 0 { 'WGC' } 1 { 'RELAY' } 2 { 'PW' } default { "?$rt" } }
-    $rq = RdI ($b+3440)
-    $rqn = switch ($rq) { 0 { 'wgc/any' } 1 { 'RELAY' } 2 { 'PW' } default { "?$rq" } }
-    Write-Output ("S{0} slot{1} ROUTE {2} ({3}) reqroute={4} ({5}) relayOk={6} relayFail={7} relayDest=0x{8:x}" -f `
-      $n,$i,$rt,$rn,$rq,$rqn,(RdI ($b+272)),(RdI ($b+276)),(RdL ($b+280)))
     # ABI 26: the crop the broker USED and the window origin it derived it from, so "the crop was
     # wrong" and "the crop was right and the pixels were not there" stop being indistinguishable.
     # `valid={10}` USED TO REFERENCE AN ARGUMENT THAT WAS NEVER PASSED - ten arguments are indices 0..9 -
@@ -135,17 +127,10 @@ for ($n = 0; $n -lt $Samples; $n++) {
     # and that ambiguity is what ABI 27 and ABI 28 exist to remove.
     Write-Output ("S{0} slot{1} CROP used={2},{3} winorigin={4},{5} winvalid={6} reqcard={7},{8} cardvalid={9} reqcrop={10},{11}" -f `
       $n,$i,(RdI ($b+3452)),(RdI ($b+3456)),(RdI ($b+3460)),(RdI ($b+3464)),(RdI ($b+3472)),(RdI ($b+3444)),(RdI ($b+3448)),(RdI ($b+3468)),(RdI ($b+16)),(RdI ($b+20)))
-    # ABI 9. arrivalRaw climbing while FRAMES arrived stays flat = the guard is throwing frames away,
-    # which the quiet detector then reads as a dead feed. Flat arrivalRaw = the event really stopped.
+    # ABI 9. arrivalRaw climbing while FRAMES arrived stays flat = the guard is throwing frames away.
+    # Flat arrivalRaw = the event really stopped.
     Write-Output ("S{0} slot{1} ARRIVALS raw={2} rejected={3}" -f `
       $n,$i,(RdI ($b+288)),(RdI ($b+292)))
-    # ABI 10. relayStaticHolds = demotions DECLINED because the source had not changed. If a relay
-    # slot is alive and this never moves, the new rule is not firing and any pass is unproven.
-    # ABI 11. The four outcomes of the source-change test, so "why was this relay kept or dropped"
-    # is answerable without a rebuild: holds=measured-same (kept), changed=measured-different
-    # (demoted), unmeasured=throttled (neither), pwFail=could not render the source at all.
-    Write-Output ("S{0} slot{1} RELAYHOLD staticHolds={2} srcChanged={3} srcUnmeasured={4} pwFail={5}" -f `
-      $n,$i,(RdI ($b+296)),(RdI ($b+300)),(RdI ($b+304)),(RdI ($b+308)))
     # ABI 12. Distinct colours in the frame the broker actually published, sampled every 9th pixel -
     # the same sampling window-truth-survey.ps1 uses - so this is directly comparable with that
     # window's fullColours. This is the only route to the DELIVERED pixels for an override-redirect
@@ -162,7 +147,7 @@ for ($n = 0; $n -lt $Samples; $n++) {
     # and never reopened - a different defect from a live session that stopped delivering, and one the
     # frame counters alone could never distinguish. chanGen says which session those counters belong to.
     # ABI 15. genFrames is what THIS session delivered; FRAMES arrived is cumulative across every
-    # session the slot has ever had. A relay slot at gen=2 with genFrames=0 delivered NOTHING itself,
+    # session the slot has ever had. A slot at gen=2 with genFrames=0 delivered NOTHING itself,
     # however large its cumulative count - the ambiguity that forced a set of results to be withdrawn.
     Write-Output ("S{0} slot{1} SESSION opens={2} closes={3} live={4} gen={5} genFrames={6}" -f `
       $n,$i,(RdI ($b+3388)),(RdI ($b+3392)),(RdI ($b+3396)),(RdI ($b+3400)),(RdI ($b+3404)))
@@ -175,7 +160,7 @@ for ($n = 0; $n -lt $Samples; $n++) {
     # ABI 17. republished = cards the broker served from its RETAINED capture because the agent's registration
     # changed and no arrival answered it (a static window whose card moved). crop (above) = ReqCropX/Y, the
     # card's offset inside the window - what a truth render must be cut at to compare with the card.
-    Write-Output ("S{0} slot{1} ITEM closed={2} closedTick={3} republished={4} hungSkips={5}" -f $n,$i,(RdI ($b+3408)),(RdL ($b+3416)),(RdI ($b+3412)),(RdI ($b+84)))
+    Write-Output ("S{0} slot{1} ITEM closed={2} closedTick={3} republished={4}" -f $n,$i,(RdI ($b+3408)),(RdL ($b+3416)),(RdI ($b+3412)))
     # ABI 19. ctlAck = the ControlSeq the broker last HANDLED for this slot (the agent's request deadline keys on it);
     # deafHolds = times the slot went FAILED with WGCBRK_E_DEAF (failhr 0xa057deaf above) - must be 0 (M7).
     Write-Output ("S{0} slot{1} ACK ctlAck={2} deafHolds={3}" -f $n,$i,(RdI ($b+188)),(RdI ($b+228)))

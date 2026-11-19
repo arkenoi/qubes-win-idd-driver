@@ -10,21 +10,20 @@ read the composited screen. Asking an application to paint costs its own UI thre
 milliseconds, and some applications repaint because they were asked to, which creates the very change we then
 react to. Reading the screen is cheap, but it is "slicing": whatever covers the window ends up in its picture.
 
-On Windows 11 builds 26100 and later, every window is now captured by a helper running in the user's session
+On Windows 11 build 26200 (25H2) and later, every window is captured by a helper running in the user's session
 with Windows' own graphics capture. Windows pushes a frame whenever the window actually changes, no
 application is asked to paint, and nothing of ours runs while the desktop is at rest. The owner set that as
 the bar: "idle load should GO, not just be reduced". Measured on a quiet desktop, our processes wake zero
-times per minute and use no CPU. Menus are the exception, since Windows refuses to capture them that way; they
-are rendered on demand, only when their pixels change or on input. Older builds keep the earlier engine: an
-unobstructed window is copied from the screen, a partly covered one is painted whole on each change of its
-visible pixels, with a guard against applications that echo our own render.
+times per minute and use no CPU. A window whose capture cannot be opened is not shown, and the user is told
+(§36). Older builds - Windows 10 and Windows 11 24H2 - keep the earlier engine: an unobstructed window is copied
+from the screen, a partly covered one is painted whole on each change of its visible pixels, with a guard against
+applications that echo our own render.
 
 A capture session can stop delivering. An ordinary window's session is trusted and never tested: Windows sends a
-frame for every change, and a key or a click is no promise of change. Two stops are repaired: a capture Windows
-closes is reopened at once, and a Start or Search window (the relay route) whose source measurably changed with
-no frame following gets a fresh session. A reopened capture closed again before its first frame, or a fresh
-relay session that delivers nothing, is declared deaf, and the user is told in dom0 to close and reopen the
-window. The accepted cost is that an ordinary window whose capture stops silently stays frozen unnoticed.
+frame for every change, and a key or a click is no promise of change. A capture Windows closes is reopened at
+once; a reopened capture closed again before its first frame is declared deaf, and the user is told in dom0 to
+close and reopen the window. The accepted cost is that a window whose capture stops silently stays frozen
+unnoticed.
 
 The record also keeps the paths not taken: copying resting windows from the desktop (rejected as slicing in
 disguise), bypassing Windows' compositor (not feasible without changing the security model), and timed re-
@@ -34,32 +33,26 @@ Where a window's pixels come from today:
 
 ```mermaid
 flowchart TD
-    A["A tracked guest window"] --> B{"Build 26100+ and the broker enabled?<br/>(latched once at agent Init, never re-read - §1)"}
-    B -->|yes| C{"Window class"}
-    C -->|"ordinary window, UWP frame, toast,<br/>Terminal, layered window"| D["WGC session in the user-session broker, on the window itself (§12, §18).<br/>Frames copied by WGC's dirty regions when the broker signals."]
-    C -->|"a window WGC refuses at CreateForWindow<br/>(o-r menus in 2026-09; none of 13 popups<br/>measured on 26300.9457, §19)"| E["Broker PrintWindow slot, rendered only on its own pokes:<br/>damage whose pixels changed, or input (§20, §23);<br/>first frame retried at 0/50/100/200/400 ms (§19)"]
+    A["A tracked guest window"] --> B{"Build 26200+ and the broker enabled?<br/>(latched once at agent Init, never re-read - §1, §36)"}
+    B -->|yes| C{"Can the broker open its capture?"}
+    C -->|yes| D["WGC session in the user-session broker, on the window itself (§12, §18).<br/>Frames copied by WGC's dirty regions when the broker signals."]
+    C -->|"no - the open throws"| E["Not shown: the slot is held FAILED with the error code,<br/>and the user is told (QGADIRECTSUPPRESS, §36)"]
     B -->|no| F{"Window class (PwWindowClassify)"}
     F -->|"ordinary, unoccluded, eligible"| G["Copied from the composited desktop,<br/>established by one PrintWindow (§2)"]
     F -->|"ordinary, partly covered"| H["Whole-window PrintWindow on each change of its own<br/>visible pixels (§3, §5), guarded against echoes (§9)"]
     F -->|"popup, NOREDIRECTIONBITMAP, layered"| I["Slices of the composited desktop"]
     D --> J["At rest nothing runs: no timer, no PrintWindow, no heartbeat (§14, §20)"]
-    E --> J
 ```
 
-How a capture that has stopped is noticed on build 26100 and later (§32):
+How a capture that has stopped is noticed on build 26200 and later (§32, §36):
 
 ```mermaid
 flowchart TD
     A["A WGC slot"] --> B{"What happened?"}
     B -->|"Windows closed the capture item<br/>(QGAWGCITEMCLOSED)"| C["Reopen the session - event-driven"]
     C -->|"closed again before its first frame"| G
-    B -->|"desktop damage, pointer motion,<br/>or a key or a click on an ordinary window"| N["Nothing. Windows delivers every change by itself;<br/>a key or a click is no promise of change."]
-    B -->|"a key or a click on a relay window (Start, Search)<br/>unanswered by the quiet deadline"| D{"Did a sampled hash of its source change?"}
-    D -->|"no - the window is static"| OK["Alive"]
-    D -->|yes| R["Re-open the relay session (QGAWGCRECREATE)"]
-    R --> F{"Does the fresh session deliver by the quiet deadline?"}
-    F -->|yes| OK
-    F -->|no| G["DEAF (QGAWGCDEAF), held until the window is registered again. The user is told in dom0 through the error route:<br/>'a window of app stopped updating ... close and reopen that window',<br/>once per application per boot, at most 8 error notices per boot"]
+    B -->|"desktop damage, pointer motion,<br/>or a key or a click"| N["Nothing. Windows delivers every change by itself;<br/>a key or a click is no promise of change."]
+    G["DEAF (QGAWGCDEAF), held until the window is registered again. The user is told in dom0 through the error route:<br/>'a window of app stopped updating ... close and reopen that window',<br/>once per application per boot, at most 8 error notices per boot"]
 ```
 
 ## The decisions at a glance
@@ -67,28 +60,28 @@ flowchart TD
 | § | decision | status | date |
 |---|---|---|---|
 | 1 | The pixel source is chosen per window class; capabilities are decided at start | ACCEPTED (Jev 0.79) | 2026-09-30 |
-| 2 | An unoccluded window is copied from the composited desktop, established once | ACCEPTED below 26100; RETIRED on 26100+ by §18/§20 | 2026-09-30 |
+| 2 | An unoccluded window is copied from the composited desktop, established once | ACCEPTED below 26200; RETIRED on 26200+ by §18/§20 (floor: §36) | 2026-09-30 |
 | 3 | A partly covered window is captured whole, never a mixed buffer | ACCEPTED (PrintWindow engine) | 2026-09-30 |
 | 4 | No TIMED PrintWindow | ACCEPTED (owner) | 2026-09-30 |
 | 5 | A window's change is a change of its OWN visible pixels | ACCEPTED | 2026-09-30 |
 | 6 | Guest stacking follows dom0 only through focus | ACCEPTED (a protocol fact) | 2026-09-30 |
-| 7 | Content dom0 shows but the guest covers | OPEN below 26100; answered on 26100+ by §18 | 2026-09-30 |
+| 7 | Content dom0 shows but the guest covers | OPEN below 26200; answered on 26200+ by §18 (floor: §36) | 2026-09-30 |
 | 8 | Some applications repaint because they were asked to paint | ACCEPTED (a measured fact) | 2026-09-30 |
 | 9 | The echo guard | ACCEPTED, PROVISIONAL (its main cost is not measured) | 2026-09-30 |
 | 10 | Widen the echo window to 500 ms | PROPOSED | 2026-09-30 |
 | 11 | Stop sweeping windows that have visible pixels; serve a held-back change when its pause ends | PROPOSED | 2026-09-30 |
 | 12 | UWP frame windows are captured with WGC on the frame itself | ACCEPTED; its quiet ladder amended by §19 and §32 | 2026-09-30 |
 | 13 | Keep the echo escalation for 10 s after a pause | REJECTED | 2026-09-30 |
-| 14 | At rest, zero work | ACCEPTED (owner); met on 26100+ (§20) | 2026-09-30 |
+| 14 | At rest, zero work | ACCEPTED (owner); met on 26200+ (§20, floor: §36) | 2026-09-30 |
 | 15 | A window at rest is copied from the desktop, whatever covers it | REJECTED (owner) | 2026-09-30 |
 | 16 | The echo guard is retired | PROPOSED; its premise (§15) was rejected | 2026-09-30 |
 | 17 | Liveness from process handles and system notifications, not heartbeats | PROPOSED; largely carried out in another form by §18 S4 and §19 | 2026-09-30 |
-| 18 | Every window on 26100+ is captured with WGC through the broker; at rest nothing runs | ACCEPTED, MEASUREMENT OWED; the deaf ladder amended by §32 | 2026-09-30 |
-| 19 | Rest-zero S3/S4 as built | ACCEPTED (Jev); the damage-driven liveness items SUPERSEDED by §32; item 6 MEASUREMENT RECORDED 2026-11-01, decision open | 2026-10-01 |
+| 18 | Every window on 26100+ is captured with WGC through the broker; at rest nothing runs | ACCEPTED, MEASUREMENT OWED; the deaf ladder amended by §32; floor 26200 and the relay retired by §36 | 2026-09-30 |
+| 19 | Rest-zero S3/S4 as built | ACCEPTED (Jev); the damage-driven liveness items SUPERSEDED by §32; item 6 SUPERSEDED by §36 | 2026-10-01 |
 | 20 | Rest-zero S2 and the three loops the acceptance found | ACCEPTED (Jev), MEASURED | 2026-10-01 |
 | 21 | Liveness pokes need a margin and the event order; a refused focus is not a no-op | the margin SUPERSEDED by §32; the focus fix ACCEPTED (Jev) | 2026-10-01 |
 | 22 | Windows' composition is not bypassed | ACCEPTED (Jev) | 2026-10-01 |
-| 23 | Pointer motion pokes only the slots the broker renders on request | ACCEPTED (Jev); kept by §32 | 2026-10-01 |
+| 23 | Pointer motion pokes only the slots the broker renders on request | SUPERSEDED by §36 (the poke is retired) | 2026-10-01 |
 | 24 | A liveness poke is checked against the windows above as they are now | PROPOSED (Jev), built on rz18; SUPERSEDED by §32 | 2026-10-01 |
 | 25 | The broker arena is reserved and committed per allocation | ACCEPTED (Jev) | 2026-10-01 |
 | 26 | No liveness poke from damage that also covers the desktop | SUPERSEDED by §32 | 2026-10-01 |
@@ -97,9 +90,10 @@ flowchart TD
 | 29 | Regions a window changes invisibly to WGC are learned | premise RETRACTED 2026-10-02; SUPERSEDED by §32 | 2026-10-02 |
 | 30 | A window's own untracked popups occlude its liveness damage | SUPERSEDED by §32 | 2026-10-02 |
 | 31 | Alt-nav key-tip badges are dropped fully | ACCEPTED (owner) | 2026-10-02 |
-| 32 | Liveness from Windows' own events and the relay's measured change; the damage-comparison detector goes | ACCEPTED (owner); amended 2026-11-19 | 2026-10-02 |
+| 32 | Liveness from Windows' own events and the relay's measured change; the damage-comparison detector goes | ACCEPTED (owner); amended 2026-11-19; the relay retired by §36 | 2026-10-02 |
 | 33 | Desktop duplication is a window-0 engine, created on demand - not the capture path | TARGET STATE (owner 2026-10-18) | 2026-10-18 |
 | 35 | The shell's drag image is shown by the windows beneath it, never as a window of its own | ACCEPTED (Jev) | 2026-11-15 |
+| 36 | The broker's floor is 25H2; below it the legacy path; the PrintWindow route, the relay and the poke are retired, and a capture the broker cannot open fails loudly | ACCEPTED (owner) | 2026-11-19 |
 
 Status words and the section format are defined in `docs/ADR-README.md`.
 
@@ -470,7 +464,8 @@ agent (it is idle then), and the agent's existing broker stage/hang diagnostics 
 ## 18. Every window on 26100+ is captured with WGC through the broker; at rest nothing runs
 
 **Status:** ACCEPTED, MEASUREMENT OWED (the measurement plan is in `DESIGN-rest-zero-capture.md`; §19-§21
-record what the stages found). The design's deaf ladder (E) and the relay (G) were changed by §32.
+record what the stages found). The design's deaf ladder (E) and the relay (G) were changed by §32; its
+floor (item 8, 26100) is raised to 26200 and the relay retired by §36.
 
 **Context.** §14 without slicing (§15, §2). The 2026-09-02 pure-per-window study settled for concessions
 because a SYSTEM agent has no per-window paint signal; the broker's FrameArrived is that signal, and a WGC
@@ -519,7 +514,7 @@ released by an existing event or process exit.
 **Status:** ACCEPTED (Jev), 2026-10-01, recorded while implementing §18's stages S3 (own-change pokes, deaf
 hold, no PrintWindow backstop) and S4 (no timed wake on either side). Items 1 and 2 concern damage-driven
 liveness pokes on WGC slots and are SUPERSEDED by §32; the rest stand. Item 6's premise was measured false
-on 26300.9457 on 2026-11-01; whether item 6 stays is the owner's decision.
+on 26300.9457 on 2026-11-01; item 6 is SUPERSEDED by §36.
 
 **Decisions.**
 
@@ -761,7 +756,7 @@ readback is marginal (Jev 0.56) until the per-frame cost split (readback vs copi
 ## 23. Pointer motion is not a promise of change: it pokes only the slots the broker renders on request
 
 **Status:** ACCEPTED (Jev), 2026-10-01. Agent 6d87b48 (`BrokerPokeWindowMotion`). §32 keeps it: WGC slots
-take no motion pokes, PrintWindow slots do.
+take no motion pokes, PrintWindow slots do. SUPERSEDED by §36, which retires the poke.
 
 **Context.** On a WGC slot an input poke only asks a liveness question ("a change is coming - did the session
 see it?"), and the broker of the time answered an unanswered poke after 2 s by recreating the session (§19
@@ -1005,7 +1000,7 @@ the damage-driven liveness pokes that §32 removed.
 **Status:** ACCEPTED (owner), 2026-10-02. Agent 9c709f5 (damage pokes no longer reach WGC slots;
 `DeafNotifyUser`), broker 7eb2bf43 (the relay leaves the deaf ladder, stays a capture route), cleanup agent
 cda961d; first shipped in rz29 (release agent b46db12f88efe256). Changes the approved design
-(`DESIGN-rest-zero-capture.md` E/G) and M7's deaf-ladder bar.
+(`DESIGN-rest-zero-capture.md` E/G) and M7's deaf-ladder bar. The relay is retired by §36.
 
 **Context.** The owner, 2026-10-02: "do we really need all this heavy machinery around?" and "so session
 capture fallback covers scenario that is valid ONLY if we already have a serious bug elsewhere?" Measured on
@@ -1228,3 +1223,45 @@ image, and dom0's override-redirect layer held a 390x130 window of the qube in 1
 thumbnail (and the drop tip) on black, the reporter's black frame. The fixed build created no window for it and 0
 of 6 captures held one; dom0's Explorer window showed the thumbnail and drop tip blended. Jev on proven: 0.61
 against 0.33 at confidence 0.42, no verdict. Only a drag inside one Explorer window was measured.
+
+## 36. The broker's floor is 25H2; below it the legacy path; the PrintWindow route, the relay and the poke are retired, and a capture the broker cannot open fails loudly
+
+**Status:** ACCEPTED (owner), 2026-11-19. Jev: every item a rule 0.93 (conf 0.89); item 3 follows the owner's
+words 0.86 (conf 0.79). Items 1, 4 and 5 under the floor leaning follows (0.61, 0.60, 0.52), item 2 under the
+floor leaning goes-beyond (0.69, conf 0.53) - not verdicts. Items 1, 4 and 5 restate the owner's words quoted
+below; item 2 is kept on his «it is better if it fails loudly», and is the agent's existing report of a failed
+slot (`DirectSuppressFault`) left standing once the PrintWindow route is gone. Asked before item 1 dropped an
+inexact comparison with the `WgcBroker=0` opt-out. Supersedes the 26100 floor (§18 item 8), §19 item 6, §23,
+and the relay of §32.
+
+**Context.** Owner, 2026-11-19: «then screw it altogether: raise thle floor to 25h2 and let 24h2 be handled via
+the legacy path, making it "not properly supported" but who cares.» «thus we may retire this mechanism and record
+it in ADR.» «and it is better if it fails loudly (test!) than THIS UGLY HACK fails in even less predictable ways.»
+
+The broker's PrintWindow route took any window whose WGC open threw - on every build, for good and in silence,
+with the error code set to 0 - and rendered it only when a poke told it to. One cause is on record, on 24H2 in
+2026-09: `CreateForWindow` rejected 24 of 24 Explorer context menus (override-redirect popups). Below the new
+floor no broker runs and the agent makes no WGC call of its own, so nothing is refused there. On 25H2 and later
+no window has been seen on the route: on 26300, 106 agent logs of 2026-10-08 to 2026-11-18 hold 696 per-window
+frame ledgers (`QGALEDGER`), every one `brokerPw=0`, and 2245 frame traces (`BROKERCHAIN`), every one
+`path=wgc`; on 26200.8037 none of the 9 shell surfaces of the 2026-11-19 census took it. Microsoft documents
+no failure conditions for `CreateForWindow`. The relay had no entry: its one entry was reverted the day it was
+added (9f9a4716).
+
+**Decision.**
+
+1. The WGC broker, slice retirement and de-slice run on build 26200 (25H2) and later. Below it - Windows 10 and
+   24H2 - the agent takes the legacy path (§2, §3). 24H2 is not properly supported.
+2. A window whose capture the broker cannot open fails loudly; nothing else captures it.
+3. The broker's PrintWindow route is retired, and so is the relay.
+4. The poke is retired: no input, motion or damage poke reaches the broker.
+5. The loud failure is tested on the rig.
+
+**Cost.** On 24H2 the Windows 11 shell surfaces render as the legacy path renders them, and the legacy path's
+timed sweep (§4) runs there. On 25H2 and later a window whose capture cannot be opened is not shown, and the
+user is told; none has been measured.
+
+**Evidence.** Owed: an injected failed open reaching dom0 as the notice; a window closed before its capture
+opened reaching nobody; the shell surfaces and ordinary windows unchanged on 26200 and 26300.
+
+**Open.** Whether Windows 10 keeps the PrintWindow engine's timed sweep (§4) is unanswered.
