@@ -820,6 +820,11 @@ helpers are disarmed, and a helper stopped on purpose while the session continue
    read them, so a deadline cannot be reintroduced without deleting the lines that say why.
 5. The config flag the health check and acceptance read (`DesliceBrokerDown`) is cleared with the latch. A
    flag left at 1 over a deliberate stop makes a healthy guest read as broken for ever.
+6. **A message about an absence that our own going-down asked for is informational.** Owner, 2026-11-07:
+   *"NEVER complain about anything going down when it is expected to ... all these messages should be
+   degraded to informational when shutdown is in progress already"*. Bound: a death, or a fault the
+   going-down did not ask for, stays loud (§1). Which emitters it governs is decided per site, and
+   `tools/msg-audit.py goingdown --enforce-only` names any decided site the tree neither routes nor degrades.
 
 **Why.** An alert for a condition that was requested is never actionable, and it is not a smaller fault than
 a missed one - it is the fault that reached this project's owner twice. A latch is also the only shape that
