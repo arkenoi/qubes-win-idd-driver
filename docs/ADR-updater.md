@@ -611,3 +611,25 @@ owner 2026-08-21), and "up only during it" in §12.5.
 
 **Open.** Which processes count as update processes, and how the gate tells them apart from a process that only
 carries the same name.
+
+## 19. Only a pass dom0 started may complain to dom0
+
+**Status:** ACCEPTED (owner, 2026-11-19).
+
+**Context.** The scheduled scan runs on every qube with the updater, whether or not that qube can be updated: an
+offline StandaloneVM, a template without a working updates path, a stripped image. Its failure reached dom0 as
+"The Windows Update scan task failed", from the task-death reporter, about an update nobody asked for.
+
+**Decision.** The owner: *"updater should fail loud to dom0 only if update was initiated by dom0. otherwise qube may be
+genuinely non-updateable and no dom0 bubbles should complain about the fact."*
+
+1. A failure of a pass dom0 started (QubesWindowsUpdateRun and QubesWindowsUpdateDownload, which only dom0's
+   `qubes-vm-update` starts, through `vmupdate-shim.ps1` and `wu-update.ps1`) is loud: dom0's call gets the error,
+   and the death reporter notifies.
+2. A failure of a pass the qube started itself (QubesWindowsUpdateScan, started only by its boot and interval
+   triggers) is written to the guest's logs and the status file, and nothing goes to dom0 as a notification.
+3. Who started a pass is read from which task ran it, never from a clock or a guess.
+
+**Open.** Whether the §17 warning that a policy lets Windows restart the qube by itself falls under point 2. It is sent
+by the scheduled scan too, but it warns about a policy in force rather than complaining that the qube cannot be
+updated, so it is unchanged until the owner decides.

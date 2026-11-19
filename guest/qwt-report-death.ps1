@@ -262,7 +262,7 @@ $script:QwtDeathTaskNames = @{
     '\QubesNetworkReapply'        = @{ id = 'network-reapply'; human = 'network re-apply task';         impact = 'The new interface has no network configuration.' }
     '\QubesQuietDesktopGuard'     = @{ id = 'quiet-desktop';   human = 'quiet-desktop guard task';      impact = 'Windows may show its consumer nags this boot.' }
     '\QubesAutologonGuard'        = @{ id = 'autologon-guard'; human = 'autologon guard task';          impact = 'After a sign-out the qube may stop at the sign-in screen.' }
-    '\QubesWindowsUpdateScan'     = @{ id = 'update-scan';     human = 'Windows Update scan task';      impact = 'dom0 gets no fresh update count.'; action = 'scan' }
+    '\QubesWindowsUpdateScan'     = @{ id = 'update-scan';     human = 'Windows Update scan task';      impact = 'dom0 gets no fresh update count.'; action = 'scan'; scheduled = $true }
     '\QubesWindowsUpdateRun'      = @{ id = 'update-run';      human = 'Windows Update install task';   impact = 'The dom0 update run fails.'; action = 'full' }
     '\QubesWindowsUpdateDownload' = @{ id = 'update-download'; human = 'Windows Update download task';  impact = 'The dom0 update run fails.'; action = 'download' }
     '\QwtImprovedSetup'           = @{ id = 'qwt-setup';       human = 'Qubes Tools setup task';        impact = 'The install may be unfinished.' }
@@ -1441,6 +1441,16 @@ function Invoke-QwtDeathReport {
     if ($ev.evidence) { $more += "; evidence $($ev.evidence)" }
     if ($ev.detail) { $more += "; $($ev.detail)" }
     Write-QwtDeathLog 'ERROR' "DEATH #$($reg.number) $tag $($ev.origin): $($notice.Header) | $($ev.label) | $($notice.Cause) | $($notice.Tech) | detail: $more"   # GUARD:logfirst
+    # DOM0 HEARS ONLY ABOUT WHAT DOM0 ASKED FOR (owner 2026-11-19: "updater should fail loud to dom0 only if update was
+    # initiated by dom0. otherwise qube may be genuinely non-updateable and no dom0 bubbles should complain about the fact";
+    # ADR-updater section 19). The scan task is started by its own triggers only - boot and interval - and never by dom0,
+    # which starts QubesWindowsUpdateRun/Download through wu-update.ps1 and reads their result on its own call. So a scan
+    # death stays here: logged above, recorded so the catch-up does not re-read it, and not sent.
+    if ($ev.task -and $script:QwtDeathTaskNames.ContainsKey($ev.task) -and $script:QwtDeathTaskNames[$ev.task].scheduled) {
+        Write-QwtDeathLog 'INFO' "DEATH #$($reg.number) not notified: the $($script:QwtDeathTaskNames[$ev.task].human) runs on its own schedule and dom0 did not ask for it"
+        [void](Step-QwtDeathWatermark -Channel $ev.channel -RecordId $ev.recordId)
+        return 'quiet:scheduled'
+    }
     if (-not $reg.new) {
         # handled: it joined a death already reported. Record it, or the next boot calls it NEW.
         [void](Step-QwtDeathWatermark -Channel $ev.channel -RecordId $ev.recordId)
@@ -1739,7 +1749,7 @@ function Invoke-QwtDeathCatchUp {
                 # dedupes per boot, so the catch-up hands it every new record and counts what it accepted. The
                 # subscription's XPath is not available here - this is a scan, and the classifier is the same one.
                 $verdict = Invoke-QwtDeathReport -XmlText $e.ToXml()
-                if ($verdict -notin @('not-ours', 'ignored', 'not-a-death', 'already-reported')) {
+                if ($verdict -notin @('not-ours', 'ignored', 'not-a-death', 'already-reported', 'quiet:scheduled')) {
                     Write-QwtDeathLog 'INFO' "catch-up: $ch record $rid was never reported (its trigger could not run) - reported now ($verdict)"
                     $r.reported++
                 }
@@ -1797,7 +1807,7 @@ function Invoke-QwtDeathCatchUp {
                     $r.scanned++
                     try {
                         $verdict = Invoke-QwtDeathReport -XmlText $e.ToXml()
-                        if ($verdict -notin @('not-ours', 'ignored', 'not-a-death', 'already-reported')) {
+                        if ($verdict -notin @('not-ours', 'ignored', 'not-a-death', 'already-reported', 'quiet:scheduled')) {
                             Write-QwtDeathLog 'INFO' "catch-up: $ch record $rid is OUR death record from before this boot (its trigger could not run - a shutdown refuses them) - reported now ($verdict)"
                             $r.reported++
                         }
