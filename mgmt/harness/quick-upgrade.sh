@@ -152,6 +152,7 @@ source mgmt/harness/window-grade-lib.sh # grade_mapped_window: the same window c
 # volume this qube reads with mtools - guest running, wedged or halted, nothing detached. Until this
 # wiring the library existed and NO harness called it, so a wedged cell still lost its logs.
 source mgmt/harness/logvol-lib.sh
+source mgmt/harness/wedge-gates-lib.sh   # wedge_collect: a guest that will not halt is read live before qvm-kill
 LOGVOL_IMG=""
 
 grun(){ QTEST_VM=$SUBJECT timeout -k 5 "${2:-60}" ./tools/qtest run "$1" 2>/dev/null | tr -d '\r'; }
@@ -1208,7 +1209,13 @@ qu_coldboot(){ # $1=n
     [ "$n" -ge 2 ] && qu_ours_settled "$SUBJECT" 240
     toolstack_accept "$SUBJECT" >/dev/null 2>&1
     if ! w_halt "$SUBJECT" 420 "boot$n-halt" log; then
-      log "  guest ignored ACPI shutdown for 420 s (screen=$(w_screen "$SUBJECT" "boot$n-stuck" "$OUT")) - killing as the last resort"
+      # THE LIVE STATE IS READ BEFORE THE KILL, never after: the kill is the end of the only specimen
+      # (owner 2026-11-20, win11r-sup killed with no console read: «it was your only chance to
+      # reliably read its state»). wedge_collect is the settle path's collector: log volume, qrexec
+      # probe, PV console diag, framebuffer, vcpu samples. Its rc changes nothing here.
+      log "  [WARN] QUWEDGE $SUBJECT ignored ACPI shutdown for 420 s - reading it live before the kill -> $OUT/boot$n-wedge"
+      wedge_collect "$SUBJECT" "$OUT/boot$n-wedge" >"$OUT/boot$n-wedge.log" 2>&1
+      log "  wedge_collect rc=$? qrexec=$(cat "$OUT/boot$n-wedge/qrexec" 2>/dev/null) console-diag-rc=$(cat "$OUT/boot$n-wedge/console-diag-rc" 2>/dev/null) screen=$(cat "$OUT/boot$n-wedge/screen" 2>/dev/null) - killing as the last resort"
       qvm-kill "$SUBJECT" >/dev/null 2>&1
       w_halt "$SUBJECT" 120 "boot$n-kill" log >/dev/null 2>&1 || finish 1 "TERMINAL: $SUBJECT would not halt for cold boot #$n"
     fi

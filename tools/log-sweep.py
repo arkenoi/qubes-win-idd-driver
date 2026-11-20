@@ -1666,7 +1666,10 @@ def read_lines(path):
     pieces = text.split("\n")
     if text.endswith("\n"):
         pieces.pop()
-    return [p[:-1] if p.endswith("\r") else p for p in pieces]
+    # A NUL HOLE HAS NO LF, so the line written after it starts with the hole's NULs and no parser
+    # matched it (an agent's QWTBIRTH lost -> its instance billed to another boot). Stripped here; the
+    # count is unchanged and the hole itself is still reported from the raw bytes (nul-hole).
+    return [(p[:-1] if p.endswith("\r") else p).lstrip("\x00") for p in pieces]
 
 
 # ----------------------------------------------------------------------------------------------- parsers
