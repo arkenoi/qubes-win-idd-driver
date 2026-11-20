@@ -494,27 +494,39 @@ PS
 markraw=$(T=200 q pushrun "$TMP/p5-mark.ps1" | tr -d '\r' | grep -aoE 'AGENTMARK [0-9]+ [^ ]+' | head -1)
 mark=$(echo "$markraw" | awk '{print $2}'); markfile=$(echo "$markraw" | awk '{print $3}')
 e9=$(T=200 q pushrun "$TMP/p5-start-entry.ps1" | tr -d '\r' | grep -aoE 'ENTRY_(RUN|MISSING|FAILED rc=.*)' | head -1)
-sleep 10
-d9=$(mapped_list SG9); n9=${d9%%|*}
+# Six samples, as run_cell takes: the launch includes start-app's session wait, wscript and a C# compile.
+n9=0; d9="0|"; saw9=no
+for _ in 1 2 3 4 5 6; do
+  sleep 5
+  d=$(mapped_list SG9); n=${d%%|*}
+  if control_alive "${d#*|}"; then saw9=yes; d9=$d; n9=$n; [ "$n" -gt "$CONTROL_N" ] && break; fi
+done
 h9=$(T=300 q pushrun "$TMP/p5-since.ps1" -Mark "${mark:-0}" -Pattern 'Start surface not presented in seamless mode' -MarkFile "${markfile:-}" | tr -d '\r')
 nh9=$(echo "$h9" | grep -ao 'SINCE_HITS [0-9]*' | awk '{print $2}')
-[ "$e9" = ENTRY_RUN ] && { T=200 q pushrun "$TMP/p5-start-entry.ps1" -Again >/dev/null 2>&1; sleep 5; }
-log "  entry=${e9:-no answer}  dom0 windows=$n9 (control $CONTROL_N) [${d9#*|}]  refusal lines=${nh9:-0}"
+closed9=n/a
+if [ "$e9" = ENTRY_RUN ]; then
+  T=200 q pushrun "$TMP/p5-start-entry.ps1" -Again >/dev/null 2>&1; sleep 8
+  c9=$(mapped_list SG9-closed); [ "${c9%%|*}" -le "$CONTROL_N" ] && closed9=yes || closed9="no (${c9%%|*} mapped)"
+fi
+log "  entry=${e9:-no answer}  dom0 windows=$n9 (control $CONTROL_N) [${d9#*|}]  control_seen=$saw9  refusal lines=${nh9:-0}  closed=$closed9"
 if [ "$e9" = ENTRY_MISSING ]; then
   log "  -> FAIL: the 'Start Menu' app-menu entry is not installed, or get-appmenus does not list it"
   echo -e "SG9\tstart-presented\tFAIL\tno Start_Menu entry\t" >> "$OUT/verdicts.tsv"; rc=1
 elif [ "${e9%% *}" = ENTRY_FAILED ]; then
   log "  -> FAIL: qubes.StartApp could not start the entry: $e9"
   echo -e "SG9\tstart-presented\tFAIL\t$e9\t" >> "$OUT/verdicts.tsv"; rc=1
-elif ! control_alive "${d9#*|}"; then
-  log "  -> INVALID-INSTRUMENT: the control window was not visible to the capture path, so the count proves nothing"
-  echo -e "SG9\tinstrument-alive\tINVALID-INSTRUMENT\tcontrol absent from the capture\t" >> "$OUT/verdicts.tsv"; rc=1
-elif [ "$e9" = ENTRY_RUN ] && [ "$n9" -gt "$CONTROL_N" ]; then
-  log "  -> PASS: Start reached dom0 as one more window"
-  echo -e "SG9\tstart-presented\tPASS\tdom0=$n9 (control $CONTROL_N)\t" >> "$OUT/verdicts.tsv"
 elif [ "${nh9:-0}" -gt 0 ]; then
-  log "  -> FAIL: nothing new in dom0 and the agent logged its refusal of Start"
+  log "  -> FAIL: the agent logged its refusal of Start"
   echo -e "SG9\tstart-presented\tFAIL\tdom0=$n9 vs control $CONTROL_N, refusal x${nh9}\t" >> "$OUT/verdicts.tsv"; rc=1
+elif [ "$saw9" != yes ]; then
+  log "  -> INVALID-INSTRUMENT: the control window was not visible to the capture path, so the count proves nothing"
+  echo -e "SG9\tinstrument-alive\tINVALID-INSTRUMENT\tcontrol absent from every sample\t" >> "$OUT/verdicts.tsv"; rc=1
+elif [ "$e9" = ENTRY_RUN ] && [ "$n9" -gt "$CONTROL_N" ] && [ "$closed9" != yes ]; then
+  log "  -> INVALID-INSTRUMENT: Start mapped but is still mapped after the closing call - a later run on this subject would count it"
+  echo -e "SG9\tstimulus-closed\tINVALID-INSTRUMENT\tclosed=$closed9\t" >> "$OUT/verdicts.tsv"; rc=1
+elif [ "$e9" = ENTRY_RUN ] && [ "$n9" -gt "$CONTROL_N" ]; then
+  log "  -> PASS-UNPROVEN: Start reached dom0 as one more window, and closed again"
+  echo -e "SG9\tstart-presented\tPASS-UNPROVEN\tdom0=$n9 (control $CONTROL_N)\t" >> "$OUT/verdicts.tsv"
 else
   log "  -> INVALID-VACUOUS: nothing new in dom0 and no refusal line - Start may never have opened"
   echo -e "SG9\tstart-presented\tINVALID-VACUOUS\tentry=${e9:-no answer}, dom0=$n9\t" >> "$OUT/verdicts.tsv"; rc=1
