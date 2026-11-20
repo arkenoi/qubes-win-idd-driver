@@ -9,14 +9,14 @@
 # behaviour. A knob with no setter is a knob that is never varied.
 #
 # THE TWO KNOBS, and why they belong in one script (agent/gui-agent/perf.h):
-#   SeamlessStart  DWORD 0/1, default 0 - is the Start surface PRESENTED in seamless mode.
+#   SeamlessStart  DWORD 0/1, default 1 - is the Start surface PRESENTED in seamless mode.
 #   BlockMenuKey   DWORD 0/1, default 1 - is the Windows key dropped instead of forwarded.
-# They are one decision, not two: suppressing the menu means not forwarding the key
-# (BlockMenuKey=1, SeamlessStart=0), and showing it means forwarding the key AND presenting the
-# surface (BlockMenuKey=0, SeamlessStart=1). The two remaining combinations are the states to stay
-# out of - BlockMenuKey=0 with SeamlessStart=0 is the one that lets the menu open and then works to
-# suppress it. -Mode names the two coherent settings so a caller cannot reach a mixed one by
-# accident; -SeamlessStart/-BlockMenuKey remain for deliberately testing a mixed state.
+# The shipped pair is the defaults, BlockMenuKey=1 with SeamlessStart=1: dom0 keeps the key and Start
+# opens from its app-menu entry as a normal window (docs/ADR-windows.md section 7 point 4), so pass
+# -SeamlessStart 1 -BlockMenuKey 1 to put a guest in it. -Mode show forwards the key as well (a guest
+# whose own Start takes the key) and -Mode suppress hides Start (ADR-windows section 11).
+# BlockMenuKey=0 with SeamlessStart=0 is the state to stay out of: the menu opens and is then
+# suppressed.
 #
 # THE PROOF IS THE AGENT'S LINE, NOT THE REGISTRY. Reading the value back says only that this
 # script can read what it just wrote; the agent samples these at PerfInit and caches them in

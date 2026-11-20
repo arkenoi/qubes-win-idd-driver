@@ -380,9 +380,9 @@ cosmetic one. A guest that reaches a *visible* Windows login screen is a misconf
 In seamless mode the Windows key is blocked by default: dom0 owns it. The Windows Start menu is an
 entry in the qube's application menu, **Start Menu**, and opens as a normal window on Windows 10 and
 11. Set `qvm-features <vm> service.enableWinKey 1` to let the key through for a third-party start
-menu such as Open-Shell, which is shown like any other window; such a qube publishes no Start Menu
-entry. dom0 caches the application list, so `qvm-sync-appmenus <vm>`
-picks up the change.
+menu such as Open-Shell, which is shown like any other window; an install or upgrade on such a qube
+publishes no Start Menu entry and removes one an earlier install published. dom0 caches the
+application list, so `qvm-sync-appmenus <vm>` picks up the change.
 
 ### A qube built from a Windows template boots the first time
 

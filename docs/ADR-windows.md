@@ -270,7 +270,8 @@ mapped. Caveat: PASS-UNPROVEN per SG11 - the naive-cloak fail-proof build is sti
    opens Start guest-side; the dom0-forwarded Windows key stays dropped (`BlockMenuKey=1`, section 9). Toasts
    are not affected. `SeamlessStart` defaults to 1; section 11 governs whoever sets 0. The installer publishes
    the entry (`guest/install-start-shortcut.ps1`, the all-users `Start Menu.lnk` that `qubes.GetAppMenus`
-   reports), except on a guest whose own shell takes the Windows key (`service.enableWinKey`).
+   reports) at install and upgrade, and removes it instead on a guest whose own shell takes the Windows key
+   (`service.enableWinKey`).
 5. **Genuine-open gate:** a shell-host surface (StartMenuExperienceHost, ShellExperienceHost, SearchHost) whose
    card measurement finished and found no card is not mapped; an in-flight measurement is never rejected.
 
