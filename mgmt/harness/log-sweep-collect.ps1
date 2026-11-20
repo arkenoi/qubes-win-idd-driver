@@ -407,6 +407,10 @@ foreach ($g in $AcctExceptionRootGlobs) {
 foreach ($p in $AcctOldPaths) { $acctFixed += ,@($p, 'oldpath') }
 $candSeen = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
 foreach ($c in $cands) { [void]$candSeen.Add($c.FullName) }
+# A LogDir log created after the pull list was read is in this listing only; it is pulled, or the ledger has its lines unpulled.
+foreach ($a in $acct) {
+    if ($a.f.Extension -match '^\.(log|txt|json|old)$' -and $a.f.LastWriteTimeUtc -ge $sinceU -and $candSeen.Add($a.f.FullName)) { $cands.Add($a.f) }
+}
 foreach ($pe in $acctFixed) {
     if (-not (Test-Path -LiteralPath $pe[0] -PathType Leaf)) { continue }
     $f = Get-Item -LiteralPath $pe[0] -Force -ErrorAction SilentlyContinue
@@ -587,7 +591,7 @@ foreach ($mod in ($invByModule.Keys | Sort-Object { -$invByModule[$_].files })) 
 if ($skipped -gt 0) {
     # base64 per name: a log name is data from the guest and must not break the stream's line format.
     $enc = @($skippedNames | ForEach-Object { [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($_)) }) -join ','
-    Write-Output ("${Mark}FILESKIPPED n=$skipped namesb64=$enc")   # GUARD:skipnames
+    Write-Output ("${Mark}FILESKIPPED n=$skipped namesb64=$enc")
 }
 
 # ---- the event records -------------------------------------------------------------------------------------------
@@ -686,7 +690,6 @@ if (-not $NoEvents) {
         # data and must fail; one that returned records this filter then dropped is an answer, and says
         # so. The chunked query above removes the CAUSE those two guards were detecting, so "no records
         # at all" now means the channel really was asked and really answered nothing.
-        # (# GUARD:channelraw, # GUARD:channelrawthrown - one accounting, both doors)
         # THE VALUE CARRIES NO SPACES. tools/log-sweep.py kv_parse splits this line on whitespace, so
         # `System (no records at all),Application (no records at all)` reached the report as bare
         # `System`: the second blind channel vanished and the norecords/unreadable distinction - the
