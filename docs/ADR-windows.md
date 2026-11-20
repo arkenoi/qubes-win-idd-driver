@@ -276,7 +276,8 @@ mapped. Caveat: PASS-UNPROVEN per SG11 - the naive-cloak fail-proof build is sti
    reports) at install and upgrade, and removes it instead on a guest whose own shell takes the Windows key
    (`service.enableWinKey`).
 5. **Genuine-open gate:** a shell-host surface (StartMenuExperienceHost, ShellExperienceHost, SearchHost) whose
-   card measurement finished and found no card is not mapped; an in-flight measurement is never rejected.
+   card measurement finished and found no card is not mapped; an in-flight measurement is never rejected, and
+   a surface is re-examined the moment its measurement completes, on every guest.
 
 **Why.** A popup drawn where the guest drew it, as a borderless dom0 window, is what the user expects of a
 menu; a toast that unmaps when the shell cycles its banner slot is a lost notification.
