@@ -270,7 +270,9 @@ mapped. Caveat: PASS-UNPROVEN per SG11 - the naive-cloak fail-proof build is sti
    search view Start turns into when the user types** (owner 2026-11-20, "Frame the search view": SearchHost on
    Win11, SearchApp on Win10), so the keyboard stays with the qube. On Win10 the same SearchApp window is the
    taskbar search box while Start is shown, collapsed by a window region; collapsed, it stays a popup, and it is
-   framed when typing expands it. The entry opens Start guest-side; the
+   framed when typing expands it. Windows 11's search view is cropped by Start's measured margin, the same
+   flyout's shadow, when it is created, never after it is mapped (owner 2026-11-20, the black border). The
+   entry opens Start guest-side; the
    dom0-forwarded Windows key stays dropped (`BlockMenuKey=1`, section 9). Toasts are not affected. `SeamlessStart` defaults to 1; section 11 governs whoever sets 0. The installer publishes
    the entry (`guest/install-start-shortcut.ps1`, the all-users `Start Menu.lnk` that `qubes.GetAppMenus`
    reports) at install and upgrade, and removes it instead on a guest whose own shell takes the Windows key
@@ -439,8 +441,9 @@ recorded here so they are not re-derived:
 - **A Search flyout gets no crop rule.** The proposal was to measure its card with the union rule.
   Measured, the same window at its two raw sizes: at 800x798 the walk finds a plausible card
   (largest 774x724, union 775x777), but at 800x750 *both* candidates collapse to the same `728x32`
-  sliver - the search input field. Either crop would clip the flyout, so the window is announced
-  uncropped and shows its ~13 px shadow margin. Jev on the walk lines alone, 0.72.
+  sliver - the search input field. Either crop would clip the flyout, so no card is measured for it
+  (Jev on the walk lines alone, 0.72). Windows 11's search view takes Start's measured margin instead
+  (7.4 item 4).
 - **No broker hold was demoted.** The proposal was to read `slot-not-ACTIVE` holds as normal,
   being the agent's own unacknowledged re-registration after a size change. Of four such holds in
   the only capture that has them, just one plausibly follows a size change. The premise is
