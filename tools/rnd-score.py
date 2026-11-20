@@ -385,8 +385,9 @@ def score_p5_suite(paths):
     cells SG4, SG2, SG3, SG9. Decision:
       1. verdicts.tsv absent/empty, or the console lacks '=== P5 finished rc=' ->
          EVIDENCE_MISSING (rule 14: an exit-0 whose TSV is absent or empty is a KILLED run).
-      2. FAIL on SG4/SG2/SG9 -> GATE_LEAKED (a measured red outranks a missing row).
-      3. Else FAIL on SG3 -> GATE_OVERFIRED (the safeguard eats UI it must keep).
+      2. FAIL on SG4/SG2 -> GATE_LEAKED (a measured red outranks a missing row).
+      3. Else FAIL on SG3 or SG9 -> GATE_OVERFIRED (the safeguard eats UI it must keep: SG9 is a
+         Start opened through its app-menu entry that did not reach dom0).
       4. Any of the four with an INVALID-* verdict or no row at all -> CELLS_INVALID.
       5. GREEN only when all four rows are PASS/PASS-UNPROVEN AND the console carries its own
          precondition proofs ('containment PROVEN: guest' + 'capture path proven alive').
@@ -406,9 +407,9 @@ def score_p5_suite(paths):
             rows.setdefault(f[0], []).append(f[2])
     def has(cell, pred):
         return any(pred(v) for v in rows.get(cell, []))
-    if any(has(c, lambda v: v.startswith("FAIL")) for c in ("SG4", "SG2", "SG9")):
+    if any(has(c, lambda v: v.startswith("FAIL")) for c in ("SG4", "SG2")):
         return "GATE_LEAKED"
-    if has("SG3", lambda v: v.startswith("FAIL")):
+    if any(has(c, lambda v: v.startswith("FAIL")) for c in ("SG3", "SG9")):
         return "GATE_OVERFIRED"
     if any(c not in rows for c in cells) or \
             any(has(c, lambda v: v.startswith("INVALID")) for c in cells):

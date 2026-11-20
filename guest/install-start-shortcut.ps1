@@ -1,6 +1,7 @@
-# Install the Start-menu opener + all-users .lnk (mirrors the Install-QwtImproved.ps1
-# stage-2 block). Everything is WINDOWLESS: wscript has no console, so nothing flashes a
-# a powershell launcher, even -WindowStyle Hidden, flashes a conhost window and kills Start).
+# Install the Start-menu opener + all-users .lnk - the dom0 app-menu entry for the Windows Start menu
+# (docs/ADR-windows.md 7.4). Install-QwtImproved.ps1 runs this at stage 2 from the medium; the rig runs
+# the same file. Everything is WINDOWLESS: wscript has no console, so nothing flashes a window
+# (a powershell launcher, even -WindowStyle Hidden, flashes a conhost window and kills Start).
 # The keypress is VK_LWIN injected GUEST-side, so it is unaffected by the agent's
 # BlockMenuKey filter (which drops the dom0-forwarded Super key).
 #

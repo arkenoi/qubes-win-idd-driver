@@ -268,7 +268,9 @@ mapped. Caveat: PASS-UNPROVEN per SG11 - the naive-cloak fail-proof build is sti
    windows are rectangular); the owner declined a background fill.
 4. **Start is a regular dom0 app-menu entry, presented as a normal window, on Win10 and Win11.** The entry
    opens Start guest-side; the dom0-forwarded Windows key stays dropped (`BlockMenuKey=1`, section 9). Toasts
-   are not affected.
+   are not affected. `SeamlessStart` defaults to 1; section 11 governs whoever sets 0. The installer publishes
+   the entry (`guest/install-start-shortcut.ps1`, the all-users `Start Menu.lnk` that `qubes.GetAppMenus`
+   reports), except on a guest whose own shell takes the Windows key (`service.enableWinKey`).
 5. **Genuine-open gate:** a shell-host surface (StartMenuExperienceHost, ShellExperienceHost, SearchHost) whose
    card measurement finished and found no card is not mapped; an in-flight measurement is never rejected.
 
@@ -378,8 +380,8 @@ path; the script prints the registry state before deciding. Session presence is 
 
 ## 11. A hidden Start menu is CLOSED by returning activation, and the closure is recorded once
 
-**Decided 2026-10-17.** In seamless mode with `SeamlessStart=0` the native Start menu is not
-presented. "Not presented" was not the same as "closed": the surface stayed up, invisible, holding
+**Decided 2026-10-17.** In seamless mode with `SeamlessStart=0` (not the default: section 7 point 4)
+the native Start menu is not presented. "Not presented" was not the same as "closed": the surface stayed up, invisible, holding
 the keyboard and taking clicks the user could not see (GWeck #172, reproduced twice on 4.3.36).
 
 **The mechanism is activation, not a keystroke.** Three successive fixes were spent inside a

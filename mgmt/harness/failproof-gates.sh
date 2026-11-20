@@ -17,7 +17,7 @@
 #   bits                     cell  check earned
 #   MODE1|MODE2      0x3     SG4   or-fullscreen-never-mapped   (companion: SG2)
 #   MODE2            0x2     SG2   borderless-fullscreen-gated  - ALREADY EARNED, not re-run
-#   START|NOCARD     0x14    SG9   start-not-presented          - NOT proven here, by the owner's call (see the prove list)
+#   START|NOCARD     0x14    SG9   start-presented              - NOT proven here, by the owner's call (see the prove list)
 #   FI_DROP_CAPTIONED 0x20   SG3   windowed-fullscreen-allowed
 #
 # Combinations, not single bits, because two of these properties are defended IN DEPTH - see the

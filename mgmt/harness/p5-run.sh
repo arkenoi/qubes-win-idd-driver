@@ -474,24 +474,50 @@ run_cell SG2 borderless       nomap 'hidden (set service.gui-fullscreen to allow
 run_cell SG3 captioned        map   'not-used'
 
 # ---------------------------------------------------------------- SG9: Start, per the shipped spec
-log "=== SG9: Start is NOT presented in seamless (acceptance is the OPPOSITE of 'Start maps') ==="
+# Start is a regular dom0 app-menu entry presented as a normal window (docs/ADR-windows.md section 7).
+# The stimulus is the entry's own path: get-appmenus.ps1 lists it as qvm-sync-appmenus would, then
+# qubes.StartApp's command line for 'Start_Menu' (core-agent/src/qubes-rpc-services/qubes.StartApp), whose
+# start-app.ps1 launches it as the console user. The same call again closes Start, so no later cell or
+# armed run counts it. A guest whose entry is not installed or not listed fails: the installer ships it.
+log "=== SG9: Start opened through its app-menu entry is presented in seamless ==="
+cat > "$TMP/p5-start-entry.ps1" <<'PS'
+param([switch]$Again)
+$qt = $env:QUBES_TOOLS; if (-not $qt) { $qt = 'C:\Program Files\Qubes Tools' }
+if (-not $Again) {
+  if (-not (Test-Path -LiteralPath 'C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Start Menu.lnk')) { Write-Output 'ENTRY_MISSING'; exit }
+  $menus = & powershell.exe -NoProfile -ExecutionPolicy Bypass -NonInteractive -File "$qt\qubes-rpc-services\get-appmenus.ps1" 2>&1
+  if (-not @($menus | Where-Object { "$_" -match '^Start_Menu' })) { Write-Output 'ENTRY_MISSING'; exit }
+}
+$sa = & cmd.exe /c "powershell.exe -executionpolicy bypass -noninteractive -inputformat none -file `"$qt\qubes-rpc-services\start-app.ps1`" `"Start_Menu`"" 2>&1
+if ($LASTEXITCODE -eq 0) { Write-Output 'ENTRY_RUN' } else { Write-Output ("ENTRY_FAILED rc=$LASTEXITCODE " + (@($sa | Select-Object -Last 2) -join ' ')) }
+PS
 markraw=$(T=200 q pushrun "$TMP/p5-mark.ps1" | tr -d '\r' | grep -aoE 'AGENTMARK [0-9]+ [^ ]+' | head -1)
 mark=$(echo "$markraw" | awk '{print $2}'); markfile=$(echo "$markraw" | awk '{print $3}')
-T=400 q pushrun guest/open-start.ps1 >/dev/null 2>&1
+e9=$(T=200 q pushrun "$TMP/p5-start-entry.ps1" | tr -d '\r' | grep -aoE 'ENTRY_(RUN|MISSING|FAILED rc=.*)' | head -1)
 sleep 10
 d9=$(mapped_list SG9); n9=${d9%%|*}
 h9=$(T=300 q pushrun "$TMP/p5-since.ps1" -Mark "${mark:-0}" -Pattern 'Start surface not presented in seamless mode' -MarkFile "${markfile:-}" | tr -d '\r')
 nh9=$(echo "$h9" | grep -ao 'SINCE_HITS [0-9]*' | awk '{print $2}')
-log "  dom0 windows=$n9 (control $CONTROL_N) [${d9#*|}]  deny hits=${nh9:-0}"
-if [ "$n9" -le "$CONTROL_N" ] && [ "${nh9:-0}" -gt 0 ]; then
-  log "  -> PASS-UNPROVEN: no Start window in dom0, and the agent logged the deny"
-  echo -e "SG9\tstart-not-presented\tPASS-UNPROVEN\tdom0=$n9 (control $CONTROL_N), deny x${nh9}\t" >> "$OUT/verdicts.tsv"
-elif [ "$n9" -gt "$CONTROL_N" ]; then
-  log "  -> FAIL: $n9 mapped vs control $CONTROL_N"
-  echo -e "SG9\tstart-not-presented\tFAIL\tdom0=$n9 vs control $CONTROL_N\t" >> "$OUT/verdicts.tsv"; rc=1
+[ "$e9" = ENTRY_RUN ] && { T=200 q pushrun "$TMP/p5-start-entry.ps1" -Again >/dev/null 2>&1; sleep 5; }
+log "  entry=${e9:-no answer}  dom0 windows=$n9 (control $CONTROL_N) [${d9#*|}]  refusal lines=${nh9:-0}"
+if [ "$e9" = ENTRY_MISSING ]; then
+  log "  -> FAIL: the 'Start Menu' app-menu entry is not installed, or get-appmenus does not list it"
+  echo -e "SG9\tstart-presented\tFAIL\tno Start_Menu entry\t" >> "$OUT/verdicts.tsv"; rc=1
+elif [ "${e9%% *}" = ENTRY_FAILED ]; then
+  log "  -> FAIL: qubes.StartApp could not start the entry: $e9"
+  echo -e "SG9\tstart-presented\tFAIL\t$e9\t" >> "$OUT/verdicts.tsv"; rc=1
+elif ! control_alive "${d9#*|}"; then
+  log "  -> INVALID-INSTRUMENT: the control window was not visible to the capture path, so the count proves nothing"
+  echo -e "SG9\tinstrument-alive\tINVALID-INSTRUMENT\tcontrol absent from the capture\t" >> "$OUT/verdicts.tsv"; rc=1
+elif [ "$e9" = ENTRY_RUN ] && [ "$n9" -gt "$CONTROL_N" ]; then
+  log "  -> PASS: Start reached dom0 as one more window"
+  echo -e "SG9\tstart-presented\tPASS\tdom0=$n9 (control $CONTROL_N)\t" >> "$OUT/verdicts.tsv"
+elif [ "${nh9:-0}" -gt 0 ]; then
+  log "  -> FAIL: nothing new in dom0 and the agent logged its refusal of Start"
+  echo -e "SG9\tstart-presented\tFAIL\tdom0=$n9 vs control $CONTROL_N, refusal x${nh9}\t" >> "$OUT/verdicts.tsv"; rc=1
 else
-  log "  -> INVALID-VACUOUS: nothing mapped and no deny line - Start may never have opened"
-  echo -e "SG9\tstart-not-presented\tINVALID-VACUOUS\t0 deny hits\t" >> "$OUT/verdicts.tsv"; rc=1
+  log "  -> INVALID-VACUOUS: nothing new in dom0 and no refusal line - Start may never have opened"
+  echo -e "SG9\tstart-presented\tINVALID-VACUOUS\tentry=${e9:-no answer}, dom0=$n9\t" >> "$OUT/verdicts.tsv"; rc=1
 fi
 
 log "=== P5 finished rc=$rc ==="

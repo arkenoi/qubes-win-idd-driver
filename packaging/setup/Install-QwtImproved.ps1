@@ -4113,16 +4113,23 @@ function Invoke-Stage2 {
     $script:Result.detail.gui_quiesced_for_stage2 = $script:GuiQuiesced
     # ---- GUI-QUIESCE-END
 
-    # --- Start Menu qube-app shortcut: NOT INSTALLED (see docs/PLAN-start-menu.md) ------
-    # The agent does not present the Start menu in seamless mode (user decision
-    # 2026-08-13): on 25H2 it never rendered acceptably through the seamless path. A
-    # 'Start Menu' entry in the qube's application menu would therefore appear to do
-    # nothing, which is worse than no entry at all. Remove any entry an earlier build
-    # published; the opener script itself is left in place under guest/ for whoever
-    # restores the capability (agent knob SeamlessStart=1).
-    Remove-Item -LiteralPath 'C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Start Menu.lnk' -Force -ErrorAction SilentlyContinue
-    Write-Log 'Start Menu appmenu shortcut intentionally NOT installed (Start is hidden in seamless mode)'
-    $script:Result.detail.start_menu_shortcut = 'not-installed-by-design'
+    # --- Start Menu app-menu entry (docs/ADR-windows.md 7.4) ---------------------------------
+    # The Windows Start menu is a regular dom0 app-menu entry. install-start-shortcut.ps1 writes the
+    # windowless opener and the all-users 'Start Menu.lnk' that qubes.GetAppMenus reports to dom0, and
+    # removes both on a guest whose own shell takes the Windows key (service.enableWinKey) - one source
+    # for the installer and the rig. The agent presents the Start it opens (SeamlessStart, default on).
+    $sms = Join-Path $Root 'install-start-shortcut.ps1'
+    if (Test-Path -LiteralPath $sms) {
+        $smOut = @(& $sms 2>&1 | ForEach-Object { "$_" })
+        $smJson = @($smOut | Where-Object { $_ -match '^\{' }) | Select-Object -Last 1
+        Write-Log "Start Menu app-menu entry: $smJson"
+        $script:Result.detail.start_menu_shortcut = if ($smJson -match '"lnk":true') { 'installed' }
+            elseif ($smJson -match '"reason":"enableWinKey') { 'not-installed-own-shell' }
+            else { 'not-installed: ' + (($smOut | Select-Object -Last 2) -join ' ') }
+    } else {
+        Write-Log 'install-start-shortcut.ps1 is not in the payload - no Start Menu app-menu entry' 'WARN'
+        $script:Result.detail.start_menu_shortcut = 'missing-from-payload'
+    }
 
     # (The netvm-hotplug re-apply task, QubesNetworkReapply, is decided AFTER pvnic-selfprime has
     # run - see the block below the PV NIC priming - because that step deletes the stock

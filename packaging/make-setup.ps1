@@ -340,6 +340,10 @@ foreach ($u in 'install-updater-agent.ps1', 'qubes-windows-update.ps1', 'qubes-u
     Copy-Item (Need (Join-Path $RepoRoot "guest\$u") "updater agent payload ($u)") $OutDir -Force
 }
 
+# The Start Menu app-menu entry (docs/ADR-windows.md 7.4): stage 2 runs this to write the opener and the
+# all-users 'Start Menu.lnk' that qubes.GetAppMenus reports to dom0.
+Copy-Item (Need (Join-Path $RepoRoot 'guest\install-start-shortcut.ps1') 'Start Menu app-menu entry') $OutDir -Force
+
 # Netvm-free PV NIC priming: the installer (Install-QwtImproved.ps1) seeds this on TEMPLATES only
 # (default ON), reading the qube class LIVE from qubesdb. So pvnic-selfprime.ps1 must be on the
 # medium. qubesdb-read.ps1 is the canonical reliable-read helper (a guest diagnostic; the

@@ -377,13 +377,12 @@ cosmetic one. A guest that reaches a *visible* Windows login screen is a misconf
 
 ### The Windows key and the Start menu in seamless mode
 
-In seamless mode the Windows key is blocked by default, and the Windows Start menu itself is not
-shown: on Windows 11 25H2 it cannot be reproduced acceptably as a seamless window. Set
-`qvm-features <vm> service.enableWinKey 1` to let the key through for a third-party start menu such
-as Open-Shell, which is shown like any other window. If the Windows Start menu is opened anyway
-(Shift+Win, or the Windows key with no third-party menu installed), **4.3.35 closes it at once** and
-says so once per session — before, it stayed open and invisible and took your clicks. The Qubes app
-menu in dom0 is the other way to start programs.
+In seamless mode the Windows key is blocked by default: dom0 owns it. The Windows Start menu is an
+entry in the qube's application menu, **Start Menu**, and opens as a normal window on Windows 10 and
+11. Set `qvm-features <vm> service.enableWinKey 1` to let the key through for a third-party start
+menu such as Open-Shell, which is shown like any other window; such a qube publishes no Start Menu
+entry. dom0 caches the application list, so `qvm-sync-appmenus <vm>`
+picks up the change.
 
 ### A qube built from a Windows template boots the first time
 

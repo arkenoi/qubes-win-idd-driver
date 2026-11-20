@@ -37,9 +37,9 @@ addressed, new release is cut».
 
 1. Row 56 (the UAC prompt on a full-screen yellow background): consent.exe first creates its prompt window at
    work-area size, and the agent announced that size to dom0 for about 65 ms (Windows 10, measured 2026-11-20).
-   Fixed on main (agent ed67f8f, ADR-uac 11) and proven on Windows 10 and German 25H2: the window is withheld until
-   Windows shows it at dialog size, and dom0 gets one ordinary dialog. The lasting full-screen state he describes is
-   not reproduced here.
+   That transient is PROVEN, NOT SHIPPED (on main, agent ed67f8f, ADR-uac 11): on Windows 10 and German 25H2 the
+   window is withheld until Windows shows it at dialog size, and dom0 gets one ordinary dialog. The lasting
+   full-screen state he describes is NOT REPRODUCED.
 2. Row 29 (Start): owner order 2026-11-19 - the native Start menu as a regular dom0 app-menu entry, Windows 10 and 11,
    preferably a normal window. Picked up after row 44's Explorer fix.
 3. Rows 44 and 55 (Explorer stops updating after the Windows key) and row 47 (the update scan task fails after boot,
