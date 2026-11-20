@@ -530,6 +530,54 @@
    "status": "unsettled",
    "max_per_boot": null,
    "reason": "NEVER OBSERVED (no campaign has run core-agent 1697352; run27, the one rig run of build-4.3.45.1357, never invoked wait-for-logon - qvm-run from the dev qube skips qubes.WaitForSession), AND DELIBERATELY NOT SILENCED. core-agent/src/qubes-rpc-services/wait-for-logon/wait-for-logon.c:395. Jev on the sweep rubric (scratchpad/jev-preacc1357-out.json): insufficient-evidence 0.43, keep_armed 0.73 - under the floor, so armed, not expected."
+  },
+  {
+   "regex": "^agent\\|E\\|WindowEventThreadProc: QGAWINEVTDEAD window event thread died unexpectedly",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "NEVER OBSERVED (0 in 85 gui-agent logs of 52 rig runs of these agents, 2026-11-20), AND DELIBERATELY NOT SILENCED. agent/gui-agent/main.c WindowEventThreadProc (agent 742cfe1): the window event thread exited without being asked to; in seamless on 25H2+ no desktop frames drive the resync sweep, so window tracking stops and dom0 is told (window-tracking-stopped). Jev on the sweep's rubric (scratchpad/jev-preacc1419-*): expected 0.45; keep_armed 0.85 -> armed."
+  },
+  {
+   "regex": "^agent\\|E\\|BrokerReportDeaf: QGAWGCDEAF hwnd 0x(%llx|H) slot (%d|N): Windows closed the capture item again ",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "NEVER OBSERVED (0 in 85 gui-agent logs of 52 rig runs of these agents, 2026-11-20), AND DELIBERATELY NOT SILENCED. agent/gui-agent/main.c BrokerReportDeaf (agent 921477f, 95c7096): Windows closed a slot's capture item again before the reopened session delivered a frame; the window keeps its last content until re-registered (WgcDeaf counter). Jev on the sweep's rubric (scratchpad/jev-preacc1419-*): expected 0.64; keep_armed 0.69 -> armed."
+  },
+  {
+   "regex": "^agent\\|W\\|AddWindow: QGADIRECTLEGACY hwnd 0x(%x|H) attach failed ",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "NEVER OBSERVED (0 in 85 gui-agent logs of 52 rig runs of these agents, 2026-11-20), AND DELIBERATELY NOT SILENCED. agent/gui-agent/main.c AddWindow (agent 91cb7db): on a direct-required guest PwAttachWindow failed for a new window; it is withheld and its fault clock starts (QgaWindowFaultDue). Jev on the sweep's rubric (scratchpad/jev-preacc1419-*): expected 0.77; keep_armed 0.78 -> armed."
+  },
+  {
+   "regex": "^agent\\|E\\|ShouldAcceptWindow: QGAUACHOST 0x(%x|H): prompt window still covers the work area ",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "NEVER OBSERVED (0 in 85 gui-agent logs of 52 rig runs of these agents, 2026-11-20), AND DELIBERATELY NOT SILENCED. agent/gui-agent/main.c ShouldAcceptWindow (agent ed67f8f, ADR-uac 11): consent.exe's prompt window stayed work-area sized past CONSENT_HOST_HOLD_MS and is announced anyway so the prompt can be answered; once per agent. The informational QGAUACHOST withheld/shown lines are not this row (66 in the same logs). Jev on the sweep's rubric (scratchpad/jev-preacc1419-*): expected 0.60; keep_armed 0.56 -> armed."
+  },
+  {
+   "regex": "^agent\\|W\\|UpdateWindowData: QGADIRECTLEGACY hwnd 0x(%x|H) rebuild failed: ",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "NEVER OBSERVED (0 in 85 gui-agent logs of 52 rig runs of these agents, 2026-11-20), AND DELIBERATELY NOT SILENCED. agent/gui-agent/main.c UpdateWindowData (agent 91cb7db): the per-window rebuild at a new size failed on a direct-required guest; dom0 keeps what it had. Jev on the sweep's rubric (scratchpad/jev-preacc1419-*): expected 0.31; keep_armed 0.81 -> armed."
+  },
+  {
+   "regex": "^agent\\|E\\|StartFrameProcessing: SetSeamlessMode \\(no desktop duplication\\)( failed with error |$)",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "NEVER OBSERVED (0 in 85 gui-agent logs of 52 rig runs of these agents, 2026-11-20), AND DELIBERATELY NOT SILENCED. agent/gui-agent/main.c StartFrameProcessing (agent 47810d5): entering seamless mode failed on the start path that creates no desktop duplication (win_perror2). Jev on the sweep's rubric (scratchpad/jev-preacc1419-*): insufficient-evidence 0.55; keep_armed 0.78 -> armed."
+  },
+  {
+   "regex": "^agent\\|E\\|WatchForEvents: QGADESKENGINE the desktop duplication for the non-seamless desktop could not be created \\(0x(%x|H)\\): the guest stays seamless",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "NEVER OBSERVED (0 in 85 gui-agent logs of 52 rig runs of these agents, 2026-11-20), AND DELIBERATELY NOT SILENCED. agent/gui-agent/main.c WatchForEvents (agent 47810d5): dom0 asked for the non-seamless desktop and DesktopEngineCreate failed; the guest stays seamless and the user is shown the desktop-window-refused notice. Jev on the sweep's rubric (scratchpad/jev-preacc1419-*): expected 0.47; keep_armed 0.80 -> armed."
+  },
+  {
+   "regex": "^agent\\|E\\|PwSetDaemonVersion: per-window capture inactive: daemon protocol 0x(%x|H) < 0x(%x|H), no window can be shown",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "NEVER OBSERVED (0 in 85 gui-agent logs of 52 rig runs of these agents, 2026-11-20), AND DELIBERATELY NOT SILENCED. agent/gui-agent/perwindow.c PwSetDaemonVersion (agent 91cb7db): dom0's gui-daemon predates WINDOW_DUMP_ACK on a direct-required guest, so no window can be shown. Jev on the sweep's rubric (scratchpad/jev-preacc1419-*): expected 0.60; keep_armed 0.82 -> armed."
   }
  ],
  "signatures": {
@@ -4554,5 +4602,5 @@
   }
  },
  "version": 1,
- "preaccounted_at": "b2b8e697fbd11c5e74439ba8112fc67d5707e1b1"
+ "preaccounted_at": "cee8a5da18291d59239bc63115f2d8b5f6cdff72"
 }
