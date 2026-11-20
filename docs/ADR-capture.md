@@ -145,9 +145,10 @@ difference between the two sources into a visible content swap at about 0.5 Hz (
 
 **Decision.** While a window is unoccluded and otherwise eligible (`PwDdaEligible`: not moving, geometry
 matches, fully on screen, not layered, nothing tracked above it), its damaged sub-rects are copied from the
-desktop duplication frame. Entering that mode costs ONE PrintWindow, which establishes the buffer. Nothing
-re-renders the window while it stays eligible: there is no periodic PrintWindow "to correct" differences
-between the two sources.
+desktop duplication frame. Entering that mode costs ONE PrintWindow, which establishes the buffer, and so
+does leaving it: the copies can hold a window that was on screen above it before it was tracked (Windows 10
+Start), which nothing else repaints while that window covers it. Nothing re-renders the window while it stays
+eligible: there is no periodic PrintWindow "to correct" differences between the two sources.
 
 **Cost.** A difference between the sources (alpha byte, Windows 11 rounded corners) persists as a one-time
 transition instead of being corrected.
