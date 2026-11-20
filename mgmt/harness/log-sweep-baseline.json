@@ -578,6 +578,18 @@
    "status": "unsettled",
    "max_per_boot": null,
    "reason": "NEVER OBSERVED (0 in 85 gui-agent logs of 52 rig runs of these agents, 2026-11-20), AND DELIBERATELY NOT SILENCED. agent/gui-agent/perwindow.c PwSetDaemonVersion (agent 91cb7db): dom0's gui-daemon predates WINDOW_DUMP_ACK on a direct-required guest, so no window can be shown. Jev on the sweep's rubric (scratchpad/jev-preacc1419-*): expected 0.60; keep_armed 0.82 -> armed."
+  },
+  {
+   "regex": "^agent\\|W\\|[^|]*: QGAOPENNORMAL 0x(%x|H): opened maximized \\((%u|N)x(%u|N), pid (%lu|N)\\), showing it normal was refused \\(0x(%x|H)\\) - announced maximized",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "NEVER OBSERVED (0 in the pulled gui-agent logs under qwt-quick-upgrade, 2026-11-21; the INFO form read live 4 times on build-4.3.46.1423/1425), AND DELIBERATELY NOT SILENCED. agent/gui-agent/main.c RestoreWindowOpenedMaximized (agent 070f525): ShowWindowAsync(SW_SHOWNORMAL) refused for a window that opened maximized, which is then announced maximized against ADR-windows 17. Jev on the sweep's rubric (scratchpad/jev-preacc1425-*): expected 0.13 (defect 0.35); keep_armed 0.75 -> armed."
+  },
+  {
+   "regex": "^agent\\|W\\|[^|]*: QGASTARTCLOSE 0x(%x|H): dom0 closed the (%s|Start|search) window, but activation to the shell desktop 0x(%x|H) was refused - it stays open",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "NEVER OBSERVED (0 in the pulled gui-agent logs under qwt-quick-upgrade, 2026-11-21; the INFO form never seen either - STARTCLOSEUNEXERCISED), AND DELIBERATELY NOT SILENCED. agent/gui-agent/vchan-handlers.c HandleClose (agent 1e8a920): dom0's close button on Start or search, and activation to the shell desktop refused, so the surface stays open (ADR-windows 11). Jev on the sweep's rubric (scratchpad/jev-preacc1425-*): defect 0.44; keep_armed 0.79 -> armed."
   }
  ],
  "signatures": {
@@ -4602,5 +4614,5 @@
   }
  },
  "version": 1,
- "preaccounted_at": "cee8a5da18291d59239bc63115f2d8b5f6cdff72"
+ "preaccounted_at": "8255f6792be6"
 }
