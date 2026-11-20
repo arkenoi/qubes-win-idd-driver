@@ -227,7 +227,18 @@ case "${1:-}" in
                echo "qtest pushrun: FAILED to deliver $base ($want bytes) to $VM after 3 attempts - refusing to run a script that is not there" >&2
                exit 4
            fi
-           vmshell "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"$INCOMING\\$base\" $*" ;;
+           # Each forwarded argument stays ONE argument to the script: the guest's cmd and PowerShell split
+           # the command line on whitespace, so an argument carrying any is double-quoted there. A double
+           # quote inside an argument cannot be carried through that line and is refused.
+           fwd=""
+           for a in "$@"; do
+               case "$a" in
+                   *\"*) echo "qtest pushrun: argument [$a] holds a double quote, which the guest command line cannot carry - refusing" >&2; exit 4 ;;
+                   *[[:space:]]*) fwd="$fwd \"$a\"" ;;
+                   *) fwd="$fwd $a" ;;
+               esac
+           done
+           vmshell "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"$INCOMING\\$base\"$fwd" ;;
   synctime) # Push this qube's clock into the guest (accurate to ~0.3 s).
            # WHY this exists: the guest's virtual RTC is re-derived from dom0's LOCAL wall
            # clock at every domain start and guest RTC writes are DISCARDED when the domain
