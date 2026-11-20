@@ -10,6 +10,7 @@ failed." Status was decided by Jev per entry, not by keyword matching; my own ma
 classified entries whose head said OPEN as closed. Full text is in git history if ever needed.
 
 ## History
+- SIZEDROPPEDFIRSTFRAMEWITHHOLDSWINDOW [P1 user-facing, wgcbroker FrameArrived size branch; FIXED, broker 61f1077c + 9904fa58, shipped v4.3.44+, confirmed by the reporter (42717 post 219, GWECK-STATUS row 43)]
 - INSTALLERLEAVESADEADWINDOW [P1 user-facing, installer; FIXED, 19d74411 + 56f5a007, proven on the rig, shipped in 4.3.44] A manual upgrade left an empty full-screen window and dead taskbar entries until a restart (42717 #194, #201, #215); such an upgrade now tells dom0 it shuts down and powers off (56f5a007), and the restart notice is sent again (19d74411).
 - CPLUNINSTALLBRICKSPVBOOT [P1 user-facing, the MSI's uninstall; FIXED, packaging/patch-installer-keep-pv-drivers.ps1 (185518d0), proven on the rig, shipped in 4.3.44] The uninstall left xenvbd boot-start but unbound under DISKS=1 (42717 #153); a removal now skips both DIFxApp actions while DISKS is set.
 - GRANTIRPONMAIN [P2, agent/gui-agent/grantowner.c; FIXED 2026-11-14, agent f1fe8e4, shipped since 4.3.39] Grant IRPs were pinned to the main thread, which also makes the synchronous evtchn close; each grant handle now has its own owner thread. Closing condition (built and run on a guest) met on win11de-r2b (4.3.43.1307): the staging grant is revoked at exit by its own worker, not by main. That worker's revoke is where GRANTOWNERREVOKECRASH dies - the residual defect, tracked there.
