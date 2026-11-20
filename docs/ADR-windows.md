@@ -270,10 +270,7 @@ mapped. Caveat: PASS-UNPROVEN per SG11 - the naive-cloak fail-proof build is sti
    search view Start turns into when the user types** (owner 2026-11-20, "Frame the search view": SearchHost on
    Win11, SearchApp on Win10), so the keyboard stays with the qube. On Win10 the same SearchApp window is the
    taskbar search box while Start is shown, collapsed by a window region; collapsed, it stays a popup, and it is
-   framed when typing expands it. On Win11 the search view is cropped to its card like Start (owner 2026-11-20,
-   "the black border is ugly"); it has no UIA card rule, so its card is measured from its own painted pixels at its
-   first map, which stays uncropped so the first key's window is not delayed, and the window is cropped on the next
-   pass and created cropped at every later opening. The entry opens Start guest-side; the
+   framed when typing expands it. The entry opens Start guest-side; the
    dom0-forwarded Windows key stays dropped (`BlockMenuKey=1`, section 9). Toasts are not affected. `SeamlessStart` defaults to 1; section 11 governs whoever sets 0. The installer publishes
    the entry (`guest/install-start-shortcut.ps1`, the all-users `Start Menu.lnk` that `qubes.GetAppMenus`
    reports) at install and upgrade, and removes it instead on a guest whose own shell takes the Windows key
