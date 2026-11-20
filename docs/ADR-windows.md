@@ -76,6 +76,7 @@ flowchart TD
 | 14 | Repairing such a guest: a fresh private volume, then power off | PROPOSED (Jev 0.75) | 2026-11-15 |
 | 15 | A volume extended in dom0 grows inside the guest, as on Linux | ACCEPTED (owner) | 2026-11-15 |
 | 16 | `qubes.WaitForSession` waits for the qube's own qubesdb `/default-user`, as on Linux; a different name from the caller is reported through the existing route | ACCEPTED (owner) | 2026-11-17 |
+| 17 | A window opens as a normal window, inside the work area | ACCEPTED (owner) | 2026-11-20 |
 
 Status words and the section format are defined in `docs/ADR-README.md`.
 
@@ -779,3 +780,22 @@ artifact's at every boot, `1d59043b5a7d0da6...`), fed a name on stdin as dom0 fe
   package installs it.
 - A zero-byte stdin still ends the call with an error before qubesdb is read, as before; only a name that
   trims to empty reaches the fallback in rule 4.
+
+## 17. A window opens as a normal window, inside the work area
+
+**Status:** ACCEPTED (owner), 2026-11-20. Built in agent 5ecf0af; not yet measured on a guest.
+
+**Owner, 2026-11-20**, after Edge opened maximized over the whole guest screen, dom0's panel included:
+«everything should open as normal windows whenever possible»; «the size should match workarea max, not exceed
+it (keep borders in mind)»; «if we can default to a smaller one with no side effects, do it».
+
+**Decision.**
+1. A visible, captioned, non-popup window that arrives maximized is shown normal once, before dom0 is told of
+   it, and announced at that size.
+2. Its normal rect is clamped inside the guest work area, which is inferred from dom0's own placement, so
+   dom0's frame and panel fit.
+3. An app with no normal size of its own - its normal rect is the whole work area - gets two thirds of the
+   work area each way, centred. A smaller normal size the app remembered is kept.
+4. Once per window: an app that maximizes itself again, or that the user maximizes, keeps it. Windows of a
+   process older than the agent (a restarted agent re-adopting the session) are left as they are.
+5. A maximized window with a title bar is still never treated as fullscreen (sections 1-3 unchanged).
