@@ -250,7 +250,7 @@ mapped. Caveat: PASS-UNPROVEN per SG11 - the naive-cloak fail-proof build is sti
 
 ## 7. Popups, tooltips and toasts are override-redirect windows; a contained menu is synthesized onto its owner
 
-**Status:** ACCEPTED (owner, 2026-08-16); point 4, Start, replaced by owner order 2026-11-19.
+**Status:** ACCEPTED (owner, 2026-08-16); point 4, Start, replaced by owner order 2026-11-19, its search view added 2026-11-20.
 
 **Decision.**
 
@@ -266,9 +266,10 @@ mapped. Caveat: PASS-UNPROVEN per SG11 - the naive-cloak fail-proof build is sti
    broker on its full render; the crop resolves BEFORE the map (`MapDeferred`, bound
    `CROP_BEFORE_SHOW_TIMEOUT_MS` = 400). The residual rounded-corner black triangles are fundamental (dom0
    windows are rectangular); the owner declined a background fill.
-4. **Start is a regular dom0 app-menu entry, presented as a normal window, on Win10 and Win11.** The entry
-   opens Start guest-side; the dom0-forwarded Windows key stays dropped (`BlockMenuKey=1`, section 9). Toasts
-   are not affected. `SeamlessStart` defaults to 1; section 11 governs whoever sets 0. The installer publishes
+4. **Start is a regular dom0 app-menu entry, presented as a normal window, on Win10 and Win11, and so is the
+   search view Start turns into when the user types** (owner 2026-11-20, "Frame the search view": SearchHost on
+   Win11, SearchApp on Win10), so the keyboard stays with the qube. The entry opens Start guest-side; the
+   dom0-forwarded Windows key stays dropped (`BlockMenuKey=1`, section 9). Toasts are not affected. `SeamlessStart` defaults to 1; section 11 governs whoever sets 0. The installer publishes
    the entry (`guest/install-start-shortcut.ps1`, the all-users `Start Menu.lnk` that `qubes.GetAppMenus`
    reports) at install and upgrade, and removes it instead on a guest whose own shell takes the Windows key
    (`service.enableWinKey`).
