@@ -60,6 +60,7 @@ flowchart TD
 | 8 | The agent never answers an elevation prompt | ACCEPTED |
 | 9 | Turning UAC off is not a security improvement and is never framed as one | ACCEPTED |
 | 10 | Nothing of ours elevates during startup; an unasked-for elevation is a P1 defect of ours | ACCEPTED |
+| 11 | consent.exe's prompt window is withheld from dom0 while it covers the work area | PROPOSED |
 
 ## The records this rests on
 
@@ -434,3 +435,33 @@ upstream wrote them. NOTHING HAS BEEN OBSERVED: no guest in our possession has b
 at startup, and no `MsiInstaller` repair event appears in any sweep we hold. The probe that would settle it is
 guest-side and cheap - `MsiInstaller` events in the Application log at first logon of a fresh user, against
 `consent.exe` in the process list - and it is owed before this is called a cause or reported anywhere.
+
+## 11. consent.exe's prompt window is withheld from dom0 while it covers the work area
+
+**Status:** PROPOSED, 2026-11-20. Jev on the shape: `deny_class_while_covering_work_area` 0.54-0.56, under
+the floor - not a Jev verdict. Chosen with the bounded announce below, on the reasons given here.
+
+**Context.** consent.exe creates its prompt window (class `Credential Dialog Xaml Host`) at the size of the work
+area, transparent around the dialog, then hides it and shows it again at dialog size about 60 ms later -
+measured on 19045 (5120x1400, then 456x367) and on 26200 (5120x1392, then 456x432). Announced at the first
+size, dom0 is given a work-area-sized window whose content is the guest desktop with the prompt in its middle.
+GWeck reported the prompt "on a full-screen yellow background" (post 225, row 56); the unsigned-publisher
+prompt's header is yellow on Windows 10.
+
+**Decision.**
+1. `ShouldAcceptWindow` refuses a window of that class, owned by System32's `consent.exe` (full image path),
+   while it covers at least nine tenths of the guest screen in both dimensions. Windows' show at dialog size
+   is an event that re-examines it, so the prompt is announced with no added delay.
+2. The class is kept out of the rejected-window cache, like the §6 stand-in, so a host that never shrinks is
+   re-judged on every resync.
+3. A host still covering the work area after `CONSENT_HOST_HOLD_MS` (2 s) is announced anyway and logged at
+   ERROR: a prompt nobody can see blocks the program that asked, which is worse than a large window.
+4. `QGAUACHOST` logs the withhold and the dialog-size announce with the time withheld, at the shipped level.
+
+**Why identity here, when §7 and `ADR-windows` §4 make geometry the safety criterion.** That criterion decides
+what must never reach dom0 - a fullscreen surface - and it stays geometry. This rule decides nothing about
+safety: it times one known window, and a geometry-only version would hold every application that sizes itself
+to the work area without `WS_MAXIMIZE`. The class is matched only together with the owning process, so no other
+program's window is affected by the name.
+
+Code: agent `gui-agent/main.c` `ShouldAcceptWindow` (`CONSENT_HOST_CLASS`), `ExamineWindow` (cache exclusion).
