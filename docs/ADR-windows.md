@@ -800,9 +800,10 @@ at all»; «we may allow explicit maximize, but we do not want anything to open 
    process older than the agent (a restarted agent re-adopting the session) are left as they are.
 5. A maximized window with a title bar is still never treated as fullscreen (sections 1-3 unchanged).
 
-6. A captionless popup the window arrived under, laid out for the maximized size (Edge 145's first-run card), is
-   kept exactly on the window's client area for as long as it lives, and put back whenever the app moves it away.
-   The window is shown normal at once and never waits for the popup. **Owner, 2026-11-21**: «so it IS doable to
+6. The window's own captionless popup laid out for the maximized size (Edge 145's first-run card) - there when the
+   window is shown normal, or shown after it, as a warm launch does about a second later - is kept exactly on the
+   window's client area for as long as it lives, and put back whenever the app moves it away. The window is shown
+   normal at once and never waits for the popup. **Owner, 2026-11-21**: «so it IS doable to
    make overlay fit the window. we just need to make sure the size and position matches, and it sometimes could
    miss just a few pixels -- we need to make sure it wont happen»; on keeping it there: «thats an ugly deisgn but
    would work if we have no better». Keeping the window maximized until the popup is clicked away is rejected:
