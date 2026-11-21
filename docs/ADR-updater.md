@@ -76,7 +76,7 @@ flowchart TD
 | 15 | Outside data never becomes a command | ACCEPTED | 2026-10-07 |
 | 16 | The updater is graded in two phases: deterministic gates first, the dom0-driven sequence second | ACCEPTED (owner) | 2026-10-22 |
 | 17 | Windows never restarts a guest on its own; a restart waits for the user, and a policy that overrides this is detected and warned about | ACCEPTED (owner, Jev 0.89); built, decision 1's measurement owed | 2026-11-13 |
-| 18 | On a template the updates proxy stays up, gated by process, not by time; in an AppVM it is gone | ACCEPTED (owner); not built, the gate test owed | 2026-11-18 |
+| 18 | On a template the updates proxy stays up, gated by process, not by time; in an AppVM it is gone; command-line winget is served by identity, to any host | ACCEPTED (owner); points 1, 2, 4, 6 built; 7 written, its guest test owed; 3 not built | 2026-11-21 |
 
 Status words and the section format are defined in `docs/ADR-README.md`. Each section below states the essentials.
 `docs/REFERENCE-updater.md` keeps every section in full under the same number: the complete wording, context,
@@ -586,7 +586,7 @@ at its logon screen has no signed-in user, so the setting does not hold there. A
 
 ## 18. On a template the updates proxy stays up, gated by process, not by time; in an AppVM it is gone
 
-**Status:** ACCEPTED (owner, 2026-11-18; point 6 owner, 2026-11-21). Points 1, 2, 4 and 6 are built. Point 3 needs a
+**Status:** ACCEPTED (owner, 2026-11-18; points 6 and 7 owner, 2026-11-21). Points 1, 2, 4 and 6 are built; point 7 is written, its guest test owed. Point 3 needs a
 relay that serves between passes, which is not built; until it is, nothing listens on 127.0.0.1:8082 between passes.
 
 **Context.** Row 47 (`0x8024402C`): Windows Update takes its proxy from the per-machine policy present at sign-in
@@ -610,6 +610,23 @@ process more tidy, but that would be it."*
    WinINET bypass lists. With nothing listening on the port, Smart App Control's lookup for a never-run binary held its
    start ~8 s (65-75 ms bypassed). Asked to choose between this bypass and a relay that listens between passes, the
    owner chose *"Both"*: the bypass in this cut, the standing relay after it.
+7. Command-line winget on a template goes through the relay, identified by binary and path, and may reach any host.
+   The owner, 2026-11-21: *"we want the command line winget to run. can we identify it by binary and path, not by
+   executable name?"* and *"yes lets allow any host"*. A peer is winget when its real image path is
+   `%ProgramFiles%\WindowsApps\Microsoft.DesktopAppInstaller_<version>_<arch>__8wekyb3d8bbwe\winget.exe` (only the AppX
+   deployment service writes there, and it names the folder after the signer's publisher id) and its package family,
+   read from the process, is `Microsoft.DesktopAppInstaller_8wekyb3d8bbwe`. Path alone admits nothing a user can
+   place; identity alone is forgeable with `Invoke-CommandInDesktopPackage`. No LocalSystem rule applies to it, and
+   only it skips the host allowlist; Windows Update, Delivery Optimization and BITS keep that allowlist, since any user
+   can drive them. Written on 2026-11-21 (`PeerIsWinget`, `IsWingetImagePath` in the relay), compiled as C# 5 and its
+   path rule checked against hostile paths off-guest; the package-identity call is unverified, and point 2's refusal
+   test (a renamed curl, `Invoke-CommandInDesktopPackage`, a user's powershell refused; winget served) is owed on a
+   guest before it ships. Until point 3's standing relay exists, winget is served only while a pass runs. Templates only:
+   the owner, 2026-11-21, *"it should NOT exist on anything but templates. everything else takes direct path or fails"*.
+   The pass already exits before any proxy activity outside a TemplateVM (`qubes-windows-update.ps1`, the class branch
+   after `Get-QubesVmClass`), and point 4 removes the configuration there; a standing relay must carry the same check
+   itself and exit outside a TemplateVM, not rely on whoever starts it. On an AppVM or StandaloneVM, winget goes
+   direct through the netvm or fails.
 
 **Supersedes** the temporal gate: "the proxy is torn down when the pass ends" (`guest/qubes-updates-relay.cs:172-173`,
 owner 2026-08-21), and "up only during it" in §12.5.

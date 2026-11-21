@@ -150,6 +150,9 @@ static class Relay
     // traffic we raised the proxy for, and it is egress we never intended to grant: a qube with
     // no netvm should not be phoning home to Office because an update is running.
     // Suffix match, case-insensitive. Override with QUBES_UPDATES_ALLOW (comma-separated).
+    // ONE PEER SKIPS THIS LIST: command-line winget, identified by image path and package identity (PeerIsWinget,
+    // ADR-updater section 18 point 7, owner 2026-11-21 «yes lets allow any host»). That, not go.microsoft.com below,
+    // is now the widest grant the relay makes.
     static string[] AllowList()
     {
         string env = Environment.GetEnvironmentVariable("QUBES_UPDATES_ALLOW");
@@ -770,6 +773,80 @@ static class Relay
         return false;
     }
 
+    // ---- winget, the command line the user runs on a template (ADR-updater section 18 point 3) ----
+    //
+    // The owner, 2026-11-21: «we want the command line winget to run. can we identify it by binary and path, not by
+    // executable name?» and, on which hosts: «yes lets allow any host». So one more identity is served, and only it
+    // reaches hosts outside AllowList(): App Installer's winget.exe, run by whoever runs it (no LocalSystem rule - the
+    // user's own command line is the point). Both halves are required, because each alone is forgeable:
+    //   PATH     QueryFullProcessImageNameW (the real image, never an alias) must be exactly
+    //            %ProgramFiles%\WindowsApps\Microsoft.DesktopAppInstaller_<version>_<arch>__8wekyb3d8bbwe\winget.exe.
+    //            Only the AppX deployment service writes under WindowsApps, and it names a package folder after the
+    //            publisher id its signature proves - 8wekyb3d8bbwe is Microsoft's - so the folder vouches for the binary
+    //            without pinning a hash every App Installer update would break. A renamed curl cannot get there.
+    //   PACKAGE  GetPackageFamilyName on the process must say Microsoft.DesktopAppInstaller_8wekyb3d8bbwe. Windows sets
+    //            that, not the process - but Invoke-CommandInDesktopPackage runs ANY program under a package's identity,
+    //            which is why the path is required as well.
+    // What winget then launches (an installer, msiexec) is a different process and is judged on its own. NOT RUN ON A
+    // GUEST YET: the section 18 point 2 refusal test (renamed curl, Invoke-CommandInDesktopPackage, a user powershell
+    // refused; winget served) is owed before this ships.
+    const string WingetFamily = "Microsoft.DesktopAppInstaller_8wekyb3d8bbwe";
+
+    // Pure, so it can be argued about without a guest. programFiles is %ProgramFiles%.
+    static bool IsWingetImagePath(string path, string programFiles)
+    {
+        if (string.IsNullOrEmpty(path) || string.IsNullOrEmpty(programFiles)) return false;
+        if (path.IndexOf('/') >= 0 || path.IndexOf("..", StringComparison.Ordinal) >= 0) return false;
+        string root = programFiles.TrimEnd('\\') + @"\WindowsApps\";
+        if (!path.StartsWith(root, StringComparison.OrdinalIgnoreCase)) return false;
+        string[] parts = path.Substring(root.Length).Split('\\');
+        if (parts.Length != 2 || !string.Equals(parts[1], "winget.exe", StringComparison.OrdinalIgnoreCase)) return false;
+        // <name>_<version>_<arch>__<publisher id>: the resource id between arch and publisher is empty for a main package.
+        const string head = "Microsoft.DesktopAppInstaller_", tail = "__8wekyb3d8bbwe";
+        string f = parts[0];
+        if (f.Length <= head.Length + tail.Length) return false;
+        if (!f.StartsWith(head, StringComparison.OrdinalIgnoreCase) || !f.EndsWith(tail, StringComparison.OrdinalIgnoreCase)) return false;
+        string mid = f.Substring(head.Length, f.Length - head.Length - tail.Length);   // e.g. 1.26.509.0_x64
+        int us = mid.IndexOf('_');
+        if (us <= 0 || us != mid.LastIndexOf('_')) return false;
+        string ver = mid.Substring(0, us), arch = mid.Substring(us + 1);
+        foreach (char c in ver) if (!(char.IsDigit(c) || c == '.')) return false;
+        return arch == "x64" || arch == "arm64" || arch == "x86" || arch == "neutral";
+    }
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+    static extern int GetPackageFamilyName(IntPtr process, ref uint length, StringBuilder familyName);
+
+    static string ProcessPackageFamily(int pid)
+    {
+        IntPtr h = OpenProcess(ProcessQueryLimited, false, pid);
+        if (h == IntPtr.Zero) return null;
+        try
+        {
+            uint len = 256;
+            StringBuilder sb = new StringBuilder((int)len);
+            return GetPackageFamilyName(h, ref len, sb) == 0 ? sb.ToString() : null;   // 0 = ERROR_SUCCESS
+        }
+        catch { return null; }   // an OS without the API: not winget
+        finally { CloseHandle(h); }
+    }
+
+    static bool PeerIsWinget(int pid, out string why)
+    {
+        why = "pid " + pid;
+        if (pid <= 0) return false;
+        string path = ProcessImagePath(pid);
+        if (!IsWingetImagePath(path, Environment.GetEnvironmentVariable("ProgramFiles"))) return false;
+        string fam = ProcessPackageFamily(pid);
+        if (!string.Equals(fam, WingetFamily, StringComparison.OrdinalIgnoreCase))
+        {
+            why = "winget (pid " + pid + ") - image " + path + " but package identity " + (fam ?? "(none)");
+            return false;
+        }
+        why = "winget (pid " + pid + ", " + WingetFamily + ", any host)";
+        return true;
+    }
+
     // The update pass registers itself here before it starts the relay: REG_MULTI_SZ UpdaterPids under
     // HKLM\SOFTWARE\Qubes\UpdatesProxy, one "<pid>@<start time, UTC ticks>" per running pass. Only an administrator can
     // write the key; the start time defeats pid reuse after a pass that died without removing its entry.
@@ -1076,12 +1153,20 @@ static class Relay
             int peerPort = 0;
             try { peerPort = ((IPEndPoint)inbound.Client.RemoteEndPoint).Port; } catch { peerPort = 0; }
             string peer = "port " + peerPort;
+            bool anyHost = false;   // true only for the winget identity (PeerIsWinget); every other peer keeps AllowList()
             if (!"off".Equals(Environment.GetEnvironmentVariable("QUBES_UPDATES_PEER_ALLOWLIST"),
                               StringComparison.OrdinalIgnoreCase))
             {
                 int peerPid = PidForLocalPort(peerPort);
                 string who;
                 bool allowed = PeerIsUpdate(peerPid, out who);
+                if (!allowed)
+                {
+                    // Asked only after the update gate said no, so no update process changes path.
+                    string wwho;
+                    if (PeerIsWinget(peerPid, out wwho)) { allowed = true; anyHost = true; who = wwho; }
+                    else if (wwho.StartsWith("winget", StringComparison.Ordinal)) who = wwho;   // names the half that failed
+                }
                 peer = who;
                 if (!allowed)
                 {
@@ -1105,11 +1190,12 @@ static class Relay
             }
             TcpClient captured = inbound;
             string capturedPeer = peer;
-            Task.Run(delegate { HandleInbound(captured, capturedPeer, self, target, user).Wait(); });
+            bool capturedAnyHost = anyHost;
+            Task.Run(delegate { HandleInbound(captured, capturedPeer, self, target, user, capturedAnyHost).Wait(); });
         }
     }
 
-    static async Task HandleInbound(TcpClient inbound, string peer, string self, string target, string user)
+    static async Task HandleInbound(TcpClient inbound, string peer, string self, string target, string user, bool anyHost)
     {
         NetworkStream a = inbound.GetStream();
 
@@ -1140,7 +1226,7 @@ static class Relay
             int e0 = headPeek.IndexOf('\n');
             string line0 = (e0 > 0 ? headPeek.Substring(0, e0) : headPeek).Trim();
             string dest = TargetOf(line0);
-            if (!Allowed(dest))
+            if (!anyHost && !Allowed(dest))
             {
                 try
                 {
