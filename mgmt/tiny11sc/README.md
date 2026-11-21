@@ -65,8 +65,11 @@ C:\Windows\tiny11sc\tiny11sc.cmd -Cleanup                    drop superseded pay
 ```
 
 Capabilities and features come from Windows Update unless you pass `-Source`. Apps come from the Store through winget, and Edge and
-WebView2 from winget. All of that needs a network: a template has none, so run it in a qube made from the template, or give the template a
-netvm for the duration. The updater's relay is not used, because it serves update passes only.
+WebView2 from winget. All of that needs a network. A template has none, so run it in a qube made from the template: a StandaloneVM
+or AppVM with a netvm, where QWT removes the updates-proxy configuration (ADR-updater §18 point 4). Giving the template itself a netvm
+is UNVERIFIED and probably won't work. A template keeps its proxy configured between passes with nothing listening on it (§18 point 1),
+so Windows Update and winget would most likely aim at that dead port anyway. Running these through the template's updates proxy
+is §18 point 3 (installs the user starts on a template), and it belongs to QWT's relay, not here. It is not built yet.
 
 **Defender** is restored on a best-effort basis. The original service start values are recorded **from the image at build time**
 (`C:\Windows\tiny11sc\services.orig`) and written back. If Windows refuses an elevated administrator, the write runs once as TrustedInstaller
