@@ -363,7 +363,9 @@ guest invisible, so the installer arms autologon on every image.
 **Decision.**
 
 1. Credentials are validated with `LogonUser` BEFORE anything is written; a wrong password leaves
-   `AutoAdminLogon` at 0 and reports `reason=bad-credentials`.
+   `AutoAdminLogon` at 0 and reports `reason=bad-credentials` with the Win32 code and its cause. An account with no
+   password is armed: an empty password answered 1327 (blank passwords kept to console sign-in, the default policy)
+   is verified empty, since the same empty password for an account that has one is 1326.
 2. The password is stored ONLY as the LSA secret `DefaultPassword`; a plaintext registry value is removed if
    present. Two reasons, both load-bearing: while `AutoLogonCount` exists Windows CONSUMES the registry value
    after one use and nothing can restore it, and the registry value is world-readable plaintext of a password

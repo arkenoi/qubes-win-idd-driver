@@ -115,12 +115,13 @@ public static class QubesLsa {
         }
     }
 
-    // LOGON32_LOGON_INTERACTIVE = 2, LOGON32_PROVIDER_DEFAULT = 0
-    public static bool ValidateCredentials(string user, string domain, string pass) {
+    // LOGON32_LOGON_INTERACTIVE = 2, LOGON32_PROVIDER_DEFAULT = 0. 0 when Windows accepts the pair, else the
+    // Win32 error LogonUser set - read before any other call can overwrite it.
+    public static int LogonFailure(string user, string domain, string pass) {
         IntPtr token;
-        if (!LogonUser(user, domain, pass, 2, 0, out token)) return false;
+        if (!LogonUser(user, domain, pass, 2, 0, out token)) return Marshal.GetLastWin32Error();
         CloseHandle(token);
-        return true;
+        return 0;
     }
 }
 '@
@@ -203,15 +204,41 @@ if ($Domain -eq $env:COMPUTERNAME) {
 
 # ---- 2. validate BEFORE writing anything -----------------------------------
 # A blank password is legitimate (a local account with none): Windows autologs in with an empty
-# DefaultPassword, and LogonUser accepts "" for such an account, so the same check covers it.
-if (-not [QubesLsa]::ValidateCredentials($User, $Domain, $Password)) {
-    Write-Output "FAIL   Windows rejected those credentials for $Domain\$User - refusing to arm"
+# DefaultPassword. LogonUser refuses "" for such an account with 1327 under the default "limit blank
+# passwords to console sign-in" policy, after checking it: the same "" for an account WITH a password
+# is 1326. So "" answered 1327 is a verified empty password, and it is armed.
+$logonErr = [QubesLsa]::LogonFailure($User, $Domain, $Password)
+$blankVerified = ($logonErr -eq 1327 -and $Password -eq '')
+if ($logonErr -ne 0 -and -not $blankVerified) {
+    $given = if ($Password -eq '') { 'an empty password' } else { 'the password given' }
+    $sysText = (New-Object System.ComponentModel.Win32Exception($logonErr)).Message
+    # The cause is keyed on the number, never on the system text, which is in the guest's language.
+    $cause = switch ($logonErr) {
+        1326 { if ($Password -eq '') { 'this account has a password, and none was given' }
+               else { 'that is not this account''s Windows password - a mistyped one, a Windows Hello PIN, or another keyboard layout' } }
+        1327 { 'an account restriction refuses it (sign-in hours, workstations, or a policy)' }
+        1328 { 'the account may not sign in at this time' }
+        1329 { 'the account may not sign in on this computer' }
+        1330 { 'the password has expired - sign in once, change it, and arm with the new one' }
+        1907 { 'the password must be changed first - sign in once, change it, and arm with the new one' }
+        1331 { 'the account is disabled' }
+        1793 { 'the account has expired' }
+        1909 { 'the account is locked out after too many wrong passwords' }
+        1385 { 'a policy does not let this account sign in locally' }
+        default { 'not one this script knows' }
+    }
+    Write-Output "FAIL   Windows refused $given for $Domain\$User, win32 $logonErr ($sysText) - refusing to arm"
+    Write-Output "       cause: $cause"
     Write-Output '       (arming with a wrong password strands the qube at the sign-in screen,'
     Write-Output '        which is the exact failure this is meant to prevent)'
-    Write-Output '=== RESULT === armed=0 reason=bad-credentials'
+    Write-Output "=== RESULT === armed=0 reason=bad-credentials win32=$logonErr"
     exit 2
 }
-Write-Output 'ok     credentials accepted by Windows'
+if ($blankVerified) {
+    Write-Output "ok     $Domain\$User has no password (win32 1327: Windows checks an empty one and keeps it to console sign-in, where autologon signs in)"
+} else {
+    Write-Output 'ok     credentials accepted by Windows'
+}
 
 # ---- 3. store the password where Windows will find it and nothing eats it ----
 $stored = 'lsa'

@@ -2520,7 +2520,7 @@ function Invoke-AutologonArming {
             Write-Log "arming autologon for '$alUser' (password from: $alSource)"
             try {
                 $alOut = & $setal -User $alUser -Password $alPass 2>&1
-                foreach ($l in @($alOut | Select-Object -Last 6)) { Write-Log "  $l" }
+                foreach ($l in @($alOut | Select-Object -Last 8)) { Write-Log "  $l" }
                 $tr = @($alOut) | Where-Object { $_ -match '=== RESULT === armed=(\d)' } | Select-Object -Last 1
                 if ($tr -match 'armed=1') {
                     $armed = $true
@@ -2528,9 +2528,10 @@ function Invoke-AutologonArming {
                     Write-Log 'autologon armed and verified - this qube can come back on its own'
                 } else {
                     $reason = if ($tr -match 'reason=([a-z-]+)') { $Matches[1] } else { 'unknown' }
+                    $code = if ($tr -match 'win32=(\d+)') { ", win32 $($Matches[1])" } else { '' }
                     $script:Result.detail.autologon = "not-armed:$reason"
-                    Write-Log "autologon NOT armed ($reason). If this account has a password, arrange" 'WARN'
-                    Write-Log '  autologon yourself (guest\set-autologon.ps1 -Password ...) or the qube will' 'WARN'
+                    Write-Log "autologon NOT armed ($reason$code; the FAIL and cause lines above say why). Arm it with" 'WARN'
+                    Write-Log '  guest\set-autologon.ps1 -Password ... (the Windows password, not a PIN), or the qube will' 'WARN'
                     Write-Log '  come back at a sign-in screen that dom0 does not display in seamless mode.' 'WARN'
                 }
             } catch {
