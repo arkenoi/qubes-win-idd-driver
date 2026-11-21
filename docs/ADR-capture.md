@@ -1255,6 +1255,3 @@ smaller one keeps its own window. A popup mostly outside its owner, a popup with
 below the direct floor keep their own window.
 
 **Cost.** Such a popup cannot be moved or stacked in dom0 apart from its owner, and it is clipped to the owner.
-
-**Owed.** On 26300 and 26200, a fresh-profile Edge: a click on the card's button dismissing it, and no CREATE for the
-overlay in a debug agent log.
