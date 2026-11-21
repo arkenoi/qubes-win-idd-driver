@@ -586,7 +586,7 @@ at its logon screen has no signed-in user, so the setting does not hold there. A
 
 ## 18. On a template the updates proxy stays up, gated by process, not by time; in an AppVM it is gone
 
-**Status:** ACCEPTED (owner, 2026-11-18; points 6 and 7 owner, 2026-11-21). Points 1, 2, 4 and 6 are built; point 7 is written, its guest test owed. Point 3 needs a
+**Status:** ACCEPTED (owner, 2026-11-18; points 6 and 7 owner, 2026-11-21). Points 1, 2, 4, 6 and 7 are built. Point 7 on a template guest: the refusals hold and winget search is served; winget download fails its certificate revocation check (findings WINGETDOWNLOADREVOCATION). Point 3 needs a
 relay that serves between passes, which is not built; until it is, nothing listens on 127.0.0.1:8082 between passes.
 
 **Context.** Row 47 (`0x8024402C`): Windows Update takes its proxy from the per-machine policy present at sign-in
@@ -618,10 +618,9 @@ process more tidy, but that would be it."*
    read from the process, is `Microsoft.DesktopAppInstaller_8wekyb3d8bbwe`. Path alone admits nothing a user can
    place; identity alone is forgeable with `Invoke-CommandInDesktopPackage`. No LocalSystem rule applies to it, and
    only it skips the host allowlist; Windows Update, Delivery Optimization and BITS keep that allowlist, since any user
-   can drive them. Written on 2026-11-21 (`PeerIsWinget`, `IsWingetImagePath` in the relay), compiled as C# 5 and its
-   path rule checked against hostile paths off-guest; the package-identity call is unverified, and point 2's refusal
-   test (a renamed curl, `Invoke-CommandInDesktopPackage`, a user's powershell refused; winget served) is owed on a
-   guest before it ships. Until point 3's standing relay exists, winget is served only while a pass runs. Templates only:
+   can drive them. Built in `PeerIsWinget` and `IsWingetImagePath` (the relay). Point 2's test on a template guest: a
+   renamed curl, curl under `Invoke-CommandInDesktopPackage` and a user's powershell are refused, and winget's own
+   search is served, which needs the package-identity call to answer. Until point 3's standing relay exists, winget is served only while a pass runs. Templates only:
    the owner, 2026-11-21, *"it should NOT exist on anything but templates. everything else takes direct path or fails"*.
    The pass already exits before any proxy activity outside a TemplateVM (`qubes-windows-update.ps1`, the class branch
    after `Get-QubesVmClass`), and point 4 removes the configuration there; a standing relay must carry the same check
