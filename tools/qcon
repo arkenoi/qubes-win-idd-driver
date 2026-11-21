@@ -81,7 +81,8 @@ Usage:
     tools/qcon <vm> '<command>'                     # convenience: open + run + close, ONE attach;
                                                     # refused while a session for <vm> exists
 Environment:
-    QCON_USER / QCON_PASS       credentials (default: the rig account user / qubes)
+    QCON_USER / QCON_PASS       credentials (default: the rig account user / qubes; any other user REQUIRES
+                                QCON_PASS - the German golden's gerd-test password is not on the rig)
     QCON_INPUT_BUDGET (700)     input bytes per login before `exit` + re-login (lockout ~1200)
     QCON_DEADLINE (45) / QCON_STALL (12)   per-command budget: total seconds / silent seconds
     QCON_LOGIN_DEADLINE (45)    a Windows login takes seconds; be generous
@@ -1309,7 +1310,7 @@ def cmd_diag(vm, user, pw, out, deadline, stall):
 def parse(argv):
     """<verb> <vm> [options] [command] - options may appear anywhere after the verb."""
     opts = {"user": os.environ.get("QCON_USER") or DEFAULT_USER,
-            "pass": os.environ.get("QCON_PASS") or DEFAULT_PASS,
+            "pass": os.environ.get("QCON_PASS") or None,
             "deadline": DEADLINE, "stall": STALL, "logout": False, "out": None}
     rest = []
     i = 0
@@ -1327,6 +1328,11 @@ def parse(argv):
         else:
             rest.append(a)
             i += 1
+    if opts["pass"] is None:
+        if opts["user"] != DEFAULT_USER:
+            raise ValueError(f"--user/QCON_USER {opts['user']} needs --pass/QCON_PASS: {DEFAULT_PASS!r} "
+                             "is the rig account's password only, and a guess is typed into the console")
+        opts["pass"] = DEFAULT_PASS
     return opts, rest
 
 
