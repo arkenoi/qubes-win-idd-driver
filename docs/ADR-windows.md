@@ -805,5 +805,5 @@ in milliseconds without click? then its fine».
 5. A maximized window with a title bar is still never treated as fullscreen (sections 1-3 unchanged).
 6. A window that arrives maximized while a visible captionless popup it owns covers at least nine tenths of it
    (an app's overlay, laid out for the maximized size) is announced maximized, and shown normal on the first
-   tracking pass that finds the overlay gone, with no input. A window minimized meanwhile waits; one restored
-   meanwhile is left as it is.
+   tracking pass that finds the overlay gone, with no input, at the normal placement it had when it arrived. A
+   window minimized meanwhile waits; one restored meanwhile is left as it is.
