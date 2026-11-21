@@ -1,0 +1,63 @@
+Windows Registry Editor Version 5.00
+
+; tiny11sc: offline changes to the install image's HKLM\SYSTEM hive (ControlSet001 - an offline
+; hive has no CurrentControlSet). Merged with prefix HKEY_LOCAL_MACHINE\SYSTEM.
+; build-tiny11sc.sh records every Start value below BEFORE the merge into
+; C:\Windows\tiny11sc\services.orig, which is what restore.ps1 writes back.
+
+; ---- no Defender. Defender's engine is part of the core OS packages on a client SKU, so there is
+; no CBS package to remove; disabled before first boot, it never starts and tamper protection never
+; arms. Its files stay, untouched, so servicing sees an intact component store. Defender's platform
+; and Security-platform offers fall under WU's Definition Updates classification and never count
+; toward dom0's number (qubes-windows-update.ps1, WU-DEFINITION-CLASS).
+
+[HKEY_LOCAL_MACHINE\SYSTEM\ControlSet001\Services\WinDefend]
+"Start"=dword:00000004
+
+[HKEY_LOCAL_MACHINE\SYSTEM\ControlSet001\Services\MDCoreSvc]
+"Start"=dword:00000004
+
+[HKEY_LOCAL_MACHINE\SYSTEM\ControlSet001\Services\WdNisSvc]
+"Start"=dword:00000004
+
+[HKEY_LOCAL_MACHINE\SYSTEM\ControlSet001\Services\WdNisDrv]
+"Start"=dword:00000004
+
+[HKEY_LOCAL_MACHINE\SYSTEM\ControlSet001\Services\WdFilter]
+"Start"=dword:00000004
+
+[HKEY_LOCAL_MACHINE\SYSTEM\ControlSet001\Services\WdBoot]
+"Start"=dword:00000004
+
+[HKEY_LOCAL_MACHINE\SYSTEM\ControlSet001\Services\Sense]
+"Start"=dword:00000004
+
+[HKEY_LOCAL_MACHINE\SYSTEM\ControlSet001\Services\webthreatdefsvc]
+"Start"=dword:00000004
+
+[HKEY_LOCAL_MACHINE\SYSTEM\ControlSet001\Services\webthreatdefusersvc]
+"Start"=dword:00000004
+
+[HKEY_LOCAL_MACHINE\SYSTEM\ControlSet001\Services\SecurityHealthService]
+"Start"=dword:00000004
+
+; Smart App Control off. It is Defender's reputation gate, and on a template it asks a cloud through
+; a proxy that is down between passes (rig 2026-11-19, a38c745). Windows itself cannot turn it back
+; on without a reinstall - restore.ps1 says so instead of pretending.
+
+[HKEY_LOCAL_MACHINE\SYSTEM\ControlSet001\Control\CI\Policy]
+"VerifiedAndReputablePolicyState"=dword:00000000
+
+; ---- telemetry
+
+[HKEY_LOCAL_MACHINE\SYSTEM\ControlSet001\Services\DiagTrack]
+"Start"=dword:00000004
+
+[HKEY_LOCAL_MACHINE\SYSTEM\ControlSet001\Services\dmwappushservice]
+"Start"=dword:00000004
+
+; ---- Edge's updater is deleted from the image, so are its services
+
+[-HKEY_LOCAL_MACHINE\SYSTEM\ControlSet001\Services\edgeupdate]
+
+[-HKEY_LOCAL_MACHINE\SYSTEM\ControlSet001\Services\edgeupdatem]
