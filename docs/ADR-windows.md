@@ -783,27 +783,25 @@ artifact's at every boot, `1d59043b5a7d0da6...`), fed a name on stdin as dom0 fe
 
 ## 17. Nothing opens maximized by default
 
-**Status:** ACCEPTED (owner), 2026-11-20; point 6 owner, 2026-11-21.
+**Status:** ACCEPTED (owner), 2026-11-20.
 
 **Owner, 2026-11-20**, after Edge opened maximized over the whole guest screen, dom0's panel included:
 «everything should open as normal windows whenever possible»; «let dom0 do the maximize if needed, it is none
 of guest business»; «only dom0 knows how to fit it properly! and unless it is intended action, we do not want it
 at all»; «we may allow explicit maximize, but we do not want anything to open maximized by default».
 
-**Owner, 2026-11-21**, asked about Edge's first-run card on German Windows 11, which keeps the maximized size
-after the window is shown normal and is cut off at the window's edge: «so it is quick, so it snaps to normal size
-in milliseconds without click? then its fine».
-
 **Decision.**
 1. A visible, captioned, non-popup window that arrives maximized is shown normal once, before dom0 is told of
-   it, and announced at that size, except as point 6 says.
+   it, and announced at that size.
 2. It is shown at the app's own normal size. The guest picks no size and fits nothing: dom0's window
    manager places and fits the window it is announced as.
 3. Maximize is an explicit action only - the user's, through dom0. Nothing opens maximized by default.
 4. Once per window: an app that maximizes itself again, or that the user maximizes, keeps it. Windows of a
    process older than the agent (a restarted agent re-adopting the session) are left as they are.
 5. A maximized window with a title bar is still never treated as fullscreen (sections 1-3 unchanged).
-6. A window that arrives maximized while a visible captionless popup it owns covers at least nine tenths of it
-   (an app's overlay, laid out for the maximized size) is announced maximized, and shown normal on the first
-   tracking pass that finds the overlay gone, with no input, at the normal placement it had when it arrived. A
-   window minimized meanwhile waits; one restored meanwhile is left as it is.
+
+**Open.** A window that arrives maximized under a captionless popup of its own laid out for the maximized size
+(Edge's first-run card on German Windows 11): shown normal, the card keeps the maximized size and is cut off at
+the window's edge. Keeping the window maximized until the card is clicked away is rejected - **owner,
+2026-11-21**: «ah wait. it unmaximizes only AFTER the click? then it sucks, deisgn better how to absorb the
+overlay properly». No decision yet (findings/issues.md FIRSTRUNCARDOFFCENTREAFTEROPENNORMAL).
