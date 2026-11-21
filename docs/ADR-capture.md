@@ -1245,12 +1245,12 @@ window that dom0 and the agent place against each other. Owner, on build 4.3.46.
 overlay, misplaced and black background". The owner's own frames already carry the overlay, dimmed as Windows draws
 it (IncludeSecondaryWindows, §35).
 
-**Decision.** While the broker is active, `ShouldAcceptWindow` refuses an owned WS_POPUP without a caption that lies
-wholly inside, or wholly covers, its owner's live window rect, when the owner is fed by the broker. It is not
-announced; the owner shows it, clipped to the owner. Over an owner that is visible but not yet tracked, or being
-dropped, such a popup is held for the pass and judged again against the tracked owner, so it never reaches dom0 at
-screen size. A popup that only partly overlaps its owner, a popup with a caption (a dialog), and any popup below the
-direct floor keep their own window as before.
+**Decision.** While the broker is active, `ShouldAcceptWindow` refuses an owned WS_POPUP without a caption when at
+least 90% of it lies over its owner's live window rect, or when it overlaps the owner and is too large to be
+override-redirect, when the owner is fed by the broker. It is not announced; the owner shows it, clipped to the
+owner. Such a popup is never handed to dom0's window manager to place. Over a captioned owner that is visible but not
+yet tracked, or being dropped, it is held for the pass and judged again against the tracked owner. A popup mostly
+outside its owner, a popup with a caption (a dialog), and any popup below the direct floor keep their own window.
 
 **Cost.** Such a popup cannot be moved or stacked in dom0 apart from its owner, and it is clipped to the owner.
 
