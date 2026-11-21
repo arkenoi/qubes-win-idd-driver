@@ -1249,11 +1249,12 @@ it (IncludeSecondaryWindows, §35).
 least 90% of it lies over its owner's live window rect, or when it overlaps the owner and is too large to be
 override-redirect, when the owner is fed by the broker. It is not announced; the owner shows it, clipped to the
 owner. Such a popup is never handed to dom0's window manager to place. Over a captioned owner that is visible but not
-yet tracked, or being dropped, it is held for the pass and judged again against the tracked owner. A popup mostly
-outside its owner, a popup with a caption (a dialog), and any popup below the direct floor keep their own window.
+yet tracked, or being dropped, it is held for the pass and judged again against the tracked owner. Over a captioned
+owner not shown yet, a popup mostly over it is held the same way only when it is too large for override-redirect; a
+smaller one keeps its own window. A popup mostly outside its owner, a popup with a caption (a dialog), and any popup
+below the direct floor keep their own window.
 
 **Cost.** Such a popup cannot be moved or stacked in dom0 apart from its owner, and it is clipped to the owner.
 
-**Owed.** On 26300 and 26200, a fresh-profile Edge: screenshots at open, maximize and restore showing the card over
-a dimmed browser with no black, no window outside the work area, a click on the card's button dismissing it, and no
-CREATE for the overlay in the agent log.
+**Owed.** On 26300 and 26200, a fresh-profile Edge: a click on the card's button dismissing it, and no CREATE for the
+overlay in a debug agent log.
