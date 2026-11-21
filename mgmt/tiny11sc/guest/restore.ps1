@@ -13,6 +13,7 @@
     tiny11sc -Component Defender           Defender's services, tasks, definitions, Windows Security tray
     tiny11sc -Component Edge|WebView2|OneDrive|Telemetry
     tiny11sc -StoreId 9WZDNCRFHVN5         any Store app by product id
+    tiny11sc -Winget Mozilla.Firefox       any winget package (winget source), e.g. a browser now Edge is gone
     tiny11sc -Cleanup                      drop superseded payload (run once before sealing a golden)
 
   NETWORK. Capabilities, features and Store apps are fetched from Microsoft. A qube with a netvm
@@ -28,6 +29,7 @@ param(
   [string]$Name,
   [ValidateSet('Defender', 'Edge', 'WebView2', 'OneDrive', 'Telemetry')][string]$Component,
   [string]$StoreId,
+  [string]$Winget,
   [string]$Source,
   [switch]$LimitAccess,
   [switch]$Cleanup
@@ -77,6 +79,14 @@ function Get-Removed {
 function Get-Winget {
   $c = Get-Command winget.exe -ErrorAction SilentlyContinue
   if ($c) { return $c.Source }
+  # On a fresh install the `winget` alias appears only once App Installer is registered for this
+  # user, which Windows otherwise leaves to the Store's first update - and a template has no network
+  # for that. Registering the provisioned package by family name is what the Store would do.
+  try {
+    Add-AppxPackage -RegisterByFamilyName -MainPackage Microsoft.DesktopAppInstaller_8wekyb3d8bbwe -ErrorAction Stop
+    $c = Get-Command winget.exe -ErrorAction SilentlyContinue
+    if ($c) { Say 'registered App Installer for this user'; return $c.Source }
+  } catch { Say "App Installer registration: $($_.Exception.Message)" }
   $d = Get-ChildItem -Path (Join-Path $env:ProgramFiles 'WindowsApps') -Filter 'Microsoft.DesktopAppInstaller_*_x64__8wekyb3d8bbwe' -Directory -ErrorAction SilentlyContinue |
        Sort-Object Name -Descending | Select-Object -First 1
   if ($d -and (Test-Path -LiteralPath (Join-Path $d.FullName 'winget.exe'))) { return (Join-Path $d.FullName 'winget.exe') }
@@ -205,6 +215,7 @@ if ($Name) {
 }
 if ($Component) { Restore-Component $Component; $did = $true }
 if ($StoreId) { Invoke-Winget @('install', '--id', $StoreId, '--source', 'msstore', '--exact'); $did = $true }
+if ($Winget) { Invoke-Winget @('install', '--id', $Winget, '--source', 'winget', '--exact'); $did = $true }
 if ($Cleanup) {
   & dism.exe /Online /Cleanup-Image /StartComponentCleanup /ResetBase
   if ($LASTEXITCODE -ne 0) { Fail "component cleanup exit $LASTEXITCODE" }
