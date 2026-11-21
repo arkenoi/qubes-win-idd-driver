@@ -1246,9 +1246,11 @@ overlay, misplaced and black background". The owner's own frames already carry t
 it (IncludeSecondaryWindows, §35).
 
 **Decision.** While the broker is active, `ShouldAcceptWindow` refuses an owned WS_POPUP without a caption that lies
-wholly inside its owner's live window rect, when the owner is fed by the broker. It is not announced; the owner shows
-it. A popup that reaches outside its owner, a popup with a caption (a dialog), and any popup below the direct floor
-keep their own window as before.
+wholly inside, or wholly covers, its owner's live window rect, when the owner is fed by the broker. It is not
+announced; the owner shows it, clipped to the owner. Over an owner that is visible but not yet tracked, or being
+dropped, such a popup is held for the pass and judged again against the tracked owner, so it never reaches dom0 at
+screen size. A popup that only partly overlaps its owner, a popup with a caption (a dialog), and any popup below the
+direct floor keep their own window as before.
 
 **Cost.** Such a popup cannot be moved or stacked in dom0 apart from its owner, and it is clipped to the owner.
 
