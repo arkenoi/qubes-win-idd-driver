@@ -621,7 +621,12 @@ process more tidy, but that would be it."*
    can drive them. Written on 2026-11-21 (`PeerIsWinget`, `IsWingetImagePath` in the relay), compiled as C# 5 and its
    path rule checked against hostile paths off-guest; the package-identity call is unverified, and point 2's refusal
    test (a renamed curl, `Invoke-CommandInDesktopPackage`, a user's powershell refused; winget served) is owed on a
-   guest before it ships. Until point 3's standing relay exists, winget is served only while a pass runs.
+   guest before it ships. Until point 3's standing relay exists, winget is served only while a pass runs. Templates only:
+   the owner, 2026-11-21, *"it should NOT exist on anything but templates. everything else takes direct path or fails"*.
+   The pass already exits before any proxy activity outside a TemplateVM (`qubes-windows-update.ps1`, the class branch
+   after `Get-QubesVmClass`), and point 4 removes the configuration there; a standing relay must carry the same check
+   itself and exit outside a TemplateVM, not rely on whoever starts it. On an AppVM or StandaloneVM, winget goes
+   direct through the netvm or fails.
 
 **Supersedes** the temporal gate: "the proxy is torn down when the pass ends" (`guest/qubes-updates-relay.cs:172-173`,
 owner 2026-08-21), and "up only during it" in §12.5.
