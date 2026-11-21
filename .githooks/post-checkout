@@ -1,0 +1,20 @@
+#!/bin/bash
+# THE RIG'S RECORDS ARE ONE SET, AND A NEW WORKTREE STARTS WITHOUT THEM. mgmt/fixtures/ (each subject's
+# fixture record, its sealed_version) and mgmt/checkpoints/ (parked install states) are gitignored: they
+# describe this rig's qubes, not a revision, so they exist only in the main checkout. Every harness reads
+# them by a path relative to the tree it runs from, so in a linked worktree they were simply absent.
+# Measured 2026-11-21 from ~/wt-collector-race: quick-upgrade's sweep reported "records no sealed_version"
+# (smoke rc=4), and the acceptance preflight refused with "STOP: no fixture record for win10-iqi" (rc=12).
+# In a LINKED worktree only, each one it lacks becomes a symlink to the main checkout's. A worktree that
+# already has its own copy is left alone, and so is the main checkout. Never fails the checkout.
+common=$(git rev-parse --git-common-dir 2>/dev/null) || exit 0
+gitdir=$(git rev-parse --git-dir 2>/dev/null) || exit 0
+top=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+[ "$(cd "$common" && pwd -P)" != "$(cd "$gitdir" && pwd -P)" ] || exit 0   # the main checkout: nothing to link
+main=$(cd "$common/.." && pwd -P)
+for d in mgmt/fixtures mgmt/checkpoints; do
+    [ -e "$top/$d" ] || [ -L "$top/$d" ] && continue
+    [ -d "$main/$d" ] || continue
+    ln -s "$main/$d" "$top/$d" && echo "post-checkout: $d -> $main/$d (the rig's records, shared with the main checkout)"
+done
+exit 0
