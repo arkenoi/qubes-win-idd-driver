@@ -1235,3 +1235,23 @@ Owed: that one of those early closes was destroyed while its capture was opening
 it); the shell surfaces (Start, Search) on 26200 and 26300.
 
 **Open.** Whether Windows 10 keeps the PrintWindow engine's timed sweep (§4) is unanswered.
+
+## 37. An app's captionless popup inside its owner is shown by the owner's capture, never as a window of its own
+
+**Context.** Edge's first-run welcome overlay is a captionless WS_POPUP owned by the browser window: a translucent
+dimming backdrop over the whole browser with the dialog card in the middle. Announced as its own window, the
+backdrop is opaque black (dom0 has no alpha), and when the browser is maximized or restored the overlay is a second
+window that dom0 and the agent place against each other. Owner, on build 4.3.46.1427: "gigantic window with ugly
+overlay, misplaced and black background". The owner's own frames already carry the overlay, dimmed as Windows draws
+it (IncludeSecondaryWindows, §35).
+
+**Decision.** While the broker is active, `ShouldAcceptWindow` refuses an owned WS_POPUP without a caption that lies
+wholly inside its owner's live window rect, when the owner is fed by the broker. It is not announced; the owner shows
+it. A popup that reaches outside its owner, a popup with a caption (a dialog), and any popup below the direct floor
+keep their own window as before.
+
+**Cost.** Such a popup cannot be moved or stacked in dom0 apart from its owner, and it is clipped to the owner.
+
+**Owed.** On 26300 and 26200, a fresh-profile Edge: screenshots at open, maximize and restore showing the card over
+a dimmed browser with no black, no window outside the work area, a click on the card's button dismissing it, and no
+CREATE for the overlay in the agent log.
