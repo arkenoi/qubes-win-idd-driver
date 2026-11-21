@@ -60,6 +60,7 @@ C:\Windows\tiny11sc\tiny11sc.cmd -Name Language.OCR*         capability/feature/
 C:\Windows\tiny11sc\tiny11sc.cmd -Name * -Source D:\ -LimitAccess    from a local FoD/feature source only
 C:\Windows\tiny11sc\tiny11sc.cmd -Component Defender         also: Edge, WebView2, OneDrive, Telemetry
 C:\Windows\tiny11sc\tiny11sc.cmd -StoreId 9WZDNCRFHVN5       any Store app
+C:\Windows\tiny11sc\tiny11sc.cmd -Winget Mozilla.Firefox     any winget package (registers App Installer for the user if `winget` is not there yet)
 C:\Windows\tiny11sc\tiny11sc.cmd -Cleanup                    drop superseded payload before sealing
 ```
 
