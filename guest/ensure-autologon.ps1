@@ -504,6 +504,16 @@ public static class QwtGuardQdb {
             Remove-ItemProperty -LiteralPath $polK -Name ProxySettingsPerUser -ErrorAction SilentlyContinue
             $done += 'per-machine proxy policy'
         }
+        # Revocation checking off goes whoever wrote it: on a qube with a network it weakens every WinINet connection.
+        if ((Get-ItemProperty -LiteralPath $polK -Name CertificateRevocation -ErrorAction SilentlyContinue).CertificateRevocation -eq 0) {
+            Remove-ItemProperty -LiteralPath $polK -Name CertificateRevocation -ErrorAction SilentlyContinue
+            $done += 'revocation-check-off policy'
+        }
+        $aiK = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\AppInstaller'
+        if ((Get-ItemProperty -LiteralPath $aiK -Name DefaultProxy -ErrorAction SilentlyContinue).DefaultProxy -eq "http://$ours") {
+            Remove-ItemProperty -LiteralPath $aiK -Name DefaultProxy -ErrorAction SilentlyContinue
+            $done += 'winget proxy policy'
+        }
         if ($null -ne (Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Qubes\UpdatesProxy' -Name UpdaterPids -ErrorAction SilentlyContinue).UpdaterPids) {
             Remove-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Qubes\UpdatesProxy' -Name UpdaterPids -ErrorAction SilentlyContinue
             $done += 'relay registration'

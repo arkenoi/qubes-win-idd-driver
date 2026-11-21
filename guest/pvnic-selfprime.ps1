@@ -283,6 +283,14 @@ public class QwtngNetSetup : ServiceBase {
                 using (RegistryKey k = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Policies\Microsoft\Windows\CurrentVersion\Internet Settings", true)) {
                     if (k != null && k.GetValue("ProxySettingsPerUser") != null) { k.DeleteValue("ProxySettingsPerUser", false); done.Add("per-machine proxy policy"); }
                 }
+            // Revocation checking off goes whoever wrote it: on a qube with a network it weakens every WinINet connection.
+            using (RegistryKey k = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Policies\Microsoft\Windows\CurrentVersion\Internet Settings", true)) {
+                object cr = k == null ? null : k.GetValue("CertificateRevocation");
+                if (cr is int && (int)cr == 0) { k.DeleteValue("CertificateRevocation", false); done.Add("revocation-check-off policy"); }
+            }
+            using (RegistryKey k = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Policies\Microsoft\Windows\AppInstaller", true)) {
+                if (k != null && (k.GetValue("DefaultProxy") as string) == "http://" + ours) { k.DeleteValue("DefaultProxy", false); done.Add("winget proxy policy"); }
+            }
             using (RegistryKey k = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Qubes\UpdatesProxy", true)) {
                 if (k != null && k.GetValue("UpdaterPids") != null) { k.DeleteValue("UpdaterPids", false); done.Add("relay registration"); }
             }

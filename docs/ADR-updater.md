@@ -586,7 +586,7 @@ at its logon screen has no signed-in user, so the setting does not hold there. A
 
 ## 18. On a template the updates proxy stays up, gated by process, not by time; in an AppVM it is gone
 
-**Status:** ACCEPTED (owner, 2026-11-18; points 6 and 7 owner, 2026-11-21). Points 1, 2, 4, 6 and 7 are built. Point 7 on a template guest: the refusals hold and winget search is served; winget download fails its certificate revocation check, because with no network adapter Windows does not attempt the fetch; with an adapter present and every direct route dropped, the same download succeeds through the relay (findings WINGETDOWNLOADREVOCATION). Point 3 needs a
+**Status:** ACCEPTED (owner, 2026-11-18; points 6 and 7 owner, 2026-11-21). Points 1, 2, 4, 6 and 7 are built. Point 3 needs a
 relay that serves between passes, which is not built; until it is, nothing listens on 127.0.0.1:8082 between passes.
 
 **Context.** Row 47 (`0x8024402C`): Windows Update takes its proxy from the per-machine policy present at sign-in
@@ -620,7 +620,14 @@ process more tidy, but that would be it."*
    only it skips the host allowlist; Windows Update, Delivery Optimization and BITS keep that allowlist, since any user
    can drive them. Built in `PeerIsWinget` and `IsWingetImagePath` (the relay). Point 2's test on a template guest: a
    renamed curl, curl under `Invoke-CommandInDesktopPackage` and a user's powershell are refused, and winget's own
-   search is served, which needs the package-identity call to answer. Until point 3's standing relay exists, winget is served only while a pass runs. Templates only:
+   search is served, which needs the package-identity call to answer. Until point 3's standing relay exists, winget is served only while a pass runs.
+   Two machine policies are part of the template's proxy configuration (point 1) and go with it (point 4). WinINet's
+   server-certificate revocation check is off (`CertificateRevocation` 0 under the Internet Settings policy key): with no
+   network adapter Windows fetches no revocation data, and a package's integrity is the manifest SHA-256 winget verifies.
+   The owner, 2026-11-21: *"turn ocsp off if it troubles you"* and *"the packages are signed so who cares about
+   certificates"*. winget's `DefaultProxy` policy names the relay, so winget downloads through WinINet, not Delivery
+   Optimization, which reaches nothing on a template. Outside a template the revocation value is removed whoever wrote it.
+   Templates only:
    the owner, 2026-11-21, *"it should NOT exist on anything but templates. everything else takes direct path or fails"*.
    The pass already exits before any proxy activity outside a TemplateVM (`qubes-windows-update.ps1`, the class branch
    after `Get-QubesVmClass`), and point 4 removes the configuration there; a standing relay must carry the same check
