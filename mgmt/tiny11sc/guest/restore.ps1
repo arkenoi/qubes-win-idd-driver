@@ -16,10 +16,12 @@
     tiny11sc -Winget Mozilla.Firefox       any winget package (winget source), e.g. a browser now Edge is gone
     tiny11sc -Cleanup                      drop superseded payload (run once before sealing a golden)
 
-  NETWORK. Capabilities, features and Store apps are fetched from Microsoft. A qube with a netvm
-  has that; a template has no netvm - run this in a qube made from it, give it a netvm for the
-  duration, or point -Source at a mounted "Languages and Optional Features" ISO / a WIM:...:N
-  source. The updater's relay is not used: it serves only update passes (ADR-updater section 5).
+  NETWORK. Capabilities, features and Store apps are fetched from Microsoft. Run this in a qube
+  with a netvm made from the template, or point -Source at a mounted "Languages and Optional
+  Features" ISO / a WIM:...:N source. A template keeps its updates-proxy configuration between
+  passes with nothing listening (ADR-updater section 18 point 1), so a netvm attached to the
+  template itself is unverified and probably does not help. Installs through the template's
+  updates proxy are section 18 point 3, which belongs to QWT's relay and is not built.
 
   Windows PowerShell 5.1 syntax only.
 #>
