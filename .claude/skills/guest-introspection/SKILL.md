@@ -1,6 +1,6 @@
 ---
 name: guest-introspection
-description: Determine what a Windows test guest is ACTUALLY doing mid-flight - processes, phase, progress rate - instead of inferring it from silence; and READ a guest whose qrexec is dead over the PV console (tools/qcon diag) before anything kills it. Use whenever a long guest operation (DISM/CBS servicing, a large download, a feature update, a benchmark) is running and you are tempted to say "it is probably still working" or "it seems stuck". ALSO the binding procedure for the PV console (tools/qcon): read it BEFORE attaching, closing or re-attaching a guest console, and before reading anything into a console transcript.
+description: Determine what a Windows test guest is ACTUALLY doing mid-flight - processes, phase, progress rate - instead of inferring it from silence; and READ a guest whose qrexec AGENT is dead over the PV console (tools/qcon diag) - the console has NEVER answered on a stalled (wedged) guest, 4 of 4, so a stall's evidence is host-side. Use whenever a long guest operation (DISM/CBS servicing, a large download, a feature update, a benchmark) is running and you are tempted to say "it is probably still working" or "it seems stuck". ALSO the binding procedure for the PV console (tools/qcon): read it BEFORE attaching, closing or re-attaching a guest console, and before reading anything into a console transcript.
 ---
 
 # Introspect the guest, do not guess
@@ -77,66 +77,64 @@ Phase names worth recognising in the CBS tail:
 6. **Big logs: analyse in-guest.** Streaming CBS.log out over qrexec
    costs more than the analysis; run the aggregation in the guest and return a digest.
 
-## The PV console: the evidence path when qrexec is dead
+## The PV console (tools/qcon) - what it does, measured, and the procedure
 
-`tools/qcon` drives the guest's Xen PV console (xencons -> xencons_tty -> cmd.exe), which shares
-nothing with qrexec. **Use it to READ a stalled guest before anything kills it.** On a guest that
-stopped answering qrexec: host-side first (cputime series, `local.WinWedgeForensics`, the log volume
-with mtools), then `tools/qcon diag <vm>`, then decide. Never kill first.
+**Read this whole section before any attach.** Every line below is backed by a kept transcript (register row
+CONSOLENEVERREADASTALLEDGUEST, evidence paths there).
+
+| guest state | what the console does |
+|---|---|
+| healthy | logs in; `diag` 10/10 sections in 60-75 s; `open` / `run` / `close` answer; re-attach answers |
+| qrexec agent dead, Windows alive (its process suspended, qrexec unanswered) | the same: login, `diag` 10/10, ad hoc commands; qrexec answers again within seconds of the agent resuming |
+| **STALLED** (qrexec dead AND ACPI shutdown ignored - the wedge class) | **has never answered: 4 of 4**, the last with the correct credentials. You get the boot backlog `[ATTACHED]` + `<HOST> login:` and then no echo of the user name, no `Password:` |
+
+So the console reads a guest whose qrexec agent died. It has never read a stalled guest - never present it as the
+evidence path for a stall. A stall's evidence is host-side: the log volume (mtools, `mgmt/harness/logvol-lib.sh`)
+and the dom0 bundle.
+
+Path: `tools/qcon` -> `qrexec-client-vm <vm> admin.vm.Console` (THIS qube's qrexec to dom0) -> the guest's PV
+console -> xencons_monitor -> xencons_tty -> a cmd.exe login. The guest's qrexec agent is not on it.
 
 ```bash
-tools/qcon diag <vm>     # read-only pass -> ~/qcon-diag/<vm>-<UTC>/NN-<label>.txt + summary.txt
+QCON_BUDGET=300 tools/qcon diag <vm> --out <dir>    # read-only: identity, sessions, memory, services, top CPU,
+                                                     # agent threads, process tree, this boot's System/Application
+                                                     # events and QWT logs; detaches when done
 tools/qcon open <vm>; tools/qcon run <vm> '<cmd>'; tools/qcon close <vm> --logout   # ad hoc
 ```
 
-`diag` collects identity, boot time and sessions, memory, the Qubes/Xen services, the top CPU
-processes, the thread wait states of qrexec-agent / gui-agent / qubesdb-daemon, the FULL process
-tree (`process-tree.txt`: parent before child, pid, session, threads, handles, working set, CPU,
-UTC start, command line), and the LOGS WHOLE: every System and Application event of this boot (in
-the sweep collector's `EV` line format, guest-local time - `identity` records the zone - numeric
-level, so `tools/log-sweep.py` reads it) and every QWT log file written this boot, one host file per
-guest log under `qwt-logs/`. ~16 KB/s over the console: a healthy win11 boot (11 QWT files, 200 KB,
-~130 events, 139 processes) takes ~60 s. It never stops, kills, restarts or reconfigures the
-guest, and it detaches when done, success or not. `QCON_BUDGET` bounds a whole pass; an alarm mid-
-pass still detaches cleanly (measured: the next diag answered 10/10).
+### Procedure: a guest stopped answering qrexec
 
-**The settle path runs it for you.** `wedge_collect` (`mgmt/harness/wedge-gates-lib.sh`, called by
-`tools/release-acceptance.sh` before any kill) runs one `qcon diag` into `<record>/console-diag/`,
-bounded by `WG_CONSOLE_BUDGET` (900 s), whatever qrexec answered; its rc is in `console-diag-rc` and
-changes no class.
+1. Host side first - the log volume and the dom0 bundle. Neither asks the guest anything.
+2. If the harness ran `wedge_collect` (`mgmt/harness/wedge-gates-lib.sh`, before any kill), it ALREADY attached
+   once: read `<record>/console-diag.log`, `<record>/console-diag/` and `/home/user/tmp/qcon-<vm>.closed.log`. Do
+   not attach again.
+3. Otherwise ONE `QCON_BUDGET=300 tools/qcon diag <vm> --out <dir>`.
+4. Record verbatim: rc, phase, and the transcript (`cat -A /home/user/tmp/qcon-<vm>.closed.log`).
+5. No echo of the user name: write `console: backlog only, no echo of the user name (rc=<rc> phase=<phase>)` and
+   STOP. No second attach, no other console route, no request to the owner, no conclusion about the guest. Whether
+   it is a wedge is Jev's call, on the host-side evidence.
+6. It answered: the `diag` files are the evidence.
 
-**Measured 2026-11-18 on a HEALTHY guest (win11-con, 4.3.45.1366) - the first healthy control ever
-run. Every console-based guest verdict before that date is VOID.**
+### Hard rules
 
-- `admin.vm.Console` DOES reach the guest's PV ring (xencons_tty's prompt, guest-written lines). The
-  old "two transports, not the same pty" claim here was wrong.
-- **The first attach after a boot shows `[ATTACHED]` + `<HOST> login:` with no input.** That is the
-  GUEST's backlog, not dom0: xencons_monitor writes `[ATTACHED]` when it opens the device at boot
-  (`[DETACHED]` when it stops), and xenconsoled holds the pty slave open without reading it, so
-  output waits for the next attach. Later attaches are silent until they send. Silence before input
-  is not a fact about the guest.
-- **Detach and reattach are healthy.** Six back-to-back open/run/close cycles all answered; the
-  logged-in shell survives a detach. (`close` used to kill the client before dom0's socat released
-  the console lock, so an open in the same second was refused - qcon now waits for the release.)
-- **THE ONE WAY TO LOCK IT OUT: ~1 KB of input in one login, at ANY pace** (2026-11-18: one byte per
-  20 ms stopped echoing at 1026 bytes incl. the 12 login bytes = the monitor's 1024-byte pipe buffer,
-  monitor.c:101; `/home/user/qwt-quick-upgrade/con-1366/control/paced-20ms.txt`). Upstream xencons_monitor copies every
-  input byte to both of the tty's pipe connections inside its lock, and the write-only one is never
-  read; when its buffer fills, the monitor blocks forever - no echo, no prompt, on any attach. Only
-  restarting `xencons_monitor` (over qrexec) recovers it. `exit` starts a fresh tty with fresh
-  connections. qcon counts input per login and re-logs in before INPUT_BUDGET (700), and refuses a
-  single command larger than that. 40 commands (~3.2 KB) through one session: 40/40. **Never type
-  into a console by hand** (`qvm-console`, `xl console`, raw `admin.vm.Console`) on a guest that
-  matters: one long paste locks it out.
-- **Credentials:** qcon defaults to the rig account (`user`/`qubes`). A guest built otherwise (GWeck's
-  German golden) needs `QCON_USER`/`QCON_PASS`. A wrong password is answered with a fresh `login:`.
-- **A silent console is INCONCLUSIVE.** No answer to a CR means one of: the input lockout above,
-  another attacher splitting the pty (dom0 `xl console`), xencons not bound, or a guest wedged at
-  high IRQL. Do not write any of them up from the silence alone. A wedge bundle's `console-pv.txt`
-  reading `Unable to attach console` is the dom0 kit's own failure, not a guest fact.
-
-Not yet measured: the "Run Elevated [yes|no]:" prompt (an admin under UAC; the rig account got a
-shell without it), and the console on a guest that is actually stalled.
+- **Liveness is the echo of the typed user name followed by `Password:`.** The backlog is not: a stalled guest
+  delivers it too.
+- **One attach per specimen.**
+- **Never wrap qcon in `timeout`.** `QCON_BUDGET` bounds each invocation; a run's own deadline bounds a command.
+- **Credentials:** the default is the rig account `user`/`qubes`. Any other account needs `QCON_USER` AND
+  `QCON_PASS`; qcon refuses a user without a password before attaching. gerd-test's password (the win11de goldens)
+  is not on the rig: there you get liveness only (echo, `Password:`), no shell.
+- **Never type into a console by hand** (`qvm-console`, raw `admin.vm.Console`): on QWT before build 4.3.46.1399 -
+  both goldens - about 1 KB of input in one login blocks xencons_monitor until it is restarted (a18808d9 fixed it
+  from that build). qcon counts input and re-logs in before that on every build.
+- **Never use or propose plain `xl console`** (no stub-domain serial console exists) **or the dom0 kit's
+  `xl console -t pv`** (it returned nothing in 37 of 37 captures, healthy guests included). Never propose any
+  console route without its healthy control run on the same path first.
+- **A command that outlives its run deadline is still running in the guest**; the next re-login would type into
+  it. Do not start another command after a deadline exit - close and record.
+- **A result on a healthy guest is not a result for the case of use.** A console change is proven only by the
+  battery: healthy `diag` + `open`/`run`/`close`, then the same with QrexecAgent's process suspended and qrexec
+  confirmed dead.
 
 ## Related
 
