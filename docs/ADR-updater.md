@@ -586,7 +586,7 @@ at its logon screen has no signed-in user, so the setting does not hold there. A
 
 ## 18. On a template the updates proxy stays up, gated by process, not by time; in an AppVM it is gone
 
-**Status:** ACCEPTED (owner, 2026-11-18; points 6 and 7 owner, 2026-11-21). Points 1, 2, 4, 6 and 7 are built. Point 7 on a template guest: the refusals hold and winget search is served; winget download fails its certificate revocation check (findings WINGETDOWNLOADREVOCATION). Point 3 needs a
+**Status:** ACCEPTED (owner, 2026-11-18; points 6 and 7 owner, 2026-11-21). Points 1, 2, 4, 6 and 7 are built. Point 7 on a template guest: the refusals hold and winget search is served; winget download fails its certificate revocation check, because with no network adapter Windows does not attempt the fetch; with an adapter present and every direct route dropped, the same download succeeds through the relay (findings WINGETDOWNLOADREVOCATION). Point 3 needs a
 relay that serves between passes, which is not built; until it is, nothing listens on 127.0.0.1:8082 between passes.
 
 **Context.** Row 47 (`0x8024402C`): Windows Update takes its proxy from the per-machine policy present at sign-in
