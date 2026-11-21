@@ -467,7 +467,7 @@ def run_command(c, cmd, deadline, stall, out, renew=None):
     c.drain_quiet()
     c.send("echo B-%QT%&" + cmd + "&echo E-%QT%\r")
     bmark, emark = f"B-{tok}".encode(), f"E-{tok}".encode()
-    st = {"started": False, "upto": 0, "first": True}
+    st = {"started": False, "upto": 0, "first": True, "printed": False}
     dec = codecs.getincrementaldecoder("utf-8")("replace")
 
     def emit(raw, final=False):
@@ -475,6 +475,8 @@ def run_command(c, cmd, deadline, stall, out, renew=None):
         if st["first"] and text:
             text = text.lstrip("\n")
             st["first"] = False
+        if text.strip():
+            st["printed"] = True
         if text:
             out(text)
 
@@ -495,7 +497,13 @@ def run_command(c, cmd, deadline, stall, out, renew=None):
             emit(buf[st["upto"]:safe])
             st["upto"] = safe
 
-    why = c.pump(until=f"E-{tok}", deadline=deadline, stall=stall, on_data=on_data)
+    # A started command may print nothing until it ends (every `ft | out-string` section does), so a stall ends it
+    # only once it has printed; before that only the deadline does. Typing into it early would queue behind it.
+    end = time.time() + deadline
+    while True:
+        why = c.pump(until=f"E-{tok}", deadline=max(0.0, end - time.time()), stall=stall, on_data=on_data)
+        if why != "stall" or not st["started"] or st["printed"] or time.time() >= end:
+            break
     if st["started"]:
         e = c.buf.find(emark, st["upto"])
         emit(c.buf[st["upto"]:(e if e >= 0 else len(c.buf))], final=True)
@@ -1178,7 +1186,7 @@ DIAG = [
                'fl FreePhysicalMemory,TotalVisibleMemorySize,NumberOfProcesses"'),
     ("services", 'powershell -nop -c "Get-CimInstance Win32_Service|'
                  "?{$_.Name -match 'qubes|qrexec|qdb|xen|gui|wuauserv|TrustedInstaller'}|"
-                 'ft -a Name,State,ProcessId,StartMode|out-string -w 220"'),
+                 'ft -a Name,State,ProcessId,StartMode|out-string -w 220"', 120, 12),   # 34 s with QrexecAgent suspended
     ("top-cpu", 'powershell -nop -c "Get-Process|sort CPU -desc|select -f 30 Id,ProcessName,'
                 'CPU,WS,Responding,StartTime|ft -a|out-string -w 220"'),
     ("agent-threads", 'powershell -nop -c "foreach($n in \'qrexec-agent\',\'gui-agent\','
