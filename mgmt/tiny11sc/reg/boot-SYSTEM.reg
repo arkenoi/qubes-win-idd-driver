@@ -1,0 +1,12 @@
+Windows Registry Editor Version 5.00
+
+; tiny11sc: boot.wim index 2 (Windows Setup). A Qubes HVM has no TPM and boots SeaBIOS, so
+; Win11 Setup refuses it without these. The rig's answer stick sets the same keys from its windowsPE
+; pass; having them in the media makes an interactive install work too.
+
+[HKEY_LOCAL_MACHINE\SYSTEM\Setup\LabConfig]
+"BypassTPMCheck"=dword:00000001
+"BypassSecureBootCheck"=dword:00000001
+"BypassRAMCheck"=dword:00000001
+"BypassStorageCheck"=dword:00000001
+"BypassCPUCheck"=dword:00000001

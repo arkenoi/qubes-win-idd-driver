@@ -1,0 +1,15 @@
+media: Tiny11SC_26300.9457_English_x64.iso   sha256 edfd82be53d85e99531589da12f84dff4a1ebf44001cf83cebefce38396c65b1
+built from: Win11_26300_English_x64.iso   sha256 bd4307df32bc8af33b39ccecb1174aeb345386630f89a2b86c7a4e36b55ea650
+edition kept: Windows 11 Pro (source index 6), build 26300.9457; repo 53a218a
+
+install image: one edition (LZX, split into .swm when over 4 GiB). Inside it:
+  DELETED '/Program Files (x86)/Microsoft/Edge'
+  DELETED '/Program Files (x86)/Microsoft/EdgeCore'
+  DELETED '/Program Files (x86)/Microsoft/EdgeWebView'
+  DELETED '/Program Files (x86)/Microsoft/EdgeUpdate'
+  DELETED '/Windows/System32/Recovery/Winre.wim'
+  ADDED   /Windows/Setup/Scripts/SetupComplete.cmd, /Windows/tiny11sc/* (strip, restore, services.orig, BUILD.txt)
+  REGISTRY merged: mgmt/tiny11sc/reg/install-{SYSTEM,SOFTWARE,DEFAULT}.reg
+boot.wim index 2: mgmt/tiny11sc/reg/boot-SYSTEM.reg (LabConfig)
+At install time strip.ps1 removes capabilities, features and provisioned apps through DISM;
+C:\Windows\tiny11sc\removed.json lists them and tiny11sc.cmd adds any back.

@@ -1,0 +1,12 @@
+15:53:44 extracting Win11_26300_English_x64.iso
+15:53:50 edition 'Windows 11 Pro' is index 6, build 26300.9457, en-US
+15:54:23 registry: extracting hives
+15:54:24 recorded original start values: 12 services
+15:54:25 image: deleting Edge/EdgeCore/EdgeWebView/EdgeUpdate and Winre.wim, adding tiny11sc
+15:54:46 image: recompressing LZMS/solid (the slow step)
+install.wim is 4682462516 bytes - over 4 GiB, does not fit ISO9660
+
+real	27m15.464s
+user	101m50.547s
+sys	0m26.062s
+BUILD_RC=1

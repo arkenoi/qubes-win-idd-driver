@@ -1,0 +1,12 @@
+telemetry DiagTrack 2
+defender MDCoreSvc 2
+defender SecurityHealthService 3
+defender Sense 3
+defender WdBoot 0
+defender WdFilter 0
+defender WdNisDrv 3
+defender WdNisSvc 3
+defender WinDefend 2
+telemetry dmwappushservice 3
+defender webthreatdefsvc 3
+defender webthreatdefusersvc 2
