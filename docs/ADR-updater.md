@@ -586,7 +586,8 @@ at its logon screen has no signed-in user, so the setting does not hold there. A
 
 ## 18. On a template the updates proxy stays up, gated by process, not by time; in an AppVM it is gone
 
-**Status:** ACCEPTED (owner, 2026-11-18). Not built. The gate test (point 2) is owed before it ships.
+**Status:** ACCEPTED (owner, 2026-11-18; point 6 owner, 2026-11-21). Points 1, 2, 4 and 6 are built. Point 3 needs a
+relay that serves between passes, which is not built; until it is, nothing listens on 127.0.0.1:8082 between passes.
 
 **Context.** Row 47 (`0x8024402C`): Windows Update takes its proxy from the per-machine policy present at sign-in
 or from the signed-in user, never from what a pass writes mid-session (§12.5 row 1). A proxy that exists only while
@@ -605,6 +606,10 @@ process more tidy, but that would be it."*
    requirement.
 4. In every class that is not a TemplateVM, the proxy configuration is gone.
 5. Our own update paths (§12.2) stay because they make the update process tidier. That is the only reason for them.
+6. Defender's cloud hosts, `wdcp.microsoft.com` and `wdcpalt.microsoft.com`, are in the template's WinHTTP and machine
+   WinINET bypass lists. With nothing listening on the port, Smart App Control's lookup for a never-run binary held its
+   start ~8 s (65-75 ms bypassed). Asked to choose between this bypass and a relay that listens between passes, the
+   owner chose *"Both"*: the bypass in this cut, the standing relay after it.
 
 **Supersedes** the temporal gate: "the proxy is torn down when the pass ends" (`guest/qubes-updates-relay.cs:172-173`,
 owner 2026-08-21), and "up only during it" in §12.5.

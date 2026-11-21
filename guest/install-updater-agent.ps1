@@ -955,20 +955,23 @@ Log 'set NoAutoUpdate=1 (dom0 owns updates; guest never installs on its own)'
 #     the next boot, signed in with what that pass left, scanned 6 offers, result 0. A template given these values
 #     before its first boot scanned at first contact. The values are Ensure-Proxy's (qubes-windows-update.ps1);
 #     every other class gets nothing here, and ensure-autologon.ps1 part 7 removes them from a qube made from this root.
+#     Defender's cloud hosts bypass it (section 18 point 6), written here so the first boot after an upgrade already has
+#     it: that boot starts the new binaries, and each one's Smart App Control lookup waited ~8 s on the dead port.
 $qdbRead = Join-Path $SetupRoot 'qubesdb-read.ps1'
 $vmClassNow = $null
 if (Test-Path -LiteralPath $qdbRead) { . $qdbRead; $vmClassNow = Get-QubesVmClass }
 if ($vmClassNow -eq 'TemplateVM') {
     try {
-        & netsh winhttp set proxy '127.0.0.1:8082' '<local>' | Out-Null
+        $proxyBypass = '<local>;wdcp.microsoft.com;wdcpalt.microsoft.com'
+        & netsh winhttp set proxy '127.0.0.1:8082' $proxyBypass | Out-Null
         $polIs = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\CurrentVersion\Internet Settings'
         $machIs = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Internet Settings'
         New-Item -Path $polIs -Force | Out-Null
         Set-ItemProperty -Path $polIs -Name ProxySettingsPerUser -Value 0 -Type DWord
         Set-ItemProperty -Path $machIs -Name ProxyEnable -Value 1 -Type DWord
         Set-ItemProperty -Path $machIs -Name ProxyServer -Value '127.0.0.1:8082' -Type String
-        Set-ItemProperty -Path $machIs -Name ProxyOverride -Value '<local>' -Type String
-        Log 'TemplateVM: updates proxy configured now (WinHTTP, per-machine policy, machine proxy -> 127.0.0.1:8082), so the first boot signs in with it'
+        Set-ItemProperty -Path $machIs -Name ProxyOverride -Value $proxyBypass -Type String
+        Log "TemplateVM: updates proxy configured now (WinHTTP, per-machine policy, machine proxy -> 127.0.0.1:8082, bypass $proxyBypass), so the first boot signs in with it"
     } catch {
         Log ("WARN TemplateVM: the updates proxy could not be configured at install ($($_.Exception.Message)) - " +
              'the first update scan of this template will fail 0x8024402C and a restart after it clears that')

@@ -835,11 +835,14 @@ function Update-UpdaterRegistration([switch]$Add, [switch]$Remove) {
 # The updates proxy CONFIGURATION alone - no relay, no registration. Ensure-Proxy writes it before starting the relay, and a
 # scheduled scan deferred by Test-ProxyPolicyMissedSignIn writes it so the next sign-in has it. The same four values as
 # install-updater-agent.ps1 step 9b; ensure-autologon part 7 and QwtngNetSetup remove them on every class but a template.
+# Defender's cloud hosts bypass it (ADR-updater section 18 point 6): between passes nothing listens on 8082, and Smart App
+# Control's lookup for a never-run binary waited ~8 s on that port before the binary could start (65-75 ms bypassed).
 function Set-ProxyConfiguration {
-  & netsh winhttp set proxy '127.0.0.1:8082' '<local>' | Out-Null
+  $bypass = '<local>;wdcp.microsoft.com;wdcpalt.microsoft.com'
+  & netsh winhttp set proxy '127.0.0.1:8082' $bypass | Out-Null
   if ($LASTEXITCODE -ne 0) { throw "netsh winhttp set proxy exited $LASTEXITCODE" }
   SetV $POL 'ProxySettingsPerUser' 0 'DWord'; SetV $IS 'ProxyEnable' 1 'DWord'
-  SetV $IS 'ProxyServer' '127.0.0.1:8082' 'String'; SetV $IS 'ProxyOverride' '<local>' 'String'
+  SetV $IS 'ProxyServer' '127.0.0.1:8082' 'String'; SetV $IS 'ProxyOverride' $bypass 'String'
 }
 
 # Was the per-machine proxy policy in force when the console user signed in, this boot? Windows Update takes its proxy from
