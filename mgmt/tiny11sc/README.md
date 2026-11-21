@@ -103,3 +103,21 @@ Control cannot come back.** Windows re-enables it only through a reinstall, and 
    classification, but with Defender off they may still be attempted each pass.
 4. **(b)** In a clone with a netvm: `tiny11sc -Name Language.OCR*`, `tiny11sc -Name *Calculator*`, `tiny11sc -Component Defender`, then
    restart and confirm each item is back (`-List`, `Get-MpComputerStatus`).
+
+## The record behind the lists
+
+`inventory/26300.9457/` is what the removal lists and the claims above were read from, taken from the stock ISO's
+Pro image (index 6) on 2026-11-21:
+
+- `windowsapps.txt`: every folder under `Program Files\WindowsApps`. The app allowlist in `strip.ps1` was written against it.
+- `cbs-packages.txt`: every CBS package name under `Windows\servicing\Packages`. The capability patterns came from it, and so did
+  the finding that Defender's engine has no removable package on a client SKU (only its default definitions do).
+- `services.orig`: the start values the build recorded and shipped inside the image, which `restore.ps1` writes back.
+- `vendor-delta.txt`, `build-2.log`: the build that produced the 6978 MiB ISO. It ran the tree at 53a218a plus the files committed in
+  3ab923d, before that commit's final log-line cleanup.
+- `build-1-lzms-over-4gib.log`: the first attempt, where solid LZMS gave 4.68 GB. That number is why the image is LZX and split.
+- `source-iso.sha256`: the Microsoft ISO it was built from.
+
+`tools/wimdu.py` (payload bytes per path, and how much is shared with the others) and `tools/regdump.py` (a whole hive
+flattened to greppable lines) produced the Edge hard-link and Edge-registration findings. The ISO, the split WIMs and
+the hives are not in the repo: they are Microsoft media, they exceed GitHub's 100 MB file limit, and the repo is public.

@@ -1,0 +1,21 @@
+16:21:57 extracting Win11_26300_English_x64.iso
+16:22:03 edition 'Windows 11 Pro' is index 6, build 26300.9457, en-US
+16:22:36 registry: extracting hives
+16:22:37 recorded original start values: 12 services
+16:22:37 image: deleting Edge/EdgeCore/EdgeWebView/EdgeUpdate and Winre.wim, adding tiny11sc
+16:22:55 image: writing the final WIM
+16:23:14 image: verifying the result
+16:23:15   /Windows/WinSxS/ unchanged (116211 entries)
+16:23:15   /Windows/servicing/ unchanged (7365 entries)
+[WARNING] "/home/user/t11/out/.tiny11sc-work/iso/sources/install.swm" does not contain integrity information.  Skipping integrity check.
+[WARNING] "/home/user/t11/out/.tiny11sc-work/iso/sources/install2.swm" does not contain integrity information.  Skipping integrity check.
+[WARNING] "/home/user/t11/out/.tiny11sc-work/iso/sources/install.swm" does not contain integrity information.  Skipping integrity check.
+16:24:41 install image: 6134 MiB as install.swm 
+16:24:41 boot.wim: LabConfig bypass in Setup's SYSTEM hive
+16:24:45 writing /home/user/t11/out/Tiny11SC_26300.9457_English_x64.iso
+16:25:16 done: /home/user/t11/out/Tiny11SC_26300.9457_English_x64.iso (6978 MiB); delta in /home/user/t11/out/Tiny11SC_26300.9457_English_x64.vendor-delta.txt
+
+real	3m18.941s
+user	3m20.854s
+sys	0m46.698s
+BUILD_RC=0
