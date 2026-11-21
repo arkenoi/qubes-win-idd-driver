@@ -966,7 +966,8 @@ if ($vmClassNow -eq 'TemplateVM') {
         & netsh winhttp set proxy '127.0.0.1:8082' $proxyBypass | Out-Null
         $polIs = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\CurrentVersion\Internet Settings'
         $machIs = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Internet Settings'
-        New-Item -Path $polIs -Force | Out-Null
+        # Create the key only when it is missing: New-Item -Force on an existing key replaces it, deleting its values.
+        if (-not (Test-Path -LiteralPath $polIs)) { New-Item -Path $polIs -Force | Out-Null }
         Set-ItemProperty -Path $polIs -Name ProxySettingsPerUser -Value 0 -Type DWord
         Set-ItemProperty -Path $machIs -Name ProxyEnable -Value 1 -Type DWord
         Set-ItemProperty -Path $machIs -Name ProxyServer -Value '127.0.0.1:8082' -Type String
