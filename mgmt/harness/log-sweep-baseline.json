@@ -604,6 +604,36 @@
    "reason": "NEVER OBSERVED (0 in 156 gui-agent logs dated 2026-11-17 or later under qwt-quick-upgrade and qwt-accept), AND DELIBERATELY NOT SILENCED. agent/gui-agent/main.c OverlayFitApply (agent 29f94b1, ADR-windows 17): moving the popup onto the owner's client area failed, with GetLastError(). Jev on the sweep's rubric (scratchpad/jev-preacc1452-*): insufficient-evidence 0.51; keep_armed 0.72 -> armed."
   },
   {
+   "regex": "^agent\\|W\\|[^|]*: QGAPIN could not confine the exit to one CPU \\(error 0x(%x|H)\\) - closing UNPINNED",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "NEVER OBSERVED (no build carried it before agent a16865a), AND DELIBERATELY NOT SILENCED. agent/gui-agent/main.c WatchForEvents exit: SetProcessAffinityMask on the agent's own process failed, so the vchan close ran unpinned - reinforcement against the pre-existing QWT bug lost for that exit. Jev on the sweep's rubric (scratchpad/jev-preaccpin-*): insufficient-evidence 0.49; keep_armed 0.80 -> armed."
+  },
+  {
+   "regex": "^agent\\|W\\|[^|]*: QGAPIN could not confine the vchan open to one CPU \\(error 0x(%x|H)\\) - opening UNPINNED",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "NEVER OBSERVED (no build carried it before agent a16865a), AND DELIBERATELY NOT SILENCED. agent/gui-agent/vchan.c VchanInit: SetThreadAffinityMask failed, so the vchan open ran unpinned. Jev on the sweep's rubric (scratchpad/jev-preaccpin-*): expected 0.31 (under the floor); keep_armed 0.81 -> armed."
+  },
+  {
+   "regex": "^watchdog\\|W\\|[^|]*: QGAPIN could not confine '[^']*' \\(PID (%u|N)\\) to one CPU before the kill \\(error 0x(%x|H)\\)",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "NEVER OBSERVED (no build carried it before agent a16865a), AND DELIBERATELY NOT SILENCED. agent/watchdog/watchdog.c StopOwnAgent: the affinity calls on the handle CreateProcessAsUser returned failed, so a forced agent kill ran its kernel teardown unpinned. Jev on the sweep's rubric (scratchpad/jev-preaccpin-*): insufficient-evidence 0.56; keep_armed 0.79 -> armed."
+  },
+  {
+   "regex": "^[^|]+\\|W\\|[^|]*: SVCPIN service '[^']*' could not be pinned to one CPU \\(error 0x(%x|H)\\) - running UNPINNED",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "NEVER OBSERVED (no build carried it before winutils 9dfa251), AND DELIBERATELY NOT SILENCED. winutils/src/service.c SvcMain, a library both daemons link (so any family): SetProcessAffinityMask failed and the service runs unpinned. Jev on the sweep's rubric (scratchpad/jev-preaccpin-*): insufficient-evidence 0.40 (under the floor); keep_armed 0.80 -> armed."
+  },
+  {
+   "regex": "^[^|]+\\|W\\|[^|]*: SVCPIN service '[^']*' could not read the affinity masks \\(error 0x(%x|H)\\) - running UNPINNED",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "NEVER OBSERVED (no build carried it before winutils 9dfa251), AND DELIBERATELY NOT SILENCED. winutils/src/service.c SvcMain: GetProcessAffinityMask failed or reported a zero system mask, and the service runs unpinned. Jev on the sweep's rubric (scratchpad/jev-preaccpin-*): insufficient-evidence 0.63; keep_armed 0.82 -> armed."
+  },
+  {
    "regex": "^agent\\|W\\|[^|]*: QGAOVERLAYFIT 0x(%x|H): no slot free - its popup over the client area is not kept there",
    "status": "unsettled",
    "max_per_boot": null,
@@ -4638,5 +4668,5 @@
   }
  },
  "version": 1,
- "preaccounted_at": "a1f713bb7aac"
+ "preaccounted_at": "ae0cee20"
 }
