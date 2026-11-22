@@ -15,6 +15,9 @@ dl/
 
 # Per-run evidence and measurements - internal, of no interest to the public audience
 evidence/
+# ...and the top-level one with no trailing slash: in a linked worktree it is a SYMLINK to the main
+# checkout's (.githooks/post-checkout), which a slash-terminated pattern does not match.
+/evidence
 instrumentation/
 # The whole scratchpad is LOCAL-ONLY (owner decision 2026-08-10): working scripts,
 # drafts and run outputs stay on this machine and are never pushed.

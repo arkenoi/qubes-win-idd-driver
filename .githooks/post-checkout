@@ -5,6 +5,9 @@
 # them by a path relative to the tree it runs from, so in a linked worktree they were simply absent.
 # Measured 2026-11-21 from ~/wt-collector-race: quick-upgrade's sweep reported "records no sealed_version"
 # (smoke rc=4), and the acceptance preflight refused with "STOP: no fixture record for win10-iqi" (rc=12).
+# The same holds for two gitignored inputs the acceptance needs: evidence/ (the clean-install step refuses
+# to prime a subject when it cannot write its evidence-stick log there, so p3a-etw-gate measured nothing),
+# and scratchpad/openshell/ (the third-party Start menu installer updater-component's U7 installs).
 # In a LINKED worktree only, each one it lacks becomes a symlink to the main checkout's. A worktree that
 # already has its own copy is left alone, and so is the main checkout. Never fails the checkout.
 common=$(git rev-parse --git-common-dir 2>/dev/null) || exit 0
@@ -12,9 +15,10 @@ gitdir=$(git rev-parse --git-dir 2>/dev/null) || exit 0
 top=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
 [ "$(cd "$common" && pwd -P)" != "$(cd "$gitdir" && pwd -P)" ] || exit 0   # the main checkout: nothing to link
 main=$(cd "$common/.." && pwd -P)
-for d in mgmt/fixtures mgmt/checkpoints; do
+for d in mgmt/fixtures mgmt/checkpoints evidence scratchpad/openshell; do
     [ -e "$top/$d" ] || [ -L "$top/$d" ] && continue
     [ -d "$main/$d" ] || continue
-    ln -s "$main/$d" "$top/$d" && echo "post-checkout: $d -> $main/$d (the rig's records, shared with the main checkout)"
+    mkdir -p "$(dirname "$top/$d")" || continue
+    ln -s "$main/$d" "$top/$d" && echo "post-checkout: $d -> $main/$d (gitignored, shared with the main checkout)"
 done
 exit 0
