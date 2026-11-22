@@ -214,6 +214,8 @@ ERROR_FLAGS = [
                                                                           'robocopy rc>=8 copying C:\\Users\\Default or Public into ProgramData\\Qubes\\profile-seed - a standalone made from this template without its private volume gets only the notice, not the repair (ADR-windows section 14)'),
     ('autologon',               lambda v: _s(v) not in ('armed', 'skipped', 'not in payload'),
                                                                           'L1278 not-armed / L1285 error / L3384,L3416 unverified / L3409 no trailer / L3412 verify-error'),
+    ('signing_level_cache',     lambda v: re.fullmatch(r'cached ([1-9][0-9]*) of \1', _s(v)) is None,
+                                                                          'Initialize-QwtSigningLevelCache: "cached N of M; not cached: <exe>:<rc>" - each executable left uncached is verified again on its first start in EVERY AppVM boot with Defender on (DEFENDERFIRSTSTARTEVERYBOOT); "cached 0 of 0" = no executable found under the install root'),
 ]
 # ---- FLAGS-END
 
