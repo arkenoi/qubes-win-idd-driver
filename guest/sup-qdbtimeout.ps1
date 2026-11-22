@@ -310,7 +310,7 @@ try {
     T 'scm_7031_window' $seen['7031']
     foreach ($d in $seen.detail) { T 'scm_event' $d }
     # 1460 IS THE CLAIM, not merely "an error": ERROR_TIMEOUT is what WaitForQdb returns and what
-    # SvcMainLoop puts in dwWin32ExitCode (tools/tests/svc-exitcode-test.c asserts that half
+    # SvcMainLoop puts in dwWin32ExitCode (svc-exitcode-test.c asserted that half until 2026-11-23
     # offline). A 7023 carrying any other code would mean the service died of something else and
     # this cell measured the wrong failure.
     $has1460 = $false

@@ -1625,11 +1625,11 @@ if has L10; then
                 "7023 ${_b7023:-0} -> ${_w7023:-0} (delta $_delta), 7031=${_w7031:-0}, and the agent logged NO timeout line ($_tol); abandon line: $_abl; last instance: $(printf '%s' "$_lb" | cut -c1-110). The service never failed, so the SCM had nothing to record and the installer's restart actions could not fire - QDBWAITBOUNDISINERTWHILETHEDAEMONISSILENT"
       else
         verdict L10 FAIL "WaitForQdb DID time out and the SCM did not record it" \
-                "7023 ${_b7023:-0} -> ${_w7023:-0} (delta $_delta), 7031=${_w7031:-0}, but the agent logged the timeout: $(printf '%s' "$_tol" | cut -c1-140). The installer's restart actions rest on that record, so this is the exit-code path (svc-exitcode-test asserts the offline half)"
+                "7023 ${_b7023:-0} -> ${_w7023:-0} (delta $_delta), 7031=${_w7031:-0}, but the agent logged the timeout: $(printf '%s' "$_tol" | cut -c1-140). The installer's restart actions rest on that record, so this is the exit-code path"
       fi
     elif [ "$_has1460" != "True" ]; then
       verdict L10 FAIL "the 7023 does not name ERROR_TIMEOUT (1460), so this is a different failure" \
-              "7023 delta=$_delta but no 1460 in its text - WaitForQdb returns 1460 and svc-exitcode-test asserts SvcMainLoop carries it to the SCM; some other cause ended the service"
+              "7023 delta=$_delta but no 1460 in its text - WaitForQdb returns 1460 and winutils service.c SvcMainLoop carries it to the SCM; some other cause ended the service"
     elif [ "$_qare" != "RUNNING" ] || [ "$_qend" != "RUNNING" ]; then
       verdict L10 FAIL "the cell did not leave the guest healthy" \
               "QrexecAgent=$_qare QubesDB=$_qend after-resume=$_cfg - a cell that leaves the subject degraded is a defect of the cell"

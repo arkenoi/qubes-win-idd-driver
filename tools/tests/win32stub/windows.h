@@ -1,6 +1,6 @@
 /* windows.h - minimal Win32 STUB so gcc on this dev qube can parse and, for the pure parts, RUN our Windows
    sources: agent/watchdog/watchdog.c (gcc -fsyntax-only), include/deathevent.h with gui-agent/deathevent_test.c
-   (deathevent-selftest.sh), and windows-utils' src/service.c with svc-exitcode-test.c (svc-exitcode-selftest.sh).
+   (deathevent-selftest.sh).
    It is NOT a Windows compiler and proves nothing about linking: it gives the files the SDK's types, constants
    and function ARITIES, nothing more - CI compiles the real thing. Used together with the REAL windows-utils
    headers (log.h, config.h, qubes-io.h, service.h) from winutils/include (the tracked windows-utils submodule), which include

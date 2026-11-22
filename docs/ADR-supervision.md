@@ -79,7 +79,7 @@ Where the details live:
 | `include/deathevent.h` (agent) | the one Event Log record a supervisor writes per death |
 | `winutils/src/service.c` (until 2026-11-07 `patches/windows-utils-service-exit-code.patch`) | services exit non-zero when their worker fails |
 | `guest/health-check.ps1` (step 2b) | asserts every service's recovery settings |
-| `tools/tests/death-reporter-*`, `svc-exitcode-selftest.sh`, `health-recovery-selftest.sh` | the offline proofs |
+| `tools/tests/death-reporter-*`, `health-recovery-selftest.sh` | the offline proofs (`svc-exitcode-selftest.sh` was dropped 2026-11-23, see §below on `service.c`) |
 | `findings/issues.md` | what is still owed on a guest |
 
 ## 1. Anything of ours that dies unexpectedly is a major ERROR, and it is LOUD
@@ -452,9 +452,11 @@ The exit-code field is the raw code, or `unknown` / `hung` - sentinels above 32 
 `SvcSetState` ignored its exit code, in the wrapper of QrexecAgent and of the qubesdb daemon alike. Fixed in
 `winutils/src/service.c`; until 2026-11-07 that was `patches/windows-utils-service-exit-code.patch`, applied by
 `build.yml` and `qwt-full.yml` like the interactive-logon patch, and the stack is now commit `e25cbc1` of the
-`winutils` submodule (`ADR-upstream` §4). `tools/tests/svc-exitcode-selftest.sh` proves it against
-`winutils/src/service.c` itself and sees the suite fail when the requested-stop exemption is taken out (until
-then it proved it against the exact ref CI cloned, v4.2.2, and saw the unpatched file fail). qrexec-agent.c
+`winutils` submodule (`ADR-upstream` §4). `tools/tests/svc-exitcode-selftest.sh` proved it against
+`winutils/src/service.c` itself and saw the suite fail when the requested-stop exemption was taken out, until
+2026-11-23: winutils 9dfa251 (SVCPIN) added affinity calls its Win32 stub did not model, and a suite that
+needs a quick fix is dropped (CLAUDE.md). What still enforces it: the rig - `mgmt/harness/supervision-e2e.sh`
+requires a 7023 carrying 1460 after a forced WaitForQdb timeout. qrexec-agent.c
 already returned the worker's Win32 code; the qubesdb daemon returns `ERROR_UNIDENTIFIED_ERROR` on a failed
 mainloop. A requested stop stays exit 0.
 

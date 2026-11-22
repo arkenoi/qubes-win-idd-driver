@@ -103,7 +103,7 @@ Check 'qubes_services_running' (@($svcs).Count -gt 0 -and $badSvc.Count -eq 0) $
 # service exit-code fix (2026-10-03; carried as patches/windows-utils-service-exit-code.patch until
 # the 2026-11-07 assimilation, now winutils/src/service.c) QdbDaemon and QrexecAgent reported
 # SERVICE_STOPPED with exit code 0 when their worker failed (audit 2026-09-08 #34), so their actions
-# were inert. The patch is proven offline (tools/tests/svc-exitcode-selftest.sh); "recovery works" on
+# were inert. The patch was proven offline until 2026-11-23 (svc-exitcode-selftest.sh, dropped); "recovery works" on
 # a guest still needs its defect-reintroduced proof (a forced WaitForQdb timeout -> event 7023 + 7031
 # + a restart) before it may be claimed.
 #

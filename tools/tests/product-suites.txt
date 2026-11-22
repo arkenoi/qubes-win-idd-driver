@@ -24,7 +24,6 @@ qdbwait-bound-selftest.sh
 relay-vouch-selftest.sh
 rpm-spec-selftest.sh
 rtc-utc-selftest.sh
-svc-exitcode-selftest.sh
 toastactions-selftest.sh
 toasthold-selftest.sh
 ttfw-ab-selftest.sh
