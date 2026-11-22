@@ -590,6 +590,30 @@
    "status": "unsettled",
    "max_per_boot": null,
    "reason": "NEVER OBSERVED (0 in the pulled gui-agent logs under qwt-quick-upgrade, 2026-11-21; the INFO form never seen either - STARTCLOSEUNEXERCISED), AND DELIBERATELY NOT SILENCED. agent/gui-agent/vchan-handlers.c HandleClose (agent 1e8a920): dom0's close button on Start or search, and activation to the shell desktop refused, so the surface stays open (ADR-windows 11). Jev on the sweep's rubric (scratchpad/jev-preacc1425-*): defect 0.44; keep_armed 0.79 -> armed."
+  },
+  {
+   "regex": "^agent\\|W\\|[^|]*: QGAOVERLAYFIT 0x(%x|H): popup 0x(%x|H) moved away again after (%u|N) refits - no longer kept on the client area",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "NEVER OBSERVED (0 in 156 gui-agent logs dated 2026-11-17 or later under qwt-quick-upgrade and qwt-accept), AND DELIBERATELY NOT SILENCED. agent/gui-agent/main.c OverlayFitApply (agent 29f94b1, ADR-windows 17): a popup kept on its owner's client area moved away again after OVERLAY_FIT_MAX refits and is no longer kept there. Jev on the sweep's rubric (scratchpad/jev-preacc1452-*): insufficient-evidence 0.32; keep_armed 0.64 -> armed."
+  },
+  {
+   "regex": "^agent\\|W\\|[^|]*: QGAOVERLAYFIT 0x(%x|H): moving popup 0x(%x|H) onto the client area was refused \\(0x(%x|H)\\)",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "NEVER OBSERVED (0 in 156 gui-agent logs dated 2026-11-17 or later under qwt-quick-upgrade and qwt-accept), AND DELIBERATELY NOT SILENCED. agent/gui-agent/main.c OverlayFitApply (agent 29f94b1, ADR-windows 17): moving the popup onto the owner's client area failed, with GetLastError(). Jev on the sweep's rubric (scratchpad/jev-preacc1452-*): insufficient-evidence 0.51; keep_armed 0.72 -> armed."
+  },
+  {
+   "regex": "^agent\\|W\\|[^|]*: QGAOVERLAYFIT 0x(%x|H): no slot free - its popup over the client area is not kept there",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "NEVER OBSERVED (0 in 156 gui-agent logs dated 2026-11-17 or later under qwt-quick-upgrade and qwt-accept), AND DELIBERATELY NOT SILENCED. agent/gui-agent/main.c OverlayFitRegister (agent 29f94b1, ADR-windows 17): every fit-tracking slot is in use, so this popup is not kept on the client area. Jev on the sweep's rubric (scratchpad/jev-preacc1452-*): insufficient-evidence 0.52; keep_armed 0.70 -> armed."
+  },
+  {
+   "regex": "^agent\\|E\\|[^|]*: QGAHELPERTASK schtasks /create /xml failed for ",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "NEVER OBSERVED in this form (0 in 156 gui-agent logs dated 2026-11-17 or later under qwt-quick-upgrade and qwt-accept), AND DELIBERATELY NOT SILENCED. agent/gui-agent/main.c HelperTaskRegister (agent e4bdaa1): schtasks /create /xml failed, so the helper does not start; the line now carries the exit code and schtasks' own text. Jev on the sweep's rubric (scratchpad/jev-preacc1452-*): defect 0.29; keep_armed 0.72 -> armed."
   }
  ],
  "signatures": {
@@ -4614,5 +4638,5 @@
   }
  },
  "version": 1,
- "preaccounted_at": "8255f6792be6"
+ "preaccounted_at": "a1f713bb7aac"
 }
