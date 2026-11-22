@@ -72,6 +72,23 @@ cut. `verdict-lib.sh`'s three classes are the vocabulary; a check never seen to 
 is decoration - see it fail ONCE, by hand, and restore it; no defect knob or `# GUARD:` line is kept in the
 harness for it (CLAUDE.md, owner 2026-11-11).
 
+## Wedges (owner 2026-11-22)
+
+«STOP blaming the pre-existing QWT bug on wedge. Yes it does exist. Nothing changed the fact I asked you to distribute
+workload around it» and «the wedge rule, effective now: ... identify THE wedge pattern with confidence, zero fp. Then i
+want it wired into acceptance. Once we see a wedge, it does not block the cut, but ten repetitions of failed cell are
+required after the campaign to clear the cut block.»
+
+- A cell is a WEDGE only when the zero-false-positive pattern wired into the settle path matches. A harness class
+  (`WEDGE-SPIN`/`-BLOCKED`/`-UNKNOWN-SHAPE`), a Jev score, a shape or a reading never makes one: on 2026-11-22
+  `class.txt` said WEDGE-SPIN on a xenbus freeze. A missing or unreadable field is NOT a wedge; Jev may veto a match,
+  never grant one. Until the pattern is wired in, no cell qualifies.
+- A verified wedge does not block the cut: the campaign goes on, and the cut stays blocked until ten repetitions of
+  that cell - the plan's own command, same build tag - run after the campaign and pass.
+- A freeze in stock xenbus's bucket lock (the pre-existing QWT bug; our patch line RETIRED) is NEVER a wedge. It is a
+  PRODUCT failure, ours: the order is to distribute our workload - product and harness - around it. It is graded
+  product-fail, never re-run as an exception, never "outside our control".
+
 ## Never
 
 - choose a cell, a subject, a golden or a procedure the plan did not name; a default target does not exist;
