@@ -5762,6 +5762,8 @@ public static class QdbPrime {
         }
     }
     # ---- UPDATER-DEPLOY-VERDICT-END
+    # Every executable is in place by now (the MSI, the updater agent), and nothing below writes one.
+    Initialize-QwtSigningLevelCache
     # The next boot is the first with a dom0-local RTC, so settle the convention for it HERE, where
     # qubesdb is finally readable (the pre-flight's attempt runs before the Qubes services exist).
     try { Set-GuestClockForNextBoot } catch { Write-Log "clock: settling the next boot's convention failed ($($_.Exception.Message))" 'WARN' }
@@ -5840,6 +5842,60 @@ public static class QdbPrime {
     Write-Log 'No reboot from here. qrexec answers in this boot (QrexecAgent started after the device work); PV drivers and their'
     Write-Log 'emulated-device handover complete the next time the qube starts.'
     Emit-Result 0
+}
+
+function Initialize-QwtSigningLevelCache {
+    # EVERY INSTALLED EXECUTABLE CARRIES ITS CACHED SIGNING LEVEL BEFORE THIS BOOT ENDS. With Defender on, Windows
+    # verifies an image's signature on its first start in a boot unless the file itself carries the cached level
+    # ($KERNEL.PURGE.ESBCACHE, purged when the file changes). An AppVM boots its template's root and discards what it
+    # writes, so an executable no template boot ever started is verified again on its first start in EVERY AppVM boot
+    # (findings/issues.md DEFENDERFIRSTSTARTEVERYBOOT). SetCachedSigningLevel with VALIDATE_ONLY computes and stores the
+    # level without running the file. A file left uncached costs only its own first starts, so nothing here fails the
+    # install; each call is bounded, and the first one that does not return stops the pass.
+    $root = Split-Path -Parent (Get-QwtBinDir)
+    $files = @(); $cached = 0; $notCached = @()
+    try {
+        if (-not ('QwtSigningLevelCache' -as [type])) {
+            Add-Type @'
+using System; using System.IO; using System.Runtime.InteropServices; using System.Threading;
+public static class QwtSigningLevelCache {
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool SetCachedSigningLevel(IntPtr[] sourceFiles, uint sourceFileCount, uint flags, IntPtr targetFile);
+    const uint SIGNING_LEVEL_FILE_CACHE_FLAG_VALIDATE_ONLY = 0x4;
+    // 0 = cached; -1 = still inside the call after timeoutMs (the worker is abandoned); otherwise the Win32 error, or
+    // the HRESULT of the exception that opening the file raised.
+    public static int Cache(string path, int timeoutMs) {
+        int rc = -1;
+        Thread t = new Thread(() => {
+            try {
+                using (FileStream fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete)) {
+                    IntPtr h = fs.SafeFileHandle.DangerousGetHandle();
+                    rc = SetCachedSigningLevel(new IntPtr[] { h }, 1, SIGNING_LEVEL_FILE_CACHE_FLAG_VALIDATE_ONLY, h) ? 0 : Marshal.GetLastWin32Error();
+                }
+            } catch (Exception e) { rc = Marshal.GetHRForException(e); }
+        });
+        t.IsBackground = true;
+        t.Start();
+        return t.Join(timeoutMs) ? rc : -1;
+    }
+}
+'@
+        }
+        $files = @(Get-ChildItem -LiteralPath $root -Recurse -File -Filter '*.exe' -ErrorAction SilentlyContinue | Where-Object { $_.Extension -ieq '.exe' })
+        foreach ($f in $files) {
+            $rc = [QwtSigningLevelCache]::Cache($f.FullName, 15000)
+            if ($rc -eq 0) { $cached++; continue }
+            if ($rc -eq -1) {
+                $notCached += "$($f.Name):no-answer-in-15s"
+                Write-Log "signing level: caching $($f.FullName) did not return in 15 s - the files after it are left uncached" 'WARN'
+                break
+            }
+            $notCached += ('{0}:0x{1:x}' -f $f.Name, $rc)
+        }
+    } catch { $notCached += "error:$($_.Exception.Message)" }
+    $summary = "cached $cached of $($files.Count)" + $(if ($notCached.Count) { "; not cached: $($notCached -join ', ')" } else { '' })
+    Write-Log "signing level: $summary under $root"
+    $script:Result.detail.signing_level_cache = $summary
 }
 
 function Set-GuestClockForNextBoot {
