@@ -474,8 +474,20 @@ wedge_stage2(){
       case "$shape" in
         SPIN|WEDGE-SPIN-CANDIDATE)       WG_CLASS="WEDGE-SPIN";          WG_WHY="ALL THREE conjuncts hold: present, no pixels, and ACPI ignored for ${bound}s ($acpiwhy). Shape: a vCPU spinning on an unchanged RIP." ;;
         BLOCKED|WEDGE-BLOCKED-CANDIDATE) WG_CLASS="WEDGE-BLOCKED";       WG_WHY="ALL THREE conjuncts hold: present, no pixels, and ACPI ignored for ${bound}s ($acpiwhy). Shape: every vCPU HLT." ;;
-        *)                               WG_CLASS="WEDGE-UNKNOWN-SHAPE"; WG_WHY="ALL THREE conjuncts hold: present, no pixels, and ACPI ignored for ${bound}s ($acpiwhy). The SHAPE is not named ('${shape:-absent}') - which costs us the spin site, not the finding. This is a wedge." ;;
-      esac ;;
+        *)                               WG_CLASS="WEDGE-UNKNOWN-SHAPE"; WG_WHY="ALL THREE conjuncts hold: present, no pixels, and ACPI ignored for ${bound}s ($acpiwhy). The SHAPE is not named ('${shape:-absent}') - which costs us the spin site, not the finding." ;;
+      esac
+      # ONLY THE PATTERN MAKES A WEDGE (owner 2026-11-22). The conjuncts above say the guest is stuck;
+      # whether the stub-domain QEMU holds it or it is a product failure of ours is decided by the
+      # qemu-held-vcpu field of tools/wedge-vmcs-fields.py and by nothing else - not the class, not
+      # the shape, not Jev. A missing field is not a wedge.
+      if [ -s "$d/qemu-held-vcpu" ]; then
+        printf 'vcpu%s held in Xen at the %s VMCALL in both samples, cpu-time 0: the stub-domain QEMU never completed the map-cache invalidate (QEMU work item 2043, qubes-issues 10069)\n' \
+          "$(_wg_get "$d" qemu-held-vcpu)" "$(_wg_get "$d" qemu-held-hypercall)" > "$d/wedge-verified" 2>/dev/null || :
+        WG_WHY="$WG_WHY VERIFIED WEDGE: $(_wg_get "$d" wedge-verified). It does not block the cut; ten post-campaign repetitions of this cell on the same build tag clear it."
+      else
+        rm -f "$d/wedge-verified"
+        WG_WHY="$WG_WHY NOT a verified wedge: no vCPU is held at a map-cache-invalidate VMCALL in both samples, so this is a PRODUCT failure, ours."
+      fi ;;
     *) WG_CLASS="UNREADABLE-ACPI"; WG_WHY="the ACPI observation is '${r:-absent}' - ${acpiwhy:-no reason recorded}. The decisive conjunct is UNMEASURED, so the guest is neither cleared nor called a wedge, and it is preserved." ;;
   esac
   return 0
@@ -944,6 +956,7 @@ wedge_collect_dump(){
     printf '0\n' > "$d/dom0-ok"
   fi
   printf '%s\n' "" > "$d/vmcs-activity"; printf '0\n' > "$d/vmcs-rip-static"
+  rm -f "$d/qemu-held-vcpu" "$d/qemu-held-hypercall"
   if [ -s "$d/vmcs-1.txt" ]; then
     python3 tools/wedge-vmcs-fields.py "$d/vmcs-1.txt" "$d/vmcs-2.txt" > "$d/vmcs-fields.txt" 2>/dev/null || :
     while IFS='=' read -r k v; do
@@ -957,6 +970,8 @@ wedge_collect_dump(){
         exit-pause-loop-vcpu) [ -n "$v" ] && printf '%s\n' "$v" > "$d/vmcs-pause-loop-vcpu" ;;
         pause-flags)          [ -n "$v" ] && printf '%s\n' "$v" > "$d/vmcs-pause-flags" ;;
         held-in-xen-vcpu)     [ -n "$v" ] && printf '%s\n' "$v" > "$d/held-in-xen-vcpu" ;;
+        qemu-held-vcpu)       [ -n "$v" ] && printf '%s\n' "$v" > "$d/qemu-held-vcpu" ;;
+        qemu-held-hypercall)  [ -n "$v" ] && printf '%s\n' "$v" > "$d/qemu-held-hypercall" ;;
       esac
     done < "$d/vmcs-fields.txt"
   fi

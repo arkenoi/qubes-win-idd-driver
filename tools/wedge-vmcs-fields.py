@@ -41,11 +41,25 @@ guess:
                        latched on a vCPU that never took it while others spun in
                        nt!KiIpiSendRequestEx. One sample cannot tell those apart; two can.
   rvi-stuck-vcpu=N     which vCPU that was.
+  qemu-held-vcpu=N     THE QEMU WEDGE, and the only field that makes a cell a wedge. Set only when
+                       ONE vCPU, in BOTH samples: has pause_flags bit 4 (VPF_blocked_in_xen), took
+                       exit 18 (VMCALL) at the same RIP, that RIP sits at the VMCALL of the
+                       memory_op or grant_table_op stub of the hypercall page (page offset 0x185 or
+                       0x285: stub = op*32, VMCALL at +5), and its cpu-time delta is 0.0. Those are
+                       the two hypercalls after which Xen sends the device model a synchronous
+                       map-cache invalidate; a stub-domain QEMU that never completes it holds that
+                       vCPU forever (QEMU work item 2043, fixed by QEMU 095c08a7; Qubes issue 10069,
+                       whose own gdbsx dump has VCPU0 at the same stub, xen.sys+0x13288). Any
+                       missing part leaves it EMPTY - a missing field is not a wedge.
+  qemu-held-hypercall  memory_op or grant_table_op, for the vCPU above.
 """
 import re
 import sys
 
 ACTIVITY = {0: "Active", 1: "HLT", 2: "Shutdown", 3: "Wait-for-SIPI"}
+# Page offset of the VMCALL inside the hypercall page for the two ops that trigger the map-cache
+# invalidate (names as tools/xen-core-rip.py HYPERCALL: 12 memory_op, 20 grant_table_op).
+INVALIDATE_VMCALL = {12 * 32 + 5: "memory_op", 20 * 32 + 5: "grant_table_op"}
 
 
 def parse(path):
@@ -81,8 +95,10 @@ def parse(path):
         # letters: r running, b blocked, - offline/other.
         m = re.search(r"\(([^()]*?)->([^()]*?)\)\s*$", tail)
         rs_after = m.group(2).strip() if m else None
+        m = re.search(r"([+-]?\d+(?:\.\d+)?)\s*s\s*\([^()]*\)\s*$", tail)
+        cpu = float(m.group(1)) if m else None
         out[n] = {"rip": rip, "rvi": hexfield(f[3]), "activity": hexfield(f[6]),
-                  "reason": reason, "rs_after": rs_after}
+                  "reason": reason, "rs_after": rs_after, "cpu": cpu}
     return out
 
 
@@ -181,8 +197,25 @@ def main():
         if pf[n_] & 4:
             held = n_
             break
+    pf1 = parse_pause_flags(args[0])
+    pf2 = parse_pause_flags(args[1]) if len(args) > 1 else {}
+    qheld, qcall = "", ""
+    for n in both:
+        a, b = s1[n], s2[n]
+        if not (pf1.get(n, 0) & 4 and pf2.get(n, 0) & 4):
+            continue
+        if not (a["reason"] == 18 and b["reason"] == 18 and a["rip"] and a["rip"] == b["rip"]):
+            continue
+        if not (a["cpu"] == 0.0 and b["cpu"] == 0.0):
+            continue
+        op = INVALIDATE_VMCALL.get(int(a["rip"], 16) & 0xFFF)
+        if op:
+            qheld, qcall = n, op
+            break
     print("pause-flags=%s" % " ".join("%d:%d" % (k, pf[k]) for k in sorted(pf)))
     print("held-in-xen-vcpu=%s" % held)
+    print("qemu-held-vcpu=%s" % qheld)
+    print("qemu-held-hypercall=%s" % qcall)
     print("exit-all-hlt=%d" % all_hlt)
     print("runstate-all-blocked=%d" % all_blocked)
     print("exit-pause-loop-vcpu=%s" % pause)
