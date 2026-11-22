@@ -21,8 +21,8 @@
 # steps went wrong in a way that would have read as success:
 #
 #   * WHICH PACKAGE IS WHICH. A full gate needs TWO release-package runs at the same commit - the
-#     ordinary one and a fault_injection one, because failproof-gates and failproof-faultinject
-#     cannot run on an ordinary package. Both runs are called "release-package" and their display
+#     ordinary one and a fault_injection one, because failproof-gates cannot run on an ordinary
+#     package. Both runs are called "release-package" and their display
 #     titles are IDENTICAL, so I reached for dispatch order. Then my first discriminator (a grep for
 #     QGAFAULT in reference/gui-agent.exe) returned 0 on BOTH, which reads as "the flag did nothing".
 #     The workflow names the real check itself and carries the scar: `inputs.fault_injection == true`
@@ -149,9 +149,9 @@ log "build $BUILDTAG (commit $PKG_SHA, run $PKG) on branch $BRANCH; harness $(gi
 # dispatch order, not the display title (identical), not a grep of the shipped binary. The ordinary
 # package was proven =0 by tools/build-tag.sh create above; the same tool reads the FI run's log here
 # (ONE implementation of the proof: tools/build-tag.sh fi-flag). The FI run must have been built from
-# the SAME commit as the build: failproof-gates and failproof-faultinject grade the injector build as
-# a stand-in for the package, which holds only when both came from one commit.
-[ -n "${FI:-}" ] || die "FI=<run id> is required: failproof-gates and failproof-faultinject cannot run on an ordinary package, so a FULL gate is unreachable without it - dispatch release-package.yml at $SHORT with -f fault_injection=true"
+# the SAME commit as the build: failproof-gates grades the injector build as a stand-in for the
+# package, which holds only when both came from one commit.
+[ -n "${FI:-}" ] || die "FI=<run id> is required: failproof-gates cannot run on an ordinary package, so a FULL gate is unreachable without it - dispatch release-package.yml at $SHORT with -f fault_injection=true"
 fiflag=$(tools/build-tag.sh fi-flag "$FI") || die "run $FI does not prove its role: its log does not state exactly one QGA_FAULT_INJECTION value - FI must print =1"
 [ "$fiflag" = 1 ] || die "run $FI is not the FAULT-INJECTION package: its log reads QGA_FAULT_INJECTION=$fiflag, FI must print =1"
 FI_SHA=$(gh run view "$FI" --json headSha --jq .headSha 2>/dev/null)
@@ -366,7 +366,7 @@ fi
 log "step 2b/4: settle the rig before the remainder"
 settle_the_rig "step 3 (gate-remainder refuses ANY running guest)" "gate-remainder" || exit 1
 
-# ---- 6. the six suites release-acceptance does not cover ------------------------------------------
+# ---- 6. the suites release-acceptance does not cover ----------------------------------------------
 log "step 3/4: gate-remainder (--fi-run $FI)"
 # Interruptibly too, for both reasons at step 2: this step runs for hours, and its redirection stays
 # inside the background job, so the trap's own lines reach the chain's output rather than this file.

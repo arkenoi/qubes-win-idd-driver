@@ -271,8 +271,8 @@ on main the push ran it. `tools/tests/release-cut-gate-selftest.sh` was deleted 
 `mgmt/gate-scope.json` (the map, with a reason per pattern), `tools/gate-scope.py`, `mgmt/gate-ledger.json` (seeded
 from the records of 4.3.33, 4.3.34 and 4.3.35, each marked `reconstructed`), and
 `tools/tests/gate-scope-selftest.sh`. The suite names are the ones the harnesses already use:
-`tools/release-acceptance.sh`'s eight cells and three feature tests, plus `failproof-gates`,
-`failproof-faultinject`, `gate-preflight`, `p3a-etw-gate`, `toast-hold-test` and `log-sweep`.
+`tools/release-acceptance.sh`'s eight cells and three feature tests, plus `failproof-gates`, `gate-preflight`,
+`p3a-etw-gate`, `toast-hold-test` and `log-sweep`.
 
 2026-11-11 (§7): `tools/build-tag.sh` (create / resolve / run / fi-flag), `tools/coverage-receipt.py` schema 2 with
 the module map and `merge_module`, and the identity change in `tools/release-acceptance.sh`, `tools/gate-remainder.sh`,

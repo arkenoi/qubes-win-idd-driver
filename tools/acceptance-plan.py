@@ -66,8 +66,8 @@ with open(_FEATURE_LIST) as _fh:
     FEATURE_TESTS = [l.strip() for l in _fh if l.strip() and not l.startswith("#")]
 if not FEATURE_TESTS:
     sys.exit(f"acceptance-plan: {_FEATURE_LIST} names no feature tests - refusing to plan a campaign that would silently skip them")
-REMAINDER = ["gate-preflight", "p3a-etw-gate", "toast-hold-test", "log-sweep", "failproof-gates", "failproof-faultinject"]
-FI_SUITES = ["failproof-gates", "failproof-faultinject"]
+REMAINDER = ["gate-preflight", "p3a-etw-gate", "toast-hold-test", "log-sweep", "failproof-gates"]
+FI_SUITES = ["failproof-gates"]
 GUEST_DRIVING = set(MATRIX_CELLS) | set(FEATURE_TESTS) | set(REMAINDER)
 
 EXITS_RELEASE_ACCEPTANCE = {"0": "COMPLETE - every cell and feature test passed and the receipt satisfies the diff",

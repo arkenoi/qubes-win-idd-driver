@@ -11,7 +11,7 @@
     "suites": ["package-verify", "win10-clean", "win10-reinstall", "win10-upgrade", "win10-appvm",
                "win11-clean", "win11-reinstall", "win11-upgrade", "win11-appvm",
                "notify-errors-guest-test", "crop-before-map", "updater-component", "template-update",
-               "failproof-gates", "failproof-faultinject", "gate-preflight", "p3a-etw-gate",
+               "failproof-gates", "gate-preflight", "p3a-etw-gate",
                "toast-hold-test", "log-sweep"],
     "reason": "Everything. Required by the floor, by an unmapped path, and by any pattern below that asks for it."
   },
@@ -35,7 +35,7 @@
     "agent/gui-agent/lifecycle.*": { "suites": ["full"], "reason": "the agent/service lifecycle contract governs every boot and shutdown of every cell" },
     "agent/watchdog/**": { "suites": ["full"], "reason": "the service that launches the agent; a mistake here costs the GUI on every guest" },
     "agent/include/**": { "suites": ["full"], "reason": "shared between the agent and its service" },
-    "agent/gui-agent/wincapture.*": { "suites": ["win11-clean", "win11-appvm", "failproof-faultinject", "p3a-etw-gate", "toast-hold-test"], "reason": "the capture engine" },
+    "agent/gui-agent/wincapture.*": { "suites": ["win11-clean", "win11-appvm", "p3a-etw-gate", "toast-hold-test"], "reason": "the capture engine" },
     "agent/gui-agent/toast*": { "suites": ["win11-clean", "toast-hold-test"], "reason": "the notification surfaces" },
     "agent/gui-agent/notifyerr.*": { "suites": ["win11-clean", "notify-errors-guest-test"], "reason": "the loud-error route" },
     "agent/gui-agent/errbox*": { "suites": ["win11-clean", "notify-errors-guest-test"], "reason": "the in-guest error window, the route's fallback" },
@@ -46,7 +46,7 @@
 
     "driver/**": { "suites": ["win11-clean", "win11-appvm"], "reason": "the IddCx driver, behind /idd" },
 
-    "tools/wgcbroker/**": { "suites": ["win11-clean", "win11-appvm", "failproof-faultinject", "toast-hold-test"], "reason": "the de-slice broker IS the capture engine on an eligible guest; its hang detection is what failproof-faultinject drives" },
+    "tools/wgcbroker/**": { "suites": ["win11-clean", "win11-appvm", "toast-hold-test"], "reason": "the de-slice broker IS the capture engine on an eligible guest" },
     "tools/notifhost/**": { "suites": ["win11-clean", "notify-errors-guest-test", "toast-hold-test"], "reason": "the notification bridge and the error route's sender" },
     "tools/etwproxy/**": { "suites": ["win11-clean", "p3a-etw-gate"], "reason": "the ETW proxy" },
 

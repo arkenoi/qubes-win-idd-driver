@@ -19,7 +19,6 @@ L4-check-cannot-fail|failproof-classpairs.sh:%s
 L4-check-cannot-fail|failproof-classpairs.sh:appvm-private-reformatted
 L4-check-cannot-fail|failproof-classpairs.sh:standalone-nau-removed
 L4-check-cannot-fail|failproof-config.sh:%s
-L4-check-cannot-fail|failproof-faultinject.sh:%s
 L4-check-cannot-fail|rnd-shell-surfaces.sh:toasts-survive-filter
 L4-check-cannot-fail|sg1-u2-coldboot.sh:coldboot-reboot-confirmed
 L4-check-cannot-fail|sg1-u2-coldboot.sh:no-shell-phase-observed

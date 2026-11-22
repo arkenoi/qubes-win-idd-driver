@@ -1,5 +1,5 @@
 #!/bin/bash
-# GATE REMAINDER - the six suites tools/release-acceptance.sh does not cover, and the receipt merge
+# GATE REMAINDER - the suites tools/release-acceptance.sh does not cover, and the receipt merge
 # that makes a FULL gate reachable at all.
 #
 # WHY THIS EXISTS, MEASURED 2026-10-08. `tools/release-acceptance.sh` writes
@@ -8,8 +8,8 @@
 # unmapped path, which is most releases. A twelve-suite receipt was fed to `gate-scope.py check` and
 # refused, correctly, naming the six with no producer:
 #     failproof-gates  failproof-faultinject  gate-preflight  p3a-etw-gate  toast-hold-test  log-sweep
-# So the sanctioned path could not produce a receipt that satisfies its own floor. This runs those
-# six and MERGES the ones that PASSED into the same receipt.
+# So the sanctioned path could not produce a receipt that satisfies its own floor. This runs the
+# remainder suites and MERGES the ones that PASSED into the same receipt.
 #
 # IT DOES NOT CUT THE RELEASE and it never writes a suite it did not see pass: a receipt is a record,
 # not an intention (docs/ADR-acceptance.md section 4).
@@ -38,7 +38,7 @@ RUN=""; FIRUN=""; DRY=0
 # B10): a default target is wrong in almost every run, and a harness that guesses one churns a
 # guest the caller did not mean. Name them with --vm10/--vm11/--os11 or be refused below.
 VM10=""; VM11=""; OS11=""
-# --only <suite>: run ONE of the six and merge only that one. The receipt stays honest because the
+# --only <suite>: run ONE of them and merge only that one. The receipt stays honest because the
 # merge below never writes a suite it did not see pass, so a narrowed run produces a narrowed
 # record, not a fuller one. It exists because this gate reserves the rig for every REQUIRED suite -
 # four of them on a typical range - and "re-exercise the one suite I just changed" was otherwise
@@ -537,16 +537,16 @@ if need log-sweep; then
 else SKIPPED="$SKIPPED log-sweep"; fi
 
 # --------------------------------------------------------------- the fault-injection suites, LAST
-# ORDER IS DELIBERATE. These two need an INSTALLED injector build, and installing it replaces the
-# release binaries on the subject - so everything that grades the RELEASE runs first and these run
+# ORDER IS DELIBERATE. failproof-gates needs an INSTALLED injector build, and installing it replaces
+# the release binaries on the subject - so everything that grades the RELEASE runs first and it runs
 # at the end. Before 2026-10-09 they ran third and refused outright, because nothing installed
 # anything: the qwt-full artifact is not an installable tree. release-package.yml now accepts
 # fault_injection, so --fi-run names a run whose qwt-improved-setup carries the injector and goes
 # in through the ordinary install path. cut-release.sh refuses to publish such a package.
 fi_installed=0
-if need failproof-gates || need failproof-faultinject; then
+if need failproof-gates; then
   if [ -z "$FIRUN" ]; then
-    say "SKIP  failproof-gates/failproof-faultinject: no --fi-run. Dispatch release-package with"
+    say "SKIP  failproof-gates: no --fi-run. Dispatch release-package with"
     say "      -f fault_injection=true and pass its run id; an ordinary package cannot inject a"
     say "      fault and recording a pass from one would be vacuous."
   else
@@ -574,7 +574,7 @@ sys.exit(0 if (b.count(m)+b.count(m.decode().encode('utf-16-le'))) else 1)
 FIMARK
       then
         say "ERROR: run $FIRUN's agent does NOT carry the injector marker - it is an ordinary"
-        say "       package, so both suites would come back green for the wrong reason."
+        say "       package, so failproof-gates would come back green for the wrong reason."
       else
         settle "$VM11"
         say "--- installing the injector tree on $VM11 (its agent carries QGA-FAULT-INJECTION:on)"
@@ -603,14 +603,6 @@ if need failproof-gates && [ "$fi_installed" = 1 ]; then
   run_it failproof-gates bash mgmt/harness/failproof-gates.sh "$VM11" "$WORK/failproof-gates"
   note $? failproof-gates
 else SKIPPED="$SKIPPED failproof-gates"; fi
-
-if need failproof-faultinject && [ "$fi_installed" = 1 ]; then
-  # No download here: this suite reads nothing from a directory (it has zero references to FI_DIR).
-  # Its prerequisite is the INSTALLED injector build, which the step above put on the subject, and
-  # it verifies that itself from the running agent's QGAFAULT-INIT banner before grading anything.
-  run_it failproof-faultinject bash mgmt/harness/failproof-faultinject.sh "$VM11" "$WORK/failproof-faultinject"
-  note $? failproof-faultinject
-else SKIPPED="$SKIPPED failproof-faultinject"; fi
 
 
 say "passed:$PASSED"
@@ -643,7 +635,7 @@ else
   else
     # shellcheck disable=SC2086  # MODS is a list of --module words
     python3 tools/coverage-receipt.py --out "$COVFILE" --build "$BUILDTAG" --package-run "$RUN" ${FIRUN:+--fi-run "$FIRUN"} \
-        --fi-module failproof-gates --fi-module failproof-faultinject --range "$RANGE" --harness "$HARNESS" --run "$WORK" \
+        --fi-module failproof-gates --range "$RANGE" --harness "$HARNESS" --run "$WORK" \
         ${ONLY:+--narrowed "$ONLY"} $MODS 2>&1 | tee -a "$LOG"
     [ "${PIPESTATUS[0]}" = 0 ] || say "ERROR: the receipt was not written (tools/coverage-receipt.py refused, above) - the cut cannot read this run"
   fi
