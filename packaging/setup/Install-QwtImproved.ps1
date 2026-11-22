@@ -1892,6 +1892,44 @@ function Get-InstalledQwt {
     return $found
 }
 
+function Set-QwtRuntimeAffinity {
+    # THE OLD VERSION'S TEARDOWN RUNS ON CPU 0. Stock xenbus's bucket lock wedges when two users of one bucket
+    # run on two CPUs, and the guest dispatches every user channel on CPU 0; a process of the INSTALLED version
+    # that closes its channel on another CPU while it is being stopped is that second user. Two upgrade freezes
+    # of that kind came in or right after this teardown (5679: in a channel close while the old processes
+    # stopped; 6021: at the new agent's first open, the bucket's lock word already set). The installed version
+    # may predate qrexec-agent's own pin (4.3.29, the German golden's, does), and no released version pins
+    # gui-agent or qubesdb-daemon, so the new installer - the only code that runs while they go - confines them
+    # first. Nothing is stopped or killed here, and nothing by name:
+    # the services by their SCM pid, and their direct children (qrexec-wrapper calls, the watchdog's agent).
+    param([string]$Site)
+    try { [Diagnostics.Process]::EnterDebugMode() } catch { }   # an elevated admin needs SeDebugPrivilege for a SYSTEM service
+    $roots = @()
+    foreach ($svc in 'QrexecAgent', 'QdbDaemon', $script:GuiWatchdogSvc) {
+        $sp = (Get-CimInstance Win32_Service -Filter "Name='$svc'" -ErrorAction SilentlyContinue).ProcessId
+        if ($sp) { $roots += [int]$sp }
+    }
+    $ids = @($roots)
+    if ($roots.Count) {
+        $ids += @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+                  Where-Object { $roots -contains [int]$_.ParentProcessId } | ForEach-Object { [int]$_.ProcessId })
+    }
+    $done = @(); $failed = @()
+    foreach ($id in ($ids | Select-Object -Unique)) {
+        try {
+            $p = Get-Process -Id $id -ErrorAction Stop
+            $before = [int64]$p.ProcessorAffinity
+            $p.ProcessorAffinity = [IntPtr]1
+            $p.Refresh()
+            $done += ('{0}/{1} 0x{2:x}->0x{3:x}' -f $p.ProcessName, $id, $before, [int64]$p.ProcessorAffinity)
+        } catch {
+            $failed += "$id ($($_.Exception.Message))"
+        }
+    }
+    Write-Log ("CPUPIN ($Site): " + $(if ($done.Count) { $done -join ', ' } else { 'no running Qubes service process' }))
+    if ($failed.Count) { Write-Log ("CPUPIN ($Site): could NOT confine " + ($failed -join '; ')) 'WARN' }
+}
+
 function Request-GuiAgentExit {
     # Graceful exit of gui-agent.exe: take the process handles FIRST, then signal Global\QGA_SHUTDOWN
     # (a fatal exit request the agent honours by dropping its framebuffer grants), then WAIT ON THE
@@ -1948,6 +1986,7 @@ function Stop-QwtRuntime {
     # replace and re-grants framebuffers under the device work. Set-QubesServiceRecovery re-arms it at the end
     # of the stage.
     [void](Suspend-QubesServiceRecovery -Name $script:GuiWatchdogSvc)   # GUARD:wdstopdisarm
+    Set-QwtRuntimeAffinity -Site 'before the runtime stop'   # every process of the installed version, before any of it goes
     $wdStop = Stop-ServiceProcess -Name $script:GuiWatchdogSvc -TimeoutSec 20
     if ($wdStop.present) { Write-Log "service $script:GuiWatchdogSvc`: $($wdStop.detail)" }
     else { Write-Log "service $script:GuiWatchdogSvc not installed" }
@@ -3631,6 +3670,7 @@ function Invoke-Stage2 {
         if (-not $s) { $prestop[$svc] = 'absent'; continue }
         if ($s.Status -eq 'Stopped') { $prestop[$svc] = 'already-stopped'; continue }
         [void](Suspend-QubesServiceRecovery -Name $svc)   # GUARD:prestopdisarm - the relauncher first (R1)
+        Set-QwtRuntimeAffinity -Site "pre-msiexec, before $svc stops"   # a service the SCM restarted since starts unpinned
         $svcPid = (Get-CimInstance Win32_Service -Filter "Name='$svc'" -ErrorAction SilentlyContinue).ProcessId
         try { Stop-Service -Name $svc -Force -ErrorAction Stop } catch { Write-Log "Stop-Service $svc threw: $($_.Exception.Message)" 'WARN' }
         $t0 = Get-Date; $done = $false
