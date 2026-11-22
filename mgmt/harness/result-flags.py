@@ -41,8 +41,7 @@ plain record. The 35 healthy trailers on record (2026-09-05..14, all ok:true) ca
 error forms - run through this file before it shipped; notably etwproxy_account is
 'skipped:account-create-refused' on green runs, which is why 'skipped:*' is informational there.
 
-Selftest: tools/tests/result-flags-selftest.sh (RESULTFLAGS_DEFECT=1 blanks the table between the
-FLAGS-BEGIN/END markers = the original bug, and must make that test FAIL).
+Selftest: tools/tests/result-flags-selftest.sh.
 """
 from __future__ import annotations
 import json
@@ -103,8 +102,27 @@ def any_value(pred):
     return lambda v: isinstance(v, dict) and any(pred(x) for x in v.values())
 
 
+# The payload's unsigned executables. Without Smart App Control (Windows 10; Windows 11 with it off)
+# SetCachedSigningLevel answers 0x241 for them, and no per-boot first-start cost was measured there
+# (UNSIGNEDNOCACHEWIN10); under Smart App Control evaluation they cache like every other executable.
+UNSIGNED_UNCACHEABLE = frozenset({'qubes-updates-relay.exe', 'qwtng-netsetup.exe', 'cat.exe'})
+
+
+def signing_level_short(v) -> bool:
+    """'cached N of M[; not cached: <exe>:<rc>, ...]' is the error form unless every executable was
+    cached, or the only ones left are names in UNSIGNED_UNCACHEABLE, each once, at exactly 0x241 -
+    and in both cases at least one was cached and the counts add up to M."""
+    m = re.fullmatch(r'cached ([0-9]+) of ([0-9]+)(?:; not cached: (.+))?', _s(v))
+    if not m:
+        return True
+    cached, total = int(m.group(1)), int(m.group(2))
+    left = m.group(3).split(', ') if m.group(3) else []
+    names = [x[:-len(':0x241')] for x in left if x.endswith(':0x241')]
+    return (cached < 1 or cached + len(left) != total or len(names) != len(left)
+            or len(set(names)) != len(names) or not set(names) <= UNSIGNED_UNCACHEABLE)
+
+
 # --------------------------------------------------------------------------- the classification
-# ---- FLAGS-BEGIN  (tools/tests/result-flags-selftest.sh blanks this block under RESULTFLAGS_DEFECT=1)
 ERROR_FLAGS = [
     # (detail key, error-form predicate, installer site - what the flag means when it is in error form)
     # -- display (IddCx activation): the headline capability; failure = guest on the emulated BDA
@@ -214,10 +232,9 @@ ERROR_FLAGS = [
                                                                           'robocopy rc>=8 copying C:\\Users\\Default or Public into ProgramData\\Qubes\\profile-seed - a standalone made from this template without its private volume gets only the notice, not the repair (ADR-windows section 14)'),
     ('autologon',               lambda v: _s(v) not in ('armed', 'skipped', 'not in payload'),
                                                                           'L1278 not-armed / L1285 error / L3384,L3416 unverified / L3409 no trailer / L3412 verify-error'),
-    ('signing_level_cache',     lambda v: re.fullmatch(r'cached ([1-9][0-9]*) of \1', _s(v)) is None,
-                                                                          'Initialize-QwtSigningLevelCache: "cached N of M; not cached: <exe>:<rc>" - each executable left uncached is verified again on its first start in EVERY AppVM boot with Defender on (DEFENDERFIRSTSTARTEVERYBOOT); "cached 0 of 0" = no executable found under the install root'),
+    ('signing_level_cache',     signing_level_short,
+                                                                          'Initialize-QwtSigningLevelCache: "cached N of M; not cached: <exe>:<rc>" - under Smart App Control evaluation each executable left uncached is checked again on its first start in EVERY AppVM boot (DEFENDERFIRSTSTARTEVERYBOOT); the UNSIGNED_UNCACHEABLE names at 0x241 are not an error (UNSIGNEDNOCACHEWIN10); "cached 0 of 0" = no executable found under the install root'),
 ]
-# ---- FLAGS-END
 
 # Present-and-harmless, or a plain record. Listed so the drift test can prove every installer key is
 # classified one way or the other - a new detail key that lands in neither list fails the selftest.

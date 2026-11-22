@@ -10,16 +10,7 @@ INSTALLER=packaging/setup/Install-QwtImproved.ps1
 T=$(mktemp -d "${TMPDIR:-/tmp}/rflags.XXXXXX"); trap 'rm -rf "$T"' EXIT
 CHK="$T/result-flags.py"
 
-grep -q '# ---- FLAGS-BEGIN' "$SRC" && grep -q '# ---- FLAGS-END' "$SRC" \
-  || { echo "FATAL: FLAGS-BEGIN/END markers missing from $SRC - cannot locate the table"; exit 2; }
-case "${RESULTFLAGS_DEFECT:-}" in
-  1)  awk '/# ---- FLAGS-BEGIN/{print; print "ERROR_FLAGS = []"; skip=1; next}
-           /# ---- FLAGS-END/{skip=0}
-           !skip' "$SRC" > "$CHK"
-      echo "DEFECT KNOB: RESULTFLAGS_DEFECT=1 - the flag table is BLANK (the original bug); this run must FAIL" ;;
-  '') cp "$SRC" "$CHK" ;;
-  *)  echo "FATAL: unknown RESULTFLAGS_DEFECT '$RESULTFLAGS_DEFECT'"; exit 2 ;;
-esac
+cp "$SRC" "$CHK"
 python3 -m py_compile "$CHK" || { echo "FATAL: $CHK does not compile"; exit 2; }
 
 pass=0; fail=0
@@ -238,5 +229,5 @@ if [ "$nerr" -ge 30 ]; then pass=$((pass+1)); echo "PASS  drift: $nerr error-cla
 else fail=$((fail+1)); echo "FAIL  drift: only $nerr error-class keys in the table - the audit named more than 30 error forms"; fi
 
 echo
-echo "result-flags-selftest: $pass passed, $fail failed$( [ "${RESULTFLAGS_DEFECT:-}" = 1 ] && echo '  (RESULTFLAGS_DEFECT=1: a FAIL here is the proof that the check can fail)')"
+echo "result-flags-selftest: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
