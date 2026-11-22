@@ -401,4 +401,21 @@ log "VERDICT, from the artifacts:"
 python3 tools/campaign-state.py 2>&1 | tail -20 | tee -a "$OUT/chain.log"
 for rc in "$crc" "$grc" "$srd"; do [ "$rc" != 0 ] && exit "$rc"; done
 log "FULL ACCEPTANCE COMPLETE: every step passed and the receipt satisfies the gate"
+# ---- 8. a PASSED campaign leaves no subjects behind ------------------------------------------------
+# matrix.sh keeps its ckpt-<vm>-installed parks "until the campaign is DONE" (later cells unpark them)
+# and every cell and suite leaves its subject, but only THIS script knows the campaign is done - and
+# until 2026-11-23 it removed nothing, so every campaign, passed or not, left them all and the next
+# preflight refused on pool space: attempt 1 of build-4.3.46.1455 stopped on "only 75 GB free ... SAFE
+# THRESHOLD is 90 GB" over 16 leftovers. A FAILED campaign keeps them: they are its evidence, and every
+# failure exits above this line. rig-cleanup.sh derives what it protects (goldens, entry fixtures,
+# templates) and leaves a running guest alone; a cleanup that fails is reported and does not turn a
+# passed acceptance into a failed one. Through rl_fg like steps 2 and 3: 16 removals took 104 s
+# (2026-11-23 23:25:41-23:27:23Z), and a cancel must not queue behind them.
+cleanup_step(){ mgmt/harness/rig-cleanup.sh --go > "$OUT/rig-cleanup.out" 2>&1; }
+if settle_the_rig "the post-campaign cleanup" "rig-cleanup.sh"; then
+  rl_fg cleanup_step; clrc=$?
+  log "  rig-cleanup --go rc=$clrc: $(tail -1 "$OUT/rig-cleanup.out" | cut -c1-200)"
+else
+  log "  [WARN] the rig did not settle - nothing removed; run mgmt/harness/rig-cleanup.sh --go once it has"
+fi
 exit 0

@@ -1612,7 +1612,7 @@ park_installed(){ # $1=vm $2=label - halt and park the just-installed subject as
     qvm-remove -f "$ck" >/dev/null 2>&1 || { no "$lbl: stale park $ck exists and cannot be removed"; return 1; }
   fi
   if ./mgmt/harness/checkpoint.sh park "$vm" installed >>"$R" 2>&1; then
-    ok "$lbl: installed state parked ($ck) - remove at campaign end: qvm-remove $ck"
+    ok "$lbl: installed state parked ($ck) - removed after a passed campaign (campaign-full.sh step 8)"
   else
     no "$lbl: park failed - snapshot cells will refuse until a park exists"
     return 1
@@ -3994,8 +3994,10 @@ echo "=== MATRIX: $PASS passed, $FAIL failed ===" | tee -a "$R"
 _MX_FINISHED=1   # the normal footer was reached; the exit trap writes it into matrix-result.json
 # Parks are campaign-scoped: pool cost grows as content diverges, so remove them when the
 # campaign is DONE (not per cell - later cells unpark them). NEVER park or remove a golden.
+# The matrix is not the campaign's end (feature tests and gate-remainder follow), so the removal is
+# campaign-full.sh's step 8, after a PASSED campaign; a failed one keeps them as its evidence.
 parks=$(qvm-ls --raw-data --fields NAME 2>/dev/null | grep '^ckpt-' | tr '\n' ' ')
-[ -n "${parks// /}" ] && say "parks on the rig (remove at campaign end with qvm-remove): $parks"
+[ -n "${parks// /}" ] && say "parks on the rig (campaign-full.sh removes them after a passed campaign; else mgmt/harness/rig-cleanup.sh --go): $parks"
 echo "=== DONE ===" | tee -a "$R"
 # A failed or aborted cell fails the WHOLE invocation, mechanically. The 2026-08-30 campaign was
 # reported complete over a failing matrix because the summary was prose and the exit code said
