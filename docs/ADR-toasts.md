@@ -681,5 +681,7 @@ the shell queues banners instead of stacking them is the case to explain, not th
 * §10's hold and the pre-emption gate assume one toast per banner window: a newer record "queued behind this shown
   banner ... would paint into this window in place" gates dom0's frames. On a stack the newer card is beside the old one,
   not in its place, and gating it holds the stack. Not yet measured on a stack.
-* The toast-hold harness's owed-banner wait and the grader's comments state one banner at a time as the shell's
-  behaviour; on win11r the shell queued in every run, and why it queues there and stacks on win11-nfy is not measured.
+* The toast-hold harness's owed-banner wait and the grader's comments stated one banner at a time as the shell's
+  behaviour. Measured since: win11r STACKS persistent (reminder) toasts 15-19 s apart - 2 then 3 cards, crop-before-map
+  2026-11-24 - and the same agent gated every grow as a swap and cut the 2-card stack to its oldest card. Toast-hold's
+  default toasts 0.85 s apart queued; whether the scenario or the interval decides is not measured.
