@@ -492,11 +492,32 @@ wait_banner_gone(){ # <deadline s>: 0 none visible / 1 terminal / 2 deadline
     sleep 3
   done
 }
-record_wait(){ # <labels csv> <settled rc> <cycle rc>
-  python3 - "$OUT/waits.jsonl" "$1" "$2" "$3" "$BANNER_SEEN" <<'PY'
+# wait_owed_banners <bridge mark> <agent mark> <deadline s>: the shell shows one toast banner at a time, so two toasts
+# the bridge left to the guest banner in one scenario (S3iii) queue - the second gets its banner only after the first's
+# closes, 23.85 s after it on 2026-11-22 - and dismiss_toasts clears the notification history, a queued toast with it.
+# On 2026-11-23 the cycle wait ended 5 s after the first banner closed, the clear followed, and id=15 never had a banner
+# (NO-BANNER: the row measured nothing). With two or more window-path ids, wait until the agent logged a show/suppress
+# decision naming each. 0 all decided, or fewer than two owed / 2 deadline / 1 terminal. Sets OWED_UNDECIDED.
+wait_owed_banners(){
+  local bm=$1 am=$2 dl=$3 t0=$SECONDS owed dec
+  OWED_UNDECIDED=
+  owed=$(bridge_grep "$bm" "skip id=[0-9]+ aumid=[^ ]+ title='THT-[^']*' \(window path" | sed -n 's/.*skip id=\([0-9]*\) .*/\1/p' | sort -un)
+  [ "$(grep -c . <<<"$owed")" -ge 2 ] || return 0
+  while :; do
+    dec=$(agent_grep "$am" "QGATOASTHOLD hwnd=0x[0-9a-f]+ state=(show|suppress) ident=[0-9a-f]+ id=[0-9]+ " | sed -n 's/.* ident=[0-9a-f]* id=\([0-9]*\) .*/\1/p' | sort -un)
+    OWED_UNDECIDED=$(grep -vxF -f <(printf '%s\n' $dec) <<<"$owed" | tr '\n' ' '); OWED_UNDECIDED=${OWED_UNDECIDED% }
+    [ -z "$OWED_UNDECIDED" ] && { log "  owed banners: a decision for each window-path toast ($(tr '\n' ' ' <<<"$owed")) at t+$((SECONDS - t0))s"; return 0; }
+    [ -z "$dec" ] && { w_alive "$VM" || { log "  owed-banner wait: TERMINAL - guest deaf"; return 1; }; }
+    [ $((SECONDS - t0)) -ge "$dl" ] && { log "  owed-banner wait: DEADLINE ${dl}s, no banner decision for id(s) $OWED_UNDECIDED"; return 2; }
+    sleep 4
+  done
+}
+record_wait(){ # <labels csv> <settled rc> <cycle rc> <owed rc>
+  python3 - "$OUT/waits.jsonl" "$1" "$2" "$3" "$BANNER_SEEN" "$4" "$OWED_UNDECIDED" <<'PY'
 import json, sys
-p, labels, s, c, seen = sys.argv[1:]
-open(p, "a").write(json.dumps({"labels": labels.split(","), "settled_rc": int(s), "cycle_rc": int(c), "guest_banner_seen": seen == "1"}) + "\n")
+p, labels, s, c, seen, o, und = sys.argv[1:]
+open(p, "a").write(json.dumps({"labels": labels.split(","), "settled_rc": int(s), "cycle_rc": int(c), "guest_banner_seen": seen == "1",
+                               "owed_rc": int(o), "owed_undecided": [int(x) for x in und.split()]}) + "\n")
 PY
 }
 # DOM0 RENDER WITNESS for the in-place swap: the agent's QGATOASTSWAP/QGATOASTREPAINT lines are its own claim that dom0
@@ -530,9 +551,10 @@ witness_stop(){ # <tag> <row label>: a cut counts only from a visible desktop (a
 }
 # scenario <labels csv> <mode> <aumids to dismiss csv> <token template>
 scenario(){
-  local labels=$1 mode=$2 dism=$3 tpl=$4 n bm src crc a wtag=
+  local labels=$1 mode=$2 dism=$3 tpl=$4 n bm am src crc orc a wtag=
   n=$(awk -F, '{print NF}' <<<"$labels")
   bm=$(th_bmark); [ -n "$bm" ] || { verdict "$labels" "INSTRUMENT could not read the bridge.log line count before firing"; return; }
+  am=$(th_amark); [ -n "$am" ] || { verdict "$labels" "INSTRUMENT could not read the agent log line count before firing"; return; }
   log "--- $labels ($mode): firing $n toast(s)"
   [ "$labels" = "S3iii-1,S3iii-2" ] && wtag=s3iii
   [ -n "$wtag" ] && witness_start "$wtag"
@@ -541,8 +563,9 @@ scenario(){
   fi
   wait_settled "$n" "$bm" 90; src=$?
   wait_banner_cycle 25; crc=$?
+  wait_owed_banners "$bm" "$am" 60; orc=$?
   [ -n "$wtag" ] && witness_stop "$wtag" "${labels%%-*}-W"
-  record_wait "$labels" "$src" "$crc"
+  record_wait "$labels" "$src" "$crc" "$orc"
   IFS=, read -ra DA <<<"$dism"
   for a in "${DA[@]}"; do dismiss_toasts "$a"; done
   wait_banner_gone 30 || log "  banner still visible after dismissing $dism (recorded; the grade reads the logs)"

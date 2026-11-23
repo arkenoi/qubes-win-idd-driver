@@ -16,7 +16,9 @@ nothing lost; an occasional ~3 s delay on a first toast is fine, a flash is not)
   DOUBLE       delivered AND the banner was mapped at any time while this toast's content was displayed - a
                full double or a flash (mapped when the content arrived in place, unmapped afterwards).
   LOST         neither delivered nor mapped, with evidence that a banner existed (the agent examined one for this
-               toast, or the harness saw the shell's banner window visible in the guest during the scenario).
+               toast, or the harness saw the shell's banner window visible in the guest during the scenario). A toast
+               the agent logged queued behind another's banner is LOST only when the harness's owed-banner wait expired
+               with it undecided (waits.jsonl owed_rc=2); queued and cleared earlier stays NO-BANNER.
   NO-BANNER    neither delivered nor mapped and NO evidence a banner ever existed: the stimulus produced no
                banner (banners off for that app, do-not-disturb, an unsuitable AUMID). Ungraded, never a PASS.
   Non-seamless (the agent publishes Seamless=0; the bridge forwards nothing): OK-WINDOW-NS when the bridge took the
@@ -981,6 +983,13 @@ class Grader:
                 # this toast still queued behind that banner as it was destroyed, nothing shows a banner for THIS one.
                 q = next((e for e in self.agent if e.kind == "QUEUED" and e.kv.get("id") == nid
                           and e.t >= t0 - dt.timedelta(seconds=RECORD_SLACK_S)), None)
+                # Queued is ungraded only while the harness may have cleared it before the shell's turn: when the owed-banner
+                # wait ran to its deadline with this id undecided, the toast had its chance before the clear and got no banner.
+                w = next((w for w in self.waits if label in (w.get("labels") or []) and "owed_rc" in w), None)
+                if q and w and w["owed_rc"] == 2 and str(nid) in [str(x) for x in w.get("owed_undecided") or []]:
+                    return "LOST", (f"queued behind id={q.kv['behind']} when that banner (hwnd={q.hwnd}) was destroyed "
+                                    f"(QGATOASTQUEUED), and still without a banner decision when the harness's owed-banner wait "
+                                    f"reached its deadline, before the history was cleared (waits.jsonl owed_rc=2)")
                 if q:
                     return "NO-BANNER", (f"never painted: the agent logged id={nid} still queued behind id={q.kv['behind']} when "
                                          f"that banner (hwnd={q.hwnd}) was destroyed (QGATOASTQUEUED) - the banner the probe saw "
