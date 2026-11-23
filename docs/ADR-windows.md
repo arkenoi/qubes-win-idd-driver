@@ -334,9 +334,22 @@ reversed by construction. The tweaks:
 |---|---|---|---|
 | guest title bars stripped (`WS_CAPTION` removed, owner-token helper; keep-managed invariant: `WS_EX_APPWINDOW` verified first) | on, default since 4.3.21 | restored; a window announced in non-seamless is never stripped | `service.hideGuestTitleBar ""` opts out |
 | Windows key blocked (Super presses and Mod4 chords dropped; releases pass) | on | key passes | `service.enableWinKey 1` lets it through (needed for Open-Shell) |
-| guest drop shadows off (DWM `UserPreferencesMask` and the classic `SPI_SETDROPSHADOW`, set via the SESSION token so it works before the shell exists) | off | restored | - |
+| guest drop shadows off (`SPI_SETDROPSHADOW` and its Performance Options mirror, set via the SESSION token so it works before the shell exists) | off | restored: the user's own value, recorded at seamless entry | - |
 | guest-side cursor blanked (one pointer, dom0's) | on | on | - |
 | work area from dom0's `/qubes-workarea`, applied with `SPI_SETWORKAREA`; maximized windows clamped to it | on | - | guest `WorkArea` registry value wins (the inverted precedence) |
+
+**"Restored" is the user's value** (added 2026-11-23, EFFECTSPREFOVERWRITTEN; Jev design 0.86, conf 0.83). Until
+4.3.47 the non-seamless arm wrote shadows ON whatever the user had, the helper also flipped `UserPreferencesMask`
+byte 1 bit 0x04 as "the DWM shadow" (measured: that bit is `SPI_SETSELECTIONFADE`'s; `SPI_SETDROPSHADOW`'s is byte 2
+0x04), and a SYSTEM-side `DisableEffects`/`EnableEffects` step switched the user's live min/max animation (a live set
+from SYSTEM reaches the user's session; measured). Now the session helper keeps a durable record under the user's
+`gui-agent` key, read from the persisted values at the first seamless entry (`EffectsHeld` 1 while it holds them, so a
+boot back into seamless never records the seamless value), and puts it back on leaving. A profile only earlier releases
+ran in (their `ClientAreaAnimation` value, no `EffectsHeld`) gets the shipped restore's values as its record: shadow on,
+selection fade on. The SYSTEM step is gone; `DisableEffects` stays at agent init for the logon desktop's own hive.
+Animation has no row here and gets no tweak. Not covered: a profile only releases from 2026-08-17 to 2026-09-06 ran in;
+a change the user makes inside seamless is replaced by the record on leaving; an uninstall while in seamless leaves
+shadows off.
 
 The set of stripped windows is persisted as indexed registry values and re-adopted at Init, pruned against
 `IsWindow`, so a window stripped by a previous agent instance gets its caption back; exact handles, never a
