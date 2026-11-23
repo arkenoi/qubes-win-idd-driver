@@ -382,6 +382,20 @@ Four decisions, each measured rather than assumed:
   loads on the capture thread because a per-rect lock there was measured as the dominant tail cost of ProtoTrace itself
   (580 ms against 66 ms, FINDINGS 2026-08-12). If no slot is free the banner is unmapped - a loss, which is bad, rather than
   a misattribution, which is worse. That line is deliberately left undeclared in the log-sweep baseline so it surfaces.
+* **The gate holds the window, not only its damage** (added 2026-11-23, findings/issues.md TOASTSWAPBLACKINDOM0; NOT a Jev
+  verdict - design conf 0.36 under the floor - chosen on this section's own "dom0 keeps the frame it has"). The gate dropped
+  only `SendWindowDamageEvent`, so a configure and a rebuilt buffer still went out under it. dom0 answers a resize by moving and
+  resizing its window and repainting it on the X expose from whatever image it has mapped (`xside.c` handle_configure_from_vm
+  -> moveresize_vm_window, process_xevent_expose -> do_shm_update); handle_window_dump maps a buffer without repainting it, and
+  the rebuild's own damage is the one the gate drops. Toast-hold 2026-11-23, build 4.3.47.1459: the shell reshaped a banner
+  364x109 -> 396x43 -> 364x109 under the gate, both rebuilds went out, the last buffer held only rows carried from zeroed ones,
+  and dom0's capture showed a black window in the red frame at the clamped y=1331. So while a banner dom0 has MAPPED is gated,
+  its configure and its buffer rebuild are withheld as well; after the ungate the debt sweep announces the resting geometry,
+  queues the tracking pass that rebuilds a buffer of another size, and the repaint is paid only on a buffer of the live size.
+  An unmapped banner keeps announcing its geometry, because its re-map lands at the last one announced. Cost: for the gate's
+  duration (measured 15 and 78 ms; bound 3 s) dom0 shows the previous toast where it was, not the shell's reshaping of it.
+  Not covered: a swap that ends at another size still gets a rebuilt buffer that holds only carried rows until its first
+  frame. Unproven on the rig when written.
 
 **Cost, measured.** The hold lasts one identity read: median 218 ms, p90 1109 ms, max 4953 ms over 2351 `held_ms` samples in
 the run data - so most holds resolve well inside the 3 s bound, and the max exceeds the "at most 3 s" stated above, which is
