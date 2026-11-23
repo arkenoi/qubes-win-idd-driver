@@ -75,7 +75,7 @@ flowchart TD
 | 13 | A guest whose profiles live on an empty private volume says so, with the remedy | ACCEPTED (Jev 0.75) | 2026-11-15 |
 | 14 | Repairing such a guest: a fresh private volume, then power off | PROPOSED (Jev 0.75) | 2026-11-15 |
 | 15 | A volume extended in dom0 grows inside the guest, as on Linux | ACCEPTED (owner) | 2026-11-15 |
-| 16 | `qubes.WaitForSession` waits for the qube's own qubesdb `/default-user`, as on Linux; a different name from the caller is reported through the existing route | ACCEPTED (owner) | 2026-11-17 |
+| 16 | `qubes.WaitForSession` waits for the qube's own qubesdb `/default-user`, as on Linux; a different name from the caller is reported through the existing route; a signed-in account that does not match never ends the wait - one loud, precise error, and nothing else | ACCEPTED (owner) | 2026-11-17 |
 | 17 | Nothing opens maximized by default | ACCEPTED (owner) | 2026-11-20 |
 
 Status words and the section format are defined in `docs/ADR-README.md`.
@@ -698,7 +698,11 @@ decided above. Growing C: therefore needs that partition moved or removed - not 
 ## 16. `qubes.WaitForSession` waits for the qube's own qubesdb `/default-user`, as on Linux
 
 **Status:** ACCEPTED (owner), 2026-11-17. Built in core-agent 1697352 (`wait-for-logon.c`); measured on a
-guest 2026-11-17 (Evidence).
+guest 2026-11-17 (Evidence). Decision 0 has been in force since core-agent 6251a6b (2026-11-17, shipped in
+4.3.45) but was stated only in the Context below until 2026-11-23, when the owner ordered it recorded here.
+
+**Owner, 2026-11-23:** «we agreed that if default user mismatches, we emit a loud and precise error and that's
+it»; «we should had recorded this in ADR!».
 
 **Owner, 2026-11-17:** «did you implement the plan for matching linux core-agent to read qubesdb entries? or
 was it postponed to SLS work? workflow it in background»; «yes keep in mind multiplexing/combining vchan load
@@ -718,6 +722,15 @@ caller sent. Linux takes it from the qube's own qubesdb and never reads what the
     user="$(qubesdb-read /default-user || echo 'user')"
 
 **Decision.**
+0. **A mismatch is a loud, precise error, and that is all.** The wait returns only for an active session whose
+   account is EXACTLY the name it waits for (the stock `wcscmp`). When the signed-in account is another one,
+   the wait does not end and nothing absorbs the difference: no case-insensitive match, no "any session will
+   do", no fallback to the account that is signed in. The first such session a call sees produces one W line
+   naming both accounts, and one dom0 notification per boot through the existing error route:
+   `default-user-mismatch`, code `QWTUSERMISMATCH`, "App menu entries start nothing in this qube", with the
+   remedy - set the qube's `default_user` in dom0 with `qvm-prefs` to the Windows account's name. core-agent
+   5bf6052, which let any active session end the wait, was reverted by this order (6251a6b). A user who sees
+   menu entries start nothing is told why and what to set; the behaviour itself is decided, not a defect.
 1. `wait-for-logon.exe` reads `/default-user` from the local qubesdb: one `qdb_open`, one `qdb_read`, the same
    trailing CR/LF/space trim the stdin name gets, a UTF-8 to UTF-16 conversion with the windows-utils API.
    Each failure - open failed, key absent or read failed, value empty, conversion failed - is its own E line.
