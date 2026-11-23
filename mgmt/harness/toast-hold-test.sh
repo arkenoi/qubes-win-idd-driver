@@ -492,17 +492,18 @@ wait_banner_gone(){ # <deadline s>: 0 none visible / 1 terminal / 2 deadline
     sleep 3
   done
 }
-# wait_owed_banners <bridge mark> <agent mark> <deadline s>: the shell shows one toast banner at a time, so two toasts
-# the bridge left to the guest banner in one scenario (S3iii) queue - the second gets its banner only after the first's
-# closes, 23.85 s after it on 2026-11-22 - and dismiss_toasts clears the notification history, a queued toast with it.
-# On 2026-11-23 the cycle wait ended 5 s after the first banner closed, the clear followed, and id=15 never had a banner
-# (NO-BANNER: the row measured nothing). With two or more window-path ids, wait until the agent logged a show/suppress
-# decision naming each. 0 all decided, or fewer than two owed / 2 deadline / 1 terminal. Sets OWED_UNDECIDED.
+# wait_owed_banners <bridge mark> <agent mark> <deadline s>: the shell shows one toast banner at a time, so the toasts
+# of a scenario that fires two queue - the second gets its banner only after the first's closes, 23.85 s after it on
+# 2026-11-22 - and dismiss_toasts clears the notification history, a queued toast with it. A bridged toast holds the
+# slot too: its banner is never mapped but stays alive (S3i, 2026-11-23: id=10's for 37 s). That day id=15 (S3iii) and
+# then id=11 (S3i) never had a banner: cleared while queued, NO-BANNER, the row measured nothing. The caller runs this
+# for a scenario that fired two or more toasts; it waits until the agent logged a show/suppress decision naming each
+# window-path toast. 0 all decided, or none owed / 2 deadline / 1 terminal. Sets OWED_UNDECIDED.
 wait_owed_banners(){
   local bm=$1 am=$2 dl=$3 t0=$SECONDS owed dec
   OWED_UNDECIDED=
   owed=$(bridge_grep "$bm" "skip id=[0-9]+ aumid=[^ ]+ title='THT-[^']*' \(window path" | sed -n 's/.*skip id=\([0-9]*\) .*/\1/p' | sort -un)
-  [ "$(grep -c . <<<"$owed")" -ge 2 ] || return 0
+  [ -n "$owed" ] || return 0
   while :; do
     dec=$(agent_grep "$am" "QGATOASTHOLD hwnd=0x[0-9a-f]+ state=(show|suppress) ident=[0-9a-f]+ id=[0-9]+ " | sed -n 's/.* ident=[0-9a-f]* id=\([0-9]*\) .*/\1/p' | sort -un)
     OWED_UNDECIDED=$(grep -vxF -f <(printf '%s\n' $dec) <<<"$owed" | tr '\n' ' '); OWED_UNDECIDED=${OWED_UNDECIDED% }
@@ -563,7 +564,7 @@ scenario(){
   fi
   wait_settled "$n" "$bm" 90; src=$?
   wait_banner_cycle 25; crc=$?
-  wait_owed_banners "$bm" "$am" 60; orc=$?
+  orc=0; [ "$n" -ge 2 ] && { wait_owed_banners "$bm" "$am" 60; orc=$?; }
   [ -n "$wtag" ] && witness_stop "$wtag" "${labels%%-*}-W"
   record_wait "$labels" "$src" "$crc" "$orc"
   IFS=, read -ra DA <<<"$dism"
