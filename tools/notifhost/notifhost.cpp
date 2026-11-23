@@ -700,6 +700,12 @@ static void BannerRestoreAll(std::vector<std::wstring>* restoredAumids = nullptr
 enum class NotifyKind { Error, Warning, Info };
 static const uint32_t kInfoExpireMs = 20000;
 static const uint32_t kWarningExpireMs = 60000;
+// The kind as the one-shot's own command line spells it - the parse is wmain's `--severity`. Every relaunch that carries a
+// notice to another instance appends it (the handoff's task, the deferral drain): an instance given none sends an error.
+static const wchar_t* KindName(NotifyKind kind)
+{ return kind == NotifyKind::Info ? L"info" : kind == NotifyKind::Warning ? L"warning" : L"error"; }
+static const wchar_t* SeverityArg(NotifyKind kind)
+{ return kind == NotifyKind::Info ? L" --severity info" : kind == NotifyKind::Warning ? L" --severity warning" : L""; }
 
 // Message { id: u64, Notification::V1 { ... } }, framed with a u32 LE length prefix. `actions` is the
 // freedesktop list as alternating key, label (toastactions.h ToastActFlatten); empty = no actions, the
@@ -3627,17 +3633,25 @@ static bool TokenIsElevatedHalf()
     return type == TokenElevationTypeFull;
 }
 
-static bool NotifyHandoffToSession(std::wstring const& summary, std::wstring const& body, NotifyKind kind)
+// *why: on every false return, the reason this process did not hand the notice off - the deferral line quotes it, so a
+// deferred notice says which of these left it without a route rather than assuming the first.
+static bool NotifyHandoffToSession(std::wstring const& summary, std::wstring const& body, NotifyKind kind,
+                                   const wchar_t** why)
 {
     DWORD mySession = 0;
     ProcessIdToSessionId(GetCurrentProcessId(), &mySession);
     DWORD active = WTSGetActiveConsoleSessionId();
-    if (active == 0xFFFFFFFF) { BLogW(L"NOTIFY handoff: no active console session - this message reaches nobody"); return false; }
+    if (active == 0xFFFFFFFF)
+    { BLogW(L"NOTIFY handoff: no active console session - this message reaches nobody"); *why = L"no active console session"; return false; }
 
     wchar_t* user = nullptr; DWORD userLen = 0;
     if (!WTSQuerySessionInformationW(WTS_CURRENT_SERVER_HANDLE, active, WTSUserName, &user, &userLen)
         || !user || !*user)
-    { if (user) WTSFreeMemory(user); BLogW(L"NOTIFY handoff: no user in session %lu - this message reaches nobody", active); return false; }
+    {
+        if (user) WTSFreeMemory(user);
+        BLogW(L"NOTIFY handoff: no user in session %lu - this message reaches nobody", active);
+        *why = L"no user in the console session"; return false;
+    }
     std::wstring who(user); WTSFreeMemory(user);
 
     // THE TEST IS THE ACCOUNT, NOT THE SESSION - and getting that wrong is why the first version of
@@ -3655,9 +3669,10 @@ static bool NotifyHandoffToSession(std::wstring const& summary, std::wstring con
     // So: hand off whenever this process is not already running AS the console user, whatever
     // session it is in.
     wchar_t me[256] = { 0 }; DWORD meLen = RTL_NUMBER_OF(me);
-    if (!GetUserNameW(me, &meLen)) { BLogE(L"NOTIFY handoff: cannot read own user (%lu) - handoff abandoned", GetLastError()); return false; }
+    if (!GetUserNameW(me, &meLen))
+    { BLogE(L"NOTIFY handoff: cannot read own user (%lu) - handoff abandoned", GetLastError()); *why = L"own user unreadable"; return false; }
     if (_wcsicmp(me, who.c_str()) == 0 && active == mySession && !TokenIsElevatedHalf())
-        return false;                                 // the console user, on the token the relay gets: send inline
+    { *why = L"this process is the console user, so it sends inline"; return false; }   // on the token the relay gets
 
     // Same UTF-16LE + BOM notify file the inline path reads; deleted by the reader.
     // THE PID IS PART OF THE NAME, as it already is for the sibling deferred- queue
@@ -3674,7 +3689,7 @@ static bool NotifyHandoffToSession(std::wstring const& summary, std::wstring con
     std::vector<BYTE> raw; raw.push_back(0xFF); raw.push_back(0xFE);
     raw.insert(raw.end(), (const BYTE*)text.data(), (const BYTE*)text.data() + text.size() * sizeof(wchar_t));
     if (!WriteSmallForSession(file, raw.data(), (DWORD)raw.size()))
-    { BLogE(L"NOTIFY handoff: cannot write %s", file.c_str()); return false; }
+    { BLogE(L"NOTIFY handoff: cannot write %s", file.c_str()); *why = L"the handoff file was not written"; return false; }
 
     wchar_t self[MAX_PATH] = { 0 };
     GetModuleFileNameW(nullptr, self, RTL_NUMBER_OF(self));
@@ -3691,21 +3706,25 @@ static bool NotifyHandoffToSession(std::wstring const& summary, std::wstring con
     wchar_t cmd[MAX_PATH * 3 + 256];
     // THE KIND TRAVELS WITH THE MESSAGE. The relaunched instance reads its kind from its own command line, and one
     // that is given none sends an error, which stays on the user's screen until dismissed.
-    const wchar_t* sev = kind == NotifyKind::Info ? L" --severity info"
-                       : kind == NotifyKind::Warning ? L" --severity warning" : L"";
     swprintf(cmd, RTL_NUMBER_OF(cmd),
              L"schtasks.exe /create /tn %s /tr \"%s --notify-file %s%s\" /sc once /st 00:00 /ru %s /it /f",
-             task.c_str(), shortSelf, shortFile, sev, who.c_str());
+             task.c_str(), shortSelf, shortFile, SeverityArg(kind), who.c_str());
     STARTUPINFOW si = { sizeof(si) }; PROCESS_INFORMATION pi = {};
     if (!CreateProcessW(nullptr, cmd, nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi))
-    { BLogE(L"NOTIFY handoff: schtasks /create failed %lu - this message reaches nobody", GetLastError()); return false; }
+    {
+        BLogE(L"NOTIFY handoff: schtasks /create failed %lu - this message reaches nobody", GetLastError());
+        *why = L"schtasks /create did not start"; return false;
+    }
     WaitForSingleObject(pi.hProcess, 15000);
     CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
 
     swprintf(cmd, RTL_NUMBER_OF(cmd), L"schtasks.exe /run /tn %s", task.c_str());
     STARTUPINFOW si2 = { sizeof(si2) }; PROCESS_INFORMATION pi2 = {};
     if (!CreateProcessW(nullptr, cmd, nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &si2, &pi2))
-    { BLogE(L"NOTIFY handoff: schtasks /run failed %lu - this message reaches nobody", GetLastError()); return false; }
+    {
+        BLogE(L"NOTIFY handoff: schtasks /run failed %lu - this message reaches nobody", GetLastError());
+        *why = L"schtasks /run did not start"; return false;
+    }
     WaitForSingleObject(pi2.hProcess, 15000);
     CloseHandle(pi2.hThread); CloseHandle(pi2.hProcess);
 
@@ -3776,6 +3795,7 @@ static bool NotifyHandoffToSession(std::wstring const& summary, std::wstring con
               L"nobody. file=%s attr=0x%lx short=%s ran-as=%s session=%lu self=%s summary=%s",
               file.c_str(), attr, shortFile, who.c_str(), active, shortSelf, summary.c_str());
         DeleteFileW(file.c_str());   // the reader did not take it; do not leave it to accumulate
+        *why = L"the relaunched instance never read the handoff";
         return false;
     }
 
@@ -3807,18 +3827,32 @@ static bool NotifyHandoffToSession(std::wstring const& summary, std::wstring con
 // `self --notify-file <f>`, the same proven one-shot the handoff and the NotifyErr route use. The
 // reader deletes the file, so a deferred message is sent exactly ONCE - deferral cannot become a
 // double, which would be the same P1 from the other side.
-static bool NotifyDeferWrite(std::wstring const& summary, std::wstring const& body)
+// THE KIND RIDES IN THE NAME (deferred-<tick>-<pid>-<kind>.txt), because the drain relaunches the one-shot from the name
+// alone and the file's text is ReadNotifyFile's summary/body shape, which has no room for it. A name from before the
+// suffix existed drains as an error, which is what it was sent as then.
+static bool NotifyDeferWrite(std::wstring const& summary, std::wstring const& body, NotifyKind kind, const wchar_t* why)
 {
     std::wstring file = StateDir() + L"\\deferred-" + std::to_wstring(GetTickCount64())
-                      + L"-" + std::to_wstring(GetCurrentProcessId()) + L".txt";
+                      + L"-" + std::to_wstring(GetCurrentProcessId()) + L"-" + KindName(kind) + L".txt";
     std::wstring text = summary; if (!body.empty()) { text += L"\n"; text += body; }
     std::vector<BYTE> raw; raw.push_back(0xFF); raw.push_back(0xFE);
     raw.insert(raw.end(), (const BYTE*)text.data(), (const BYTE*)text.data() + text.size() * sizeof(wchar_t));
     if (!WriteSmallForSession(file, raw.data(), (DWORD)raw.size()))
     { BLogE(L"NOTIFY defer: cannot write %s - notification LOST summary=%s", file.c_str(), summary.c_str()); return false; }
-    BLogW(L"NOTIFY deferred: no route yet (no console session, and this process is not the console user) - "
-          L"queued as %s, the session bridge sends it summary=%s", file.c_str(), summary.c_str());
+    BLogW(L"NOTIFY deferred: no route yet (not handed off: %s; no dom0 connection from this process) - "
+          L"queued as %s, the session bridge sends it summary=%s", why, file.c_str(), summary.c_str());
     return true;
+}
+
+// The kind a deferred file's name carries, read with the writer's own KindName so the two cannot drift; no suffix is an error.
+static NotifyKind DeferredKind(std::wstring const& name)
+{
+    for (NotifyKind k : { NotifyKind::Info, NotifyKind::Warning })
+    {
+        const std::wstring tail = std::wstring(L"-") + KindName(k) + L".txt";
+        if (name.size() >= tail.size() && _wcsicmp(name.c_str() + name.size() - tail.size(), tail.c_str()) == 0) return k;
+    }
+    return NotifyKind::Error;
 }
 
 // Called by the session-resident bridge at startup - the one place that reliably HAS a route.
@@ -3840,8 +3874,8 @@ static void NotifyDeferDrain()
     do {
         if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
         std::wstring f = StateDir() + L"\\" + fd.cFileName;
-        wchar_t cmd[MAX_PATH * 2 + 64];
-        swprintf(cmd, RTL_NUMBER_OF(cmd), L"\"%s\" --notify-file \"%s\"", self, f.c_str());
+        wchar_t cmd[MAX_PATH * 2 + 96];
+        swprintf(cmd, RTL_NUMBER_OF(cmd), L"\"%s\" --notify-file \"%s\"%s", self, f.c_str(), SeverityArg(DeferredKind(fd.cFileName)));
         STARTUPINFOW si = { sizeof(si) }; PROCESS_INFORMATION pi = {};
         if (CreateProcessW(nullptr, cmd, nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi))
         {
@@ -3865,7 +3899,8 @@ static void NotifyDeferDrain()
 static int NotifyOnceMain(std::wstring const& summary, std::wstring const& body, NotifyKind kind)
 {
     // SESSION 0 CANNOT DELIVER. Hand off to the interactive session rather than failing there.
-    if (NotifyHandoffToSession(summary, body, kind)) return 0;
+    const wchar_t* why = L"no reason recorded";
+    if (NotifyHandoffToSession(summary, body, kind, &why)) return 0;
 
     ProcessIdToSessionId(GetCurrentProcessId(), &g_mySession);
     InitializeCriticalSection(&g_corrLock);
@@ -3887,7 +3922,7 @@ static int NotifyOnceMain(std::wstring const& summary, std::wstring const& body,
     // ERROR line stays for the case where even the queue cannot be written, because that IS a loss.
     if (!ConnUp())
     {
-        if (NotifyDeferWrite(summary, body)) return 5;   // queued; the session bridge will send it
+        if (NotifyDeferWrite(summary, body, kind, why)) return 5;   // queued; the session bridge will send it
         BLogE(L"NOTIFY one-shot: no connection to dom0 (policy refusal? no dom0 session?) - notification LOST summary=%s", summary.c_str());
         return 3;
     }
