@@ -272,8 +272,14 @@ fucking ugly P1").
   was shown nowhere: a misroute that fails CLOSED, against §3.
 
 Measured 2026-10-04 on retail Windows 11 26300 and Windows 10 19045: ONE ShellExperienceHost banner window
-(`Windows.UI.Core.CoreWindow`, "New notification") serves every toast of the session; the shell shows banners one at a
-time, first in first out, a queued one seconds after its arrival; a new banner arrives either by a collapse-and-grow
+(`Windows.UI.Core.CoreWindow`, "New notification") serves every toast of the session; in that probe the shell showed
+banners one at a time, first in first out, a queued one seconds after its arrival. (2026-11-24: that is ONE probe's
+observation, not how Windows behaves. Its data - scratchpad/toast-banner-probe/ - is gone and its script was never
+committed, so the firing interval and the senders are unknown. It contradicts 2026-09-13 on win11-up: two toasts STACKED
+as two cards in one 364x326 banner window - agent main.c "THE BLACK BAND BETWEEN STACKED TOASTS", fixed in 4.3.30 - and
+was written here without that record. Toast-hold runs on win11r queue; why it stacked then and queues now is NOT
+measured, and a banner that never times out blocks every toast behind it only because it queues -
+TOASTBANNERLOSTONDIRECTPATH.) A new banner arrives either by a collapse-and-grow
 cycle or in place (same rectangle, a burst of location changes). The card's UI Automation tree names it by
 non-localized ids: `NormalToastView` (the card), `SenderName`, `Title` (11) or `TitleText` (10), `MessageText`. So a
 banner is identified by its content, never by its window or by arrival order alone.
