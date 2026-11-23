@@ -396,6 +396,18 @@ Four decisions, each measured rather than assumed:
   duration (measured 15 and 78 ms; bound 3 s) dom0 shows the previous toast where it was, not the shell's reshaping of it.
   Not covered: a swap that ends at another size still gets a rebuilt buffer that holds only carried rows until its first
   frame. Unproven on the rig when written.
+* **A blank frame never enters a painted banner's buffer** (added 2026-11-23, findings/issues.md TOASTSWAPBLACKINDOM0; NOT
+  a Jev verdict - design 0.60 at conf 0.47, cause 0.49 against insufficient 0.46 - chosen on the owner's "no flash" and on
+  redesigning from the acceptance criterion, a black dom0 banner, rather than from the gate's timing). The granted buffer
+  is the image dom0 maps and re-reads on any damage, on the release repaint and on an X expose; the gate withholds none of
+  the copies into it, and the notice that closes it follows the swap's first frame. Toast-hold geo5 on agent ca80ce2: the
+  gate opened 47 ms with no frame dropped and no configure or rebuild, yet dom0's capture between the first toast's and
+  the second's was black, 0 of 37800 pixels lit inside its frame, while the only damages dom0 received were at 225503.853
+  (54 ms before the notice), the release repaint and .971. So once a toast banner's buffer holds painted content, a broker
+  frame that fails `SlicePainted` (the first-map hold's predicate) is consumed and not copied - no damage, dom0 keeps the
+  last painted frame - and `QGATOASTBLANK` names each one. Not covered: a PAINTED first frame of the next toast before the
+  notice (the inherent limit below, now narrowed to it); a high-contrast card that `SlicePainted` reads as black leaves
+  dom0 on the previous frame, logged per frame. Unproven on the rig when written.
 
 **Cost, measured.** The hold lasts one identity read: median 218 ms, p90 1109 ms, max 4953 ms over 2351 `held_ms` samples in
 the run data - so most holds resolve well inside the 3 s bound, and the max exceeds the "at most 3 s" stated above, which is
@@ -411,7 +423,9 @@ A second limit is **inherent and will not be designed away**: the hook event tha
 the paint it reacts to, so the gate can never be shut before the first frame of a swap. The agent has no
 signal that arrives before Windows repaints the shared window - the module's own note says a banner arriving
 in place keeps the same rect, so "the event is the only signal". What the gate removes is the rest of the
-swap, not its first frame, and a swap for which no change notice arrives at all is not covered either. Jev,
+swap, not its first frame, and a swap for which no change notice arrives at all is not covered either. (2026-11-23: a
+first frame that is BLANK no longer reaches dom0 - the frame's own content is judged at the copy, see "A blank frame
+never enters a painted banner's buffer" above; what stays inherent is a first frame painted with the next toast.) Jev,
 asked directly whether the implementation closes the leak, answered 0.58 - above its earlier 0.37 and still
 under the floor, which is the honest reading: narrowed, not eliminated. The gap itself is not measured:
 no guest capture on this disk contains a content swap on a held banner, because those lines only appear on a hold build under
