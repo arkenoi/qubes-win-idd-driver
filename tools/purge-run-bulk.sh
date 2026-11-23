@@ -23,7 +23,11 @@
 #
 #  2. ANYTHING MATCHING *wedge* OR *forensics*. 12.8 MB in 259 files, and it is the one dataset here
 #     that cannot be regenerated on demand: a wedge happens when it happens. Nine episodes between
-#     2026-08-06 and 2026-10-06 are all that exist.
+#     2026-08-06 and 2026-10-06 are all that exist. A wedge's MEMORY IMAGE is the same data under a
+#     name that matches neither word: fetch-wedge-core.sh writes it as <run>/guest.core (2026-11-23:
+#     an 8.6 GB SPIN core of the 11-22 template-update freeze headed this tool's dry-run list). So
+#     *.core is never bulk here; mgmt/harness/drop-core.sh is the one way to delete one, and it
+#     refuses until the vCPU registers are saved beside it.
 #
 #  3. FILES YOUNGER THAN --min-age-min (default 60). A live harness is writing into evidence/ and
 #     its campaign tree the whole time; everything this tool is for is days to weeks old, so an
@@ -75,7 +79,7 @@ BULK=( -name '*.iso' -o -name '*.exe' -o -name '*.rpm' -o -name '*.msi' -o -name
 mapfile -t LOOPFILES < <(losetup -l 2>/dev/null | awk 'NR>1 && $6!=""{print $6}')
 printf 'loop-backed files excluded: %d\n' "${#LOOPFILES[@]}"
 is_excluded(){ local f="$1" x
-  case "$f" in *wedge*|*forensics*) return 0 ;; esac
+  case "$f" in *wedge*|*forensics*|*.core) return 0 ;; esac
   for x in "${LOOPFILES[@]}"; do [ "$f" = "$x" ] && return 0; done
   for x in "${KEEP_PATHS[@]}"; do case "$f" in "$x"|"$x"/*) return 0 ;; esac; done
   return 1; }
