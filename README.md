@@ -21,68 +21,81 @@ Anywhere this README says "stock", it means unmodified upstream QWT 4.2.2 as shi
 
 ## Download
 
-Release **[v4.3.45-agent728ddae](https://github.com/arkenoi/qubes-win-idd-driver/releases/tag/v4.3.45-agent728ddae)** — agent `728ddae`, package `4.3.45`, built from commit `03517f30`. See
-[`docs/RELEASE-NOTES-4.3.45.md`](docs/RELEASE-NOTES-4.3.45.md) for what changed and what was
+Release **[v4.3.46-agenta16865a](https://github.com/arkenoi/qubes-win-idd-driver/releases/tag/v4.3.46-agenta16865a)** — agent `a16865a`, package `4.3.46`, built from commit `240c4cc5`. See
+[`docs/RELEASE-NOTES-4.3.46.md`](docs/RELEASE-NOTES-4.3.46.md) for what changed and what was
 verified.
 
-> **Published with no override, on a CLEAN acceptance record and a met change-scoped gate.** On these
-> exact bytes the full eight-cell matrix ran — clean install, same-version reinstall, in-place upgrade
-> and template→AppVM derivation, on both Windows 10 and Windows 11 — **89 checks passed, 0 failed,
-> 0 invalid**, every cell's log sweep clean. All six feature tests and every remainder suite passed on
-> the first run, with no re-run. **All 19 modules this diff requires were covered**
-> ([`docs/ADR-acceptance.md`](docs/ADR-acceptance.md)).
+> **Published with no override, on a CLEAN acceptance record and a met change-scoped gate.**
+> - On these exact bytes the full eight-cell matrix ran: clean install, same-version reinstall, in-place
+>   upgrade and template→AppVM derivation, on both Windows 10 and Windows 11. **89 checks passed, 0
+>   failed, 0 invalid**, and every cell's log sweep was clean.
+> - All six feature tests and every remainder suite passed. The notification-hold test took five runs,
+>   none of which changed the product.
+> - **All 18 modules this diff requires were covered**
+>   ([`docs/ADR-acceptance.md`](docs/ADR-acceptance.md)).
+>
+> **One known defect ships:** a toast that Windows swaps into a banner already on screen was seen black
+> in dom0. How long it stays black, and whether 4.3.45 does the same, is not yet measured.
 
 **The changes you will notice.**
 
-* **An app menu entry that starts nothing now says why.** dom0 starts a menu entry only once the guest
-  reports that dom0's `default_user` is signed in. On a new qube whose `default_user` was still Qubes'
-  `user` while the Windows account had another name, every entry started nothing, silently. The rule is
-  unchanged, as in stock QWT, but dom0 now gets *"App menu entries start nothing in this qube"*, naming
-  the fix: `qvm-prefs <qube> default_user <account>`, then restart the qube. The guest also reads that
-  name from its own QubesDB, as Linux qubes do.
-* **A StandaloneVM made from a template without its private volume gets a working profile.** Instead of
-  a temporary profile and an Explorer that dies, the boot guard builds the profile store on the new,
-  empty `Q:` from a seed the template keeps, then logs the user back on (measured: 1 s after the
-  sign-out, with a real profile on `Q:`). It writes a disk only when every byte of it reads zero, as
-  Linux does.
-* **`qvm-volume extend` grows the disk inside the guest**, through `qubes.ResizeDisk` while the qube
-  runs and at boot otherwise, for `Q:` and `C:` alike, as on Linux.
+* **Explorer no longer "stops updating" after the Windows key.** On Windows 11 25H2 and later, every
+  window is captured through the capture broker alone: no key pokes, no PrintWindow route, no relay, and
+  no desktop duplication in seamless mode. No key can re-create Explorer's capture or mark it "stopped
+  updating".
+* **The Windows Start menu is an app-menu entry**, **Start Menu**, and opens as one normal window on
+  Windows 10 and 11.
+  - Typing turns it into a framed search view that dom0's keys reach.
+  - A second call, or dom0's close button, closes it.
+  - On Windows 10 it no longer shows inside the window beneath it.
+  - No stale search window stays beside it, and nothing screen-sized flashes in dom0 when you type or
+    close it.
+  - You can bind it to the Windows key in dom0; see
+    [the Windows key and the Start menu](#the-windows-key-and-the-start-menu-in-seamless-mode).
+* **Windows open at the size dom0 gives them.** Nothing opens maximized over the whole guest screen, and
+  Edge's first-run overlay is no longer a black screen-sized window.
+* **A template's first update scan no longer fails `0x8024402C`.** The template gets its updates proxy at
+  install, not at its first update pass, which comes after the sign-in where Windows Update reads it.
+* **Command-line winget works on a template.** The relay serves winget, identified by its image path and
+  package family name, to any host (see [Windows updates](#windows-updates)). Measured: the download took
+  1 s and the install 5 s, where before it failed after 122 s.
 
 Also in this release:
 
-* **On a template the updates proxy stays configured between update passes**, and the relay serves
-  only update processes: the 4.3.44 relay served a renamed `curl` and the user's PowerShell, and this
-  one refused all five non-update callers tried. In every other qube the configuration is removed at
-  boot. This targets the `0x8024402C` a field reporter's template hits; it is not yet shown on that
-  guest.
-* **dom0 notices are short:** a title, one line of what happens next, and a facts line naming the code,
-  the build and the log file.
-* **Smaller fixes:** a toast swapped into a banner already on screen is repainted to dom0; the agent
-  watchdog finds the agent by its own liveness mutex, not by process name; our PowerShell logs no longer
-  lose or tear lines when several processes write at once; the 4.3.44 ring hold after logon is removed.
+* **The UAC prompt's brief full-screen window is withheld** until Windows shows it at dialog size.
+* **The notification bridge starts on a template's first boot after an upgrade.** A helper's
+  registration now waits for Task Scheduler instead of being killed at 15 s and retried, and Defender's
+  cloud hosts bypass the template's proxy, so a new program's first start no longer waits about 8 s.
+* **An AppVM no longer re-verifies each QWT program at its first start in every boot.** Measured: 32-75 ms
+  against 460-1160 ms. Where Smart App Control is off, Windows refuses this for our unsigned programs.
+* **Autologon works for an account with no password.** Every refusal names its Win32 code and cause.
+* **PV console input no longer stops after about 1 KB.** This is not yet measured on a guest.
+* **Shutdown and teardown freezes:** the gui-agent's exit and the QWT services now avoid a pre-existing
+  freeze in stock xenbus, by running their channel work on one CPU. The cause in xenbus is not changed.
 
-The release's new privileged actions: `qubes.ResizeDisk` and the boot guard extend a partition into free
-space after it; on a qube whose profile store is missing, the boot guard partitions and formats an
-all-zero private disk, creates the profile store, signs the temporary session out and sets
-`ForceAutoLogon` for the one logon after it; on a qube that is not a template, the boot guard removes the
-proxy settings our update pass wrote. Everything else it adds is log lines and dom0 notices.
+The release's new privileged actions:
+- Every installed QWT program gets its cached signing level before the install boot ends.
+- The installer pins the running QWT processes to CPU 0 before it stops them.
+- The installer publishes an all-users **Start Menu** shortcut.
+- On a template, the installer writes the updates proxy at install and bypasses it for Defender's cloud
+  hosts. The template's policy turns WinINet's certificate revocation check off and points winget's
+  `DefaultProxy` at the relay; both values are removed in every other class of qube.
+- The relay serves winget to any host.
 
-Everything 4.3.44 and earlier brought is carried forward — among it an uninstall that leaves a guest
-that boots, dialogs and Explorer no longer withheld on a busy Windows 11, Defender definitions left out
-of dom0's updates-available, and Windows' own updates on a StandaloneVM without automatic restarts; see
-the history below.
+Everything 4.3.45 and earlier brought is carried forward; see the history below.
 
-**What was verified, and what was not.** The matrix ran against this exact package: per cell, on each
-OS, 16 clean install, 12 same-version reinstall, 13 in-place upgrade from 4.3.35 and 3 AppVM
-derivation checks. Feature tests in a rig guest matching the reporter's German 25H2 setup passed all 8
-updater gates, drove three dom0 update passes on a TemplateVM, and ran the UAC-on checks, all 8
-passing. **Not proven:** that the proxy change clears `0x8024402C` on the reporter's guest, and a dom0
-menu click through the wait end to end (our rig's policy cannot call it). **Known:** the PV console
-(`qvm-console`) stops answering after about 1 KB of input in one login, typed at any speed - the
-upstream console monitor's 1024-byte pipe to the login shell fills and is never read. `exit` before
-then starts a fresh login; once locked, restarting the guest's `xencons_monitor` service brings it
-back. Full detail in
-[`docs/RELEASE-NOTES-4.3.45.md`](docs/RELEASE-NOTES-4.3.45.md).
+**What was verified, and what was not.**
+- The matrix ran against this exact package: 89 checks across the eight cells.
+- The feature tests passed: updater component, error notifications, crop before map, template update,
+  supervision and UAC on. The template-update and updater tests ran in a rig guest matching the
+  reporter's German 25H2 setup.
+
+**Not proven:**
+- that the template's proxy at install clears `0x8024402C` on the reporter's own guest;
+- the PV console fix on a guest;
+- that a failed scheduled scan stays out of dom0's notices.
+
+Full detail in [`docs/RELEASE-NOTES-4.3.46.md`](docs/RELEASE-NOTES-4.3.46.md).
 
 **On "updates available" reappearing right after an update — this is Windows Defender, and dom0 is telling you the truth.**
 On a freshly updated guest, dom0's updates-available can go back to "available" within a minute of clearing. We chased this as a
@@ -124,15 +137,15 @@ not arise, not that the path was exercised.
 
 | file | use it for |
 |---|---|
-| [`qubes-windows-tools-ng-4.3.45-1.agent728ddae1124a.noarch.rpm`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.45-agent728ddae/qubes-windows-tools-ng-4.3.45-1.agent728ddae1124a.noarch.rpm) | **dom0** — installs the ISO at `/usr/lib/qubes/qubes-windows-tools.iso`, auto-patches `qvm-create-windows-qube` to use it, and runs nothing in dom0 |
-| [`qwt-improved-setup.iso`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.45-agent728ddae/qwt-improved-setup.iso) | attach to a running Windows qube as a CD and run `install.cmd` elevated |
-| [`qubes-tools-4.3.45.exe`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.45-agent728ddae/qubes-tools-4.3.45.exe) | the installer on its own, if you already have a way to get a file into the guest |
-| [`SHA256SUMS.txt`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.45-agent728ddae/SHA256SUMS.txt) | checksums for all of them |
+| [`qubes-windows-tools-ng-4.3.46-1.agenta16865a67f35.noarch.rpm`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.46-agenta16865a/qubes-windows-tools-ng-4.3.46-1.agenta16865a67f35.noarch.rpm) | **dom0** — installs the ISO at `/usr/lib/qubes/qubes-windows-tools.iso`, auto-patches `qvm-create-windows-qube` to use it, and runs nothing in dom0 |
+| [`qwt-improved-setup.iso`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.46-agenta16865a/qwt-improved-setup.iso) | attach to a running Windows qube as a CD and run `install.cmd` elevated |
+| [`qubes-tools-4.3.46.exe`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.46-agenta16865a/qubes-tools-4.3.46.exe) | the installer on its own, if you already have a way to get a file into the guest |
+| [`SHA256SUMS.txt`](https://github.com/arkenoi/qubes-win-idd-driver/releases/download/v4.3.46-agenta16865a/SHA256SUMS.txt) | checksums for all of them |
 
 The dom0 RPM is unsigned, so `qubes-dom0-update` will refuse it; install it directly:
 
 ```
-sudo rpm -i qubes-windows-tools-ng-4.3.45-1.agent728ddae1124a.noarch.rpm
+sudo rpm -i qubes-windows-tools-ng-4.3.46-1.agenta16865a67f35.noarch.rpm
 ```
 
 With the RPM in place, dom0 can attach the media itself — `qvm-start <vm> --install-windows-tools`
@@ -141,15 +154,23 @@ hands the guest exactly this ISO as a CD.
 Upgrading a guest that already runs stock QWT or an older build of this package is a
 plain in-place upgrade — run the installer, it detects the older version and lets the
 MSI replace it in one transaction. Validated end to end for an upgrade **from an older
-build of this package** — 4.3.45's acceptance ran the in-place upgrade cell from 4.3.35 on
-both Windows 10 and Windows 11, **13 checks each passed** and both log sweeps clean, and its tests in
-the reporter's German 25H2 environment upgraded a guest there to the release package. An
+build of this package** — 4.3.46's acceptance ran the in-place upgrade cell from 4.3.35 on
+both Windows 10 and Windows 11, **13 checks each passed** and both cells' reports clean. An
 upgrade from **stock QWT 4.2.2** uses the same unchanged
 MSI machinery but has not been exercised on our testbed since August 2026, because the
 test images themselves carry a newer build.
 
 **Hand-created qube?** Run `qvm-features <qube> vmexec 1` and `qvm-prefs <qube> qrexec_timeout 1800`
 in dom0 (on the template; AppVMs inherit), or the Qubes Update tool fails against it.
+
+**What changed in 4.3.46 — no key pokes and no desktop duplication in seamless mode, Start as a dom0 menu entry, windows open at dom0's size.**
+On Windows 11 25H2 and later every window is captured through the capture broker alone, so no key can
+make Explorer "stop updating". The Windows Start menu is an app-menu entry that opens as a normal window
+on Windows 10 and 11, and can be bound to the Windows key in dom0. Nothing opens maximized over the guest
+screen, and the UAC prompt's brief full-screen window is withheld. A template gets its updates proxy at
+install, so its first scan no longer fails `0x8024402C`, and command-line winget works on it. One known
+defect ships: a toast swapped into a banner already on screen was seen black in dom0. Full story, and
+what was not measured, in [`docs/RELEASE-NOTES-4.3.46.md`](docs/RELEASE-NOTES-4.3.46.md).
 
 **What changed in 4.3.45 — app menus say why they start nothing, a qube made from a template gets its profile, and disks grow.**
 When dom0's `default_user` is not the signed-in Windows account, menu entries still start nothing, as
@@ -384,6 +405,27 @@ menu such as Open-Shell, which is shown like any other window; an install or upg
 publishes no Start Menu entry and removes one an earlier install published. dom0 caches the
 application list, so `qvm-sync-appmenus <vm>` picks up the change.
 
+**Opening one qube's Start menu with the Windows key, if you want it.** Qubes 4.3's dom0 does not bind
+the Windows key on its own (its default shortcuts use only Super+P and Super+Tab), so you can bind it
+to one Windows qube's **Start Menu** entry in dom0's Xfce settings:
+
+1. Open Xfce's keyboard settings in dom0 (`xfce4-keyboard-settings`), go to **Application Shortcuts**,
+   and click **Add**.
+2. As the command, enter the one the qube's Start Menu entry runs, with your qube's name:
+   `qvm-run -q -a --service -- <qube> qubes.StartApp+Start_Menu`
+3. When asked for the shortcut, press and release the Windows key alone.
+
+The key then opens that qube's Start; `qvm-run` starts the qube first if it is not running.
+- Xfce runs a shortcut bound to a bare modifier when the key is released, and is designed so that
+  combinations such as Super+P still work.
+- We have not tried this on a dom0: our test rig has no access to dom0's desktop. The steps follow the
+  sources of Qubes 4.3 and of Xfce 4.18.6, the version Fedora 41 packages; Qubes 4.3's dom0 is built
+  for Fedora 41.
+- As for every menu entry, the qube's `default_user` must name its Windows account. Otherwise nothing
+  opens, and dom0 says why.
+- On a qube with `service.enableWinKey 1` there is no Start Menu entry, so the shortcut has nothing to
+  open.
+
 ### A qube built from a Windows template boots the first time
 
 Attaching a netvm to a Windows guest used to make its first boot install the PV network drivers and
@@ -573,8 +615,19 @@ every retraction: [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
 ## Windows updates
 
 On templates and AppVMs, dom0 drives every pass (Qube Manager); the guest never installs on its own
-(`NoAutoUpdate=1`). A StandaloneVM with its own internet route is the exception, below. All content travels over a qrexec relay that serves an allowlist of Microsoft's update hosts and
-refuses every other host with a final `403` — no netvm, no general egress. Windows Update's own
+(`NoAutoUpdate=1`). A StandaloneVM with its own internet route is the exception, below. All content
+travels over a qrexec relay that serves only update processes, and for them only an allowlist of
+Microsoft's update hosts. It refuses every other host with a final `403`: no netvm, no general egress.
+
+**Command-line winget is served too (since 4.3.46).** The relay identifies winget by both its real
+image path under `WindowsApps` (written only by the AppX deployment service) and its package family
+name, and serves it to any host, so `winget install` works on a template. The template's policy also
+turns WinINet's certificate revocation check off and points winget's `DefaultProxy` at the relay. Both
+values are removed in every other class of qube. Measured on a German 25H2 template with no network
+adapter: before, winget failed after 122 s with `0x80072f19` (revocation) and installed no package;
+with both values, the download took 1 s and the install 5 s.
+
+Windows Update's own
 online search, through the same relay, decides what is offered. How an update is then installed
 depends on what it is:
 

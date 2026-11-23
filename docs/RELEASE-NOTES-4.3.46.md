@@ -60,6 +60,10 @@ normal window.
 - **Fixed while Start opens:** on Windows 11 the search view has no black border and logs no error at each
   opening, and the 26H2 crop keeps the search box and the account bar. On Windows 10, Start no longer shows
   inside the window beneath it, and the search box no longer jumps.
+- **Fixed around the search view.** When Start reopens over the Windows 11 search view, the search window
+  no longer stays mapped beside it: Windows left it visible, with no frames, for 20-28 s. Typing into Start or
+  closing it no longer announces a screen-sized window to dom0 for a moment: a window is now re-judged
+  before its new size is sent.
 - **The agent's main loop no longer spins while Start is open.** No spin has been seen on the rig since.
 
 These changes were proven on fresh 25H2 installs, on 26300, and on Windows 10 upgrades. The border, error
@@ -125,6 +129,14 @@ and Windows 10 fixes were also proven in a full acceptance of an earlier 4.3.46 
 
 ## 5. Also in the package
 
+- **The notification bridge starts on a template's first boot after an upgrade.** Its registration with
+  Task Scheduler could take 15-30 s there: 4 of 8 measured on one German 25H2 template. Our 15 s bound then
+  killed `schtasks` and retried, although the registration had in fact completed. That logged a launch
+  failure and queued a second registration.
+  - A helper's registration now waits for Task Scheduler.
+  - The cause of the delay was Smart App Control's cloud lookup waiting on the template's proxy. It is
+    removed by the Defender bypass in section 4.
+  - Measured on the first boot after the upgrade, on two builds: both helpers registered in 93-125 ms.
 - **Autologon for an account with no password.** Windows answers a blank password with 1327 for such an
   account, and the installer refused every non-zero answer, so autologon was never set up. It is now set up
   for that account. Every refusal names its Win32 code and a cause keyed on it. Measured on Windows 10 with
@@ -184,7 +196,6 @@ fault-injection twin, built from the same commit.
     unchanged since 4.3.45; the capture code beneath it changed (section 1).
   - The owner decided to ship 4.3.46 with this named, and to fix it in the next release.
 - Not shown on the reporter's guest: that section 4 clears `0x8024402C` there (row 47).
-- Not run end to end: a dom0 menu click through `qubes.WaitForSession` (row 54, from 4.3.45).
 - The PV console fix (section 5) is not yet measured on a guest.
 
 ---
