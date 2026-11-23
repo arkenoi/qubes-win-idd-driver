@@ -564,7 +564,7 @@ scenario(){
   fi
   wait_settled "$n" "$bm" 90; src=$?
   wait_banner_cycle 25; crc=$?
-  orc=0; [ "$n" -ge 2 ] && { wait_owed_banners "$bm" "$am" 60; orc=$?; }
+  orc=0; OWED_UNDECIDED=; [ "$n" -ge 2 ] && { wait_owed_banners "$bm" "$am" 60; orc=$?; }
   [ -n "$wtag" ] && witness_stop "$wtag" "${labels%%-*}-W"
   record_wait "$labels" "$src" "$crc" "$orc"
   IFS=, read -ra DA <<<"$dism"
