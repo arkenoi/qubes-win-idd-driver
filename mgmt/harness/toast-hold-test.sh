@@ -492,8 +492,10 @@ wait_banner_gone(){ # <deadline s>: 0 none visible / 1 terminal / 2 deadline
     sleep 3
   done
 }
-# wait_owed_banners <bridge mark> <agent mark> <deadline s>: the shell shows one toast banner at a time, so the toasts
-# of a scenario that fires two queue - the second gets its banner only after the first's closes, 23.85 s after it on
+# wait_owed_banners <bridge mark> <agent mark> <deadline s>: on win11r the shell has queued banners in every run - NOT
+# the norm: toasts STACK as several cards in the one banner window, which is normal and required (owner 2026-11-24,
+# docs/ADR-toasts.md 13); why win11r queues is unmeasured. Queued, the toasts
+# of a scenario that fires two wait - the second gets its banner only after the first's closes, 23.85 s after it on
 # 2026-11-22 - and dismiss_toasts clears the notification history, a queued toast with it. A bridged toast holds the
 # slot too: its banner is never mapped but stays alive (S3i, 2026-11-23: id=10's for 37 s). That day id=15 (S3iii) and
 # then id=11 (S3i) never had a banner: cleared while queued, NO-BANNER, the row measured nothing. The caller runs this

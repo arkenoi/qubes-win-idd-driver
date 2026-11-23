@@ -1598,8 +1598,10 @@ def selftest() -> int:
     g, r, cls = hold_case("S3ii-2", "OK-BRIDGED", preempt_ok)
     check("hold pre-emption before the swap -> OK-BRIDGED", cls == "OK-BRIDGED" and r.startswith("PASS"), r[:140])
 
-    # THE SHARED BANNER WINDOW (measured 2026-10-04 and in run 37499041570, 2026-10-06): the shell shows queued banners one at
-    # a time, FIFO, in ONE window; a second toast arrives in place ~6.8 s after the first. Each toast is graded on its own
+    # THE SHARED BANNER WINDOW (measured 2026-10-04 and in run 37499041570, 2026-10-06): in those runs the shell showed queued
+    # banners one at a time, FIFO, in ONE window; a second toast arrived in place ~6.8 s after the first. Not the norm: toasts
+    # also STACK as several cards in the window, normal and required (owner 2026-11-24, docs/ADR-toasts.md 13), and a stack
+    # is never graded as a swap or a queue. This fixture models the queued case only. Each toast is graded on its own
     # time in the window - from its own held start (decision time minus held_ms) to the next toast's arrival.
     def shared_bridge_then_window(fx):
         s1 = fx.fire("S3i-1", 0)
