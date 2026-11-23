@@ -59,4 +59,9 @@ Latched once at Init. A working component that stops is a failure, not a capabil
 - Mode 1 (boot/logon/shutdown): unconditionally off.
 - Mode 2 (borderless app): only with service.gui-fullscreen 1.
 
+## Toasts
+- **Stacked toasts are NORMAL and REQUIRED.** Owner 2026-11-24: «stacking toasts is NORMAL and REQUIRED and should not
+  be "corrected" or "held"». dom0 shows every card of the guest's stack; nothing holds, gates, unmaps or crops it.
+  docs/ADR-toasts.md 13.
+
 See .claude/skills/ for procedures. See findings/rules.md for incident history.

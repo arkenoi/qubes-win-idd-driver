@@ -81,6 +81,7 @@ flowchart TD
 | 10 | The guest banner is suppressed by not mapping it, never by ShowBanner | ACCEPTED (owner, Jev); built for 4.3.35, guest acceptance owed | 2026-10-04 |
 | 11 | A toast's buttons travel to dom0 as actions, and a dom0 click is carried out in the guest - all of them or none | ACCEPTED (owner, 2026-10-31); shipped - 4.3.36 carries seven fixes to the buttons a forwarded notification carries | 2026-10-31 |
 | 12 | An explicit Deny of notification access stops the bridge by its own reading: it says why and stands down | ACCEPTED (owner, Jev 0.95); not built | 2026-11-13 |
+| 13 | Stacked toasts are normal and required: never corrected, held or cut to one card | ACCEPTED (owner); not built - the card crop and §10's hold contradict it | 2026-11-24 |
 
 Status words and the section format are defined in `docs/ADR-README.md`.
 
@@ -273,7 +274,8 @@ fucking ugly P1").
 
 Measured 2026-10-04 on retail Windows 11 26300 and Windows 10 19045: ONE ShellExperienceHost banner window
 (`Windows.UI.Core.CoreWindow`, "New notification") serves every toast of the session; in that probe the shell showed
-banners one at a time, first in first out, a queued one seconds after its arrival. (2026-11-24: that is ONE probe's
+banners one at a time, first in first out, a queued one seconds after its arrival. (2026-11-24: SUPERSEDED by §13 - stacked
+toasts are normal and required, owner. That is ONE probe's
 observation, not how Windows behaves. Its data - scratchpad/toast-banner-probe/ - is gone and its script was never
 committed, so the firing interval and the senders are unknown. It contradicts 2026-09-13 on win11-up: two toasts STACKED
 as two cards in one 364x326 banner window - agent main.c "THE BLACK BAND BETWEEN STACKED TOASTS", fixed in 4.3.30 - and
@@ -349,6 +351,8 @@ a rect there - the negative-geometry refusal, counted and logged. So the hold ne
 provable by there being a single definition rather than by visiting call sites. On that measurement Jev moved swap-edge
 gating from 0.44 to 0.79, against the 0.44/0.36/0.08 of 2026-10-06.
 
+(§13, 2026-11-24: a STACK is not a swap - its cards are never held or gated; what follows is the reasoning for one toast
+replacing another in place, and it assumed that replacement is the only way a second toast arrives.)
 Why holding frames is the right semantics: Windows toasts reuse ONE banner window, which is why rule 5 unmapped rather than
 leaving toast B's pixels inside the window dom0 was told is toast A. But the pre-emption fires on the mere EXISTENCE of a
 newer unconsumed record - measured 4.47 s before that toast's content arrived - so the cure ran far ahead of the disease and
@@ -652,3 +656,30 @@ awaits. A Force Allow policy does not override the Deny (Jev 0.80). No death rec
 the bridge leaves before it publishes a pid, as the measured policy refusal does. On a guest, no death record
 was written (Evidence). A policy refusal is still left to the access check and records nothing, so the
 agent's 60 s `QGANOTIFNOTREADY` ERROR stays for it (Jev 0.49 against 0.49, no verdict).
+
+## 13. Stacked toasts are normal and required: never corrected, held or cut to one card
+
+**Status.** ACCEPTED (owner, 2026-11-24). Not built: the agent's behaviours listed under Consequences contradict it.
+
+**Context.** When toasts arrive close together, Windows stacks them as several cards in its one banner window, the
+window growing to hold them (2026-09-13 on win11-up: two cards in a 364x326 window; 2026-10-20 to 11-22 on win11-nfy,
+almost daily: the window grows from 396x200 to 396x369, two cards and the transparent gap at y=156). §10 was built on
+"the shell shows banners one at a time, first in first out" - one headless probe of 2026-10-04 whose data was not kept,
+written there without reconciling it with the 2026-09-13 stack. The toast hold, the pre-emption gate, the toast-hold
+harness and the register's stuck-banner analysis all took that sentence as how Windows behaves.
+
+**Decision.** The owner, 2026-11-24: «stacking toasts is NORMAL and REQUIRED and should not be "corrected" or "held"».
+A stack of toast cards is the shell working as designed. dom0 shows the stack the guest shows - every card, at the
+window's full size. Nothing in the agent, the bridge or the harness treats a stack as an error, a swap, a queue or a
+toast "painting into another's window", and nothing holds, gates, unmaps or crops a stack to fewer cards. A guest on which
+the shell queues banners instead of stacking them is the case to explain, not the reference.
+
+**Consequences** (each is a defect against this decision, findings/issues.md TOASTSTACKNOTSHOWN):
+* The card crop picks one card (`toastcrop-pick.h` TcPickLargest, "the single largest qualifying element (toasts)",
+  since 2026-09-06): measured on win11-nfy, the 364x326 two-card buffer is re-cut to 364x157, the lower card only, so
+  dom0 is sent one card of two.
+* §10's hold and the pre-emption gate assume one toast per banner window: a newer record "queued behind this shown
+  banner ... would paint into this window in place" gates dom0's frames. On a stack the newer card is beside the old one,
+  not in its place, and gating it holds the stack. Not yet measured on a stack.
+* The toast-hold harness's owed-banner wait and the grader's comments state one banner at a time as the shell's
+  behaviour; on win11r the shell queued in every run, and why it queues there and stacks on win11-nfy is not measured.
