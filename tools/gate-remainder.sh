@@ -478,7 +478,8 @@ if need toast-hold-test; then
   say "    note: toast-hold S5 (whole-desktop SetGuiMode round trip) is NOT exercised by this gate -"
   say "          it takes over the screen. Run the suite with --nonseamless deliberately for S5a/S5c."
   # THE LEDGER suite_class READS. toast-hold writes an INVALID-INSTRUMENT row there when a GitHub
-  # artifact download fails (2026-11-11: an HTTP 502 was graded `FAIL toast-hold-test`). Emptied before
+  # artifact download fails (2026-11-11: an HTTP 502 was graded `FAIL toast-hold-test`) and on every
+  # INSTRUMENT exit (2026-11-23: a lost agent log was graded the same way). Emptied before
   # EVERY attempt: a row left by the first attempt would grade a product FAIL of the retry as UNCOVERED.
   THL="$WORK/toast-hold-test/verdicts.tsv"; mkdir -p "${THL%/*}"
   rm -f "$THL"; run_it toast-hold-test env TH_LEDGER="$THL" bash mgmt/harness/toast-hold-test.sh --run "$RUN" --os "$OS11"; thrc=$?

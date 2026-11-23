@@ -66,7 +66,10 @@
 #   * the guest's output is DATA: every marker the harness greps for (THC, THF, FIRED method=) is produced by the guest
 #     and never passed on the command line (the a0-lib self-match lesson); patterns travel base64-encoded.
 #   * missing data FAILS: a toast that never FIRED, a bridge that never listed it, a pull whose counts/sha disagree, a
-#     clock probe without its CREATE - each is INSTRUMENT (ungraded, exit 1), never an OK.
+#     clock probe without its CREATE in a log that is not live - each is INSTRUMENT (ungraded, exit 1), never an OK. An
+#     INSTRUMENT exit through finish also writes a ledger row, so the gate files the suite uncovered; an INSTRUMENT verdict
+#     graded at the end (NOT PASSED) does not, and is filed as a product FAIL. A clock probe without its CREATE while
+#     QGAPROTO lines land is the agent's FAIL: the log was live and the agent did not create the window.
 #   * the artefact under test is verified installed: certutil sha256 of the installed gui-agent.exe == the package
 #     MANIFEST's reference_binaries, read AFTER the arming cold boot, before the first fire.
 #   * nothing here lands in the repo: evidence under $TH_OUT (outside the tree), scenario titles are opaque slugs.
@@ -137,6 +140,14 @@ source mgmt/harness/toast-cut-lib.sh                  # cut_toast - the S3iii wi
 
 finish(){ # $1=rc $2...=message; every exit says which exit it took (the EXIT trap tears the tree down)
   local rc=$1; shift
+  # AN INSTRUMENT EXIT IS THIS SUITE SAYING IT COULD NOT MEASURE (header: "INSTRUMENT (ungraded, exit 1)"), so it goes
+  # to the ledger the gate reads, as a refused download does. MEASURED 2026-11-23, build-4.3.46.1455: "INSTRUMENT: no
+  # QGAPROTO CREATE for the probe window 0x60014 within 40 s" wrote no row, suite_class said NONE and the receipt filed
+  # exit 1 as product_fail - over a boot whose log volume failed its writes (STATUS_VERIFY_REQUIRED on the USB stick at
+  # 05:30:00) and whose every boot-started log writer stopped at 05:29:38 (Jev instrument_fail 0.92).
+  case "$1" in INSTRUMENT:*)
+    [ -n "${TH_LEDGER:-}" ] && printf 'TOASTHOLD\tinstrument\tINVALID-INSTRUMENT\t%s\t%s\n' "$(printf '%s' "$*" | tr '\t\n' '  ' | cut -c1-300)" "$OUT" >> "$TH_LEDGER" ;;
+  esac
   log "$*"
   log "evidence: $OUT"
   exit "$rc"
@@ -146,8 +157,8 @@ finish(){ # $1=rc $2...=message; every exit says which exit it took (the EXIT tr
 # with no ledger. MEASURED 2026-11-11, chain of build-4.3.41.1270: `REFUSED: could not download
 # qwt-improved-iso ... HTTP 502: Server Error` from api.github.com was graded `FAIL toast-hold-test`;
 # twelve of fourteen artifact zips of the two runs answered 502 in the minutes after. The row uses
-# failproof's TSV shape (column 3 is the class). Only the downloads take this path: every other
-# refusal here is about the package itself and stays ungraded-as-FAIL, as before.
+# failproof's TSV shape (column 3 is the class). The downloads and the INSTRUMENT exits (finish, above) write a
+# row: every other refusal here is about the package itself and stays ungraded-as-FAIL, as before.
 th_dl_refused(){ # $1=what failed to download, $2=the gh output file
   local why="could not download $1 ($(tail -1 "$2" 2>/dev/null))"
   [ -n "${TH_LEDGER:-}" ] && printf 'TOASTHOLD\tdownload\tINVALID-INSTRUMENT\t%s\t%s\n' "$why" "$OUT" >> "$TH_LEDGER"
@@ -365,6 +376,7 @@ done
 
 # ---- 5. instrument proofs on the live guest ----------------------------------------------------------------------
 # (a) the clock probe: charmap's CREATE ties the agent clock to the guest clock and proves ProtoTrace is on
+am0=$(th_amark)       # the agent log's length before charmap opens: whether lines land after it decides the class below
 thc 90 -Mode sync > "$OUT/sync.txt"
 grep -qa 'THC sync t_start=.* t_seen=.* hwnd=0x' "$OUT/sync.txt" || finish 1 "INSTRUMENT: the clock probe found no charmap window ($(cat "$OUT/sync.txt" | head -c 200))"
 PROBE_HWND=$(sed -n 's/.*hwnd=0x\([0-9a-fA-F]*\).*/\1/p' "$OUT/sync.txt" | head -1)
@@ -374,7 +386,16 @@ while :; do
   [ $((SECONDS - t0)) -ge 40 ] && break
   sleep 4
 done
-[ -n "$probe_create" ] || finish 1 "INSTRUMENT: no QGAPROTO CREATE for the probe window 0x$PROBE_HWND within 40 s - ProtoTrace is not on (or $ALOG is not the live log); MAP lines could never be seen"
+if [ -z "$probe_create" ]; then
+  # NO CREATE HAS TWO CAUSES AND ONLY ONE IS THE INSTRUMENT, and an INSTRUMENT exit is now a ledger row (finish) that
+  # files the suite as uncovered. MEASURED 2026-11-23, build-4.3.46.1455: the agent log stopped at boot+8 s while the
+  # log volume failed its writes - not live, nothing after it could land. The other cause is the agent not creating a
+  # window a user opened. QGAPROTO lines landing after charmap opened prove the log live and ProtoTrace on (a passing
+  # run, 2026-11-22: 13 in these 40 s - 5 CREATE, 4 MAP, 4 DESTROY), so the missing CREATE is then the agent's.
+  [ -n "$am0" ] && agent_grep "$am0" 'QGAPROTO,msg=' | grep -qa . \
+    && finish 1 "FAIL: QGAPROTO lines landed in $ALOG after line $am0, so the log is live with ProtoTrace on, and none is a CREATE for the probe window 0x$PROBE_HWND within 40 s - the agent did not create a window the user opened"
+  finish 1 "INSTRUMENT: no QGAPROTO CREATE for the probe window 0x$PROBE_HWND within 40 s, and no QGAPROTO line landed in $ALOG after line ${am0:-unread} ($(th_amark) lines now) - the log is not live, or ProtoTrace is not on; MAP lines could never be seen"
+fi
 log "clock probe: CREATE for 0x$PROBE_HWND present; $(grep -a 'THC sync' "$OUT/sync.txt" | tr '\n' ' ' | head -c 220)"
 
 # (b) toastfire in the USER session: --print-xml yields payload_sha256 (data), a bogus flag yields NO 'FIRED method='
