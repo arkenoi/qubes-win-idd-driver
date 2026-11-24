@@ -2269,7 +2269,7 @@ static void ShadowClassifyWork(ShadowJob& j)
         // earned only by a clean acquisition + classifier match: corr in {id-ok,
         // sig-unique} on tier 1, corr=ok on tier 2 (design 10.20.2).
         ULONGLONG t0 = GetTickCount64();
-        const char* src = "none";                     // etw-sig|db|none
+        const char* src = "none";                     // etw-sig|listener-id|db|none
         const char* corr = "none";
         const wchar_t* verdict = L"window";           // fail-open default (tier 3)
         std::wstring signals = L"none";
@@ -2313,7 +2313,7 @@ static void ShadowClassifyWork(ShadowJob& j)
                                 // A row-4 toast past its budget: the guest's buttons stay with the user on the window path, and the
                                 // map, once built, serves the next toast.
                                 actSrc = L"budget-exceeded";
-                                BLog(L"ACTIVATOR id=%u aumid=%s: shortcut scan not done within the %llu ms budget, this toast takes the window path",
+                                BLogE(L"ACTIVATOR id=%u aumid=%s: shortcut scan not done within the %llu ms budget, this toast takes the window path",
                                      j.id, j.aumid.c_str(), (ULONGLONG)kToastActRouteLookupBudgetMs);
                             }
                         }
@@ -2331,25 +2331,31 @@ static void ShadowClassifyWork(ShadowJob& j)
                 verdict = L"window";
         };
         const char* etw = EtwTierLookup(j.id, j.aumid, j.creationFt, &sigs);
-        // FlushTimer catch-up (2026-09-06): the agent's session delivers to the proxy on a
-        // 1 s FlushTimer (EtwCtlSessionStart), so a listener/WAL-triggered classify can
-        // outrun the toast's own signal batch (rig p3a T3: com-activator informational
-        // classified src=db in the very second its frames landed). Bounded and
-        // event-paced - sigEvt fires per frame entering the ring - on the WORKER thread
-        // only, so the heartbeat contract holds; worst added cost 2 x 800 ms before the
-        // DB rung serves, comparable to that rung's own WAL retry budget.
-        for (int w = 0; w < 2 && strcmp(etw, "sig-none") == 0 &&
-                        g_etw.state == ETW_STATE_LIVE; w++)
+        // NO WAIT FOR THE SIGNAL. The agent's session delivers to the proxy on a 1 s FlushTimer (etwproxy.c; 1 s is the
+        // platform minimum for a real-time session), so a listener-triggered classify can outrun the toast's own frames:
+        // in today's win11r runs 19 classifications found no signal and the toast's own signal arrived 1-2 s later
+        // (scratchpad/toaststack-1124). The old catch-up (two 800 ms waits on ANY frame) ended within milliseconds on other
+        // apps' trailing frames and handed those toasts to the database correlation. A wait is not the fix (owner
+        // 2026-11-24: "classification errors and timeouts should not happen"; memory no-timeouts-sanctioned-paths-hard-fail:
+        // remove the cause, never bound the wait): the signal only ever supplied the row id, and the listener's own toast
+        // id IS that row id (WinRT; idnum == row_id rig-proven 2026-09-06, and in all 19 cases). So with the tier live and
+        // no signal yet, the same id-keyed targeted read runs on the listener's id (src=listener-id), ownership checked
+        // against the listener aumid as for a signal; its fallback window anchors on the listener's creation time. Both
+        // id and aumid come from WinRT here, so no pipe frame can steer the read.
+        bool listenerKeyed = false;
+        if (strcmp(etw, "sig-none") == 0 && g_etw.state == ETW_STATE_LIVE && j.id != 0)
         {
-            if (g_etw.sigEvt) WaitForSingleObject(g_etw.sigEvt, 800);
-            else Sleep(400);                          // no event: blind but still bounded
-            sigs.clear();
-            etw = EtwTierLookup(j.id, j.aumid, j.creationFt, &sigs);
+            EtwToastRec own{};
+            own.aumid = j.aumid;
+            own.notifIdNum = j.id;
+            own.eventFt = j.creationFt;
+            sigs.assign(1, own);
+            listenerKeyed = true;
         }
-        if (strcmp(etw, "sig-hit") == 0)
+        if (strcmp(etw, "sig-hit") == 0 || listenerKeyed)
         {
-            // A signal EXISTS for this toast: the targeted read answers it - and owns the
-            // outcome. On any non-clean corr (norow, mismatch, ambiguous, db-fail) the
+            // A signal EXISTS for this toast (or the listener's own id stands in for it): the
+            // targeted read answers it - and owns the outcome. On any non-clean corr (norow, mismatch, ambiguous, db-fail) the
             // verdict stays the fail-open window WITHOUT falling to WpnCorrelate: the DB
             // rung is the ETW-DOWN fallback, not a second guess at a row the precise
             // signal-keyed read already failed to pin (rig drill 10.20.5#5 asserts
@@ -2358,7 +2364,7 @@ static void ShadowClassifyWork(ShadowJob& j)
             corr = t.corr;
             if (!t.payload.empty())                   // only on id-ok / sig-unique
             {
-                src = "etw-sig";
+                src = listenerKeyed ? "listener-id" : "etw-sig";
                 j.payloadW = WpnPayloadToW(t.payload);
                 ToastClass k = ClassifyToastXmlBytes(t.payload.data(), t.payload.size());
                 decide(k, strcmp(t.corr, "id-ok") == 0 || strcmp(t.corr, "sig-unique") == 0);
@@ -2378,16 +2384,23 @@ static void ShadowClassifyWork(ShadowJob& j)
         }
         // actions=: what the forward will carry ("default:com,b0:protocol"), "none", or "refused:<why>" (then a
         // row-4 toast is window). activator=: where the sender's toast activator came from, when it was asked.
-        BLog(L"CLASSIFY id=%u src=%hs etw=%hs verdict=%s row_latency=%lums signals=%s corr=%hs actions=%s activator=%s%s%s",
+        // ERROR when the classification failed: no clean acquisition, so the toast takes the fail-open window verdict.
+        // That does not happen in normal operation (owner 2026-11-24) - it is a sign of something going wrong.
+        const bool idRead = strcmp(src, "etw-sig") == 0 || strcmp(src, "listener-id") == 0;
+        const bool clean = (idRead && (strcmp(corr, "id-ok") == 0 || strcmp(corr, "sig-unique") == 0)) ||
+                           (strcmp(src, "db") == 0 && strcmp(corr, "ok") == 0);
+        (clean ? BLog : BLogE)(
+             L"CLASSIFY id=%u src=%hs etw=%hs verdict=%s row_latency=%lums signals=%s corr=%hs actions=%s activator=%s%s%s%s",
              j.id, src, etw, verdict, (DWORD)(GetTickCount64() - t0), signals.c_str(), corr, ToastActSlug(plan).c_str(),
-             actSrc, plan.defaultNote ? L" default-not-carried=" : L"", plan.defaultNote ? plan.defaultNote : L"");
+             actSrc, plan.defaultNote ? L" default-not-carried=" : L"", plan.defaultNote ? plan.defaultNote : L"",
+             clean ? L"" : L" - classification FAILED: no clean payload, fail-open window verdict");
         // Record exactly what was logged, so the route a later poll pass takes is the verdict an
         // operator can read in the log - not a second, separately-derived opinion.
         VerdictStorePut(j.id, (wcscmp(verdict, L"bridge") == 0) ? ToastRouteBridge : ToastRouteWindow, plan, actClsid, lastRow);
     }
     catch (...)
     {
-        BLog(L"CLASSIFY id=%u src=none etw=probe-threw verdict=window row_latency=0ms signals=none corr=probe-threw actions=none activator=not-asked", j.id);
+        BLogE(L"CLASSIFY id=%u src=none etw=probe-threw verdict=window row_latency=0ms signals=none corr=probe-threw actions=none activator=not-asked", j.id);
     }
 }
 
@@ -2504,7 +2517,7 @@ static void ShadowClassify(WinUserNotification const& un, uint32_t id, std::wstr
     }
     catch (...)
     {
-        BLog(L"CLASSIFY id=%u src=none etw=enqueue-threw verdict=window row_latency=0ms signals=none corr=probe-threw", id);
+        BLogE(L"CLASSIFY id=%u src=none etw=enqueue-threw verdict=window row_latency=0ms signals=none corr=probe-threw", id);
     }
 }
 
@@ -4735,7 +4748,7 @@ static int BridgeMain()
                                      listed ? L"allowlisted sender, but the classifier's" : L"classifier",
                                      ve.plan.ok ? L"" : L"; actions ", ve.plan.ok ? L"" : ToastActSlug(ve.plan).c_str());
                             else
-                                BLog(L"skip id=%u aumid=%s title='%s' (window path; no verdict after %d passes)", id, aumid.c_str(), title.c_str(), kVerdictMaxPasses);
+                                BLogE(L"skip id=%u aumid=%s title='%s' (window path; no verdict after %d passes)", id, aumid.c_str(), title.c_str(), kVerdictMaxPasses);
                             continue;
                         }
                         owned.insert(id);
@@ -4748,7 +4761,7 @@ static int BridgeMain()
                         else if (lr == ToastActListingRoute::ForwardBlind)
                         {
                             blind = true;
-                            BLog(L"ALLOWLIST id=%u aumid=%s title='%s' forwarded WITHOUT a verdict after %d passes (the classifier did not answer): "
+                            BLogE(L"ALLOWLIST id=%u aumid=%s title='%s' forwarded WITHOUT a verdict after %d passes (the classifier did not answer): "
                                  L"if this toast carries buttons they are LOST in dom0 - the allowlist is for informational senders only",
                                  id, aumid.c_str(), title.c_str(), kVerdictMaxPasses);
                         }
