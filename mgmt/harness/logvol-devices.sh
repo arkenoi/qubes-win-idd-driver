@@ -75,7 +75,7 @@ if [ -n "$IMAGE" ]; then
   DEV=$(logvol_loop_of "$IMAGE")
   [ -n "$DEV" ] && [ -e "/dev/$DEV" ] \
     || refuse loop "$IMAGE is on NO loop device - the device string names file=/dev/$LOGVOL_FRONTEND and qemu would be asked at domain creation to open a backend that does not exist"
-  say "  loop        /dev/$DEV backs $IMAGE"
+  say "[INFO]   loop        /dev/$DEV backs $IMAGE"
 
   # 5+6 ------------------------------------- ACCESSIBLE and CORRECT, in the one read available here.
   # NOT a read off /dev/$DEV: the loop nodes are root-owned and this qube creates them through
@@ -94,7 +94,7 @@ if [ -n "$IMAGE" ]; then
   [ "$LABEL" = "$LOGVOL_LABEL" ] \
     || refuse volume "$IMAGE is labelled '$LABEL', not '$LOGVOL_LABEL' - the guest resolves this stick by label and would take a different volume, or none"
   CID=$(mcopy -i "$IMAGE" ::/LOGVOL.TAG - 2>/dev/null | sed -n 's/^id=//p' | head -1)
-  say "  volume      readable, label $LABEL${CID:+, LOGVOL.TAG id=$CID}"
+  say "[INFO]   volume      readable, label $LABEL${CID:+, LOGVOL.TAG id=$CID}"
 
   # 7 ------------------------------------------------- the claim, at the frontend the string names.
   # `qvm-device block list` is POLICY-REFUSED from this qube (mgmt/CLAUDE.md); this read is the
@@ -102,7 +102,7 @@ if [ -n "$IMAGE" ]; then
   FE=$(python3 -c "import sys,qubesadmin; a=qubesadmin.Qubes(); print(next((x.options.get('frontend-dev','') for x in a.domains[sys.argv[1]].devices['block'].get_assigned_devices() if sys.argv[2]+'::' in str(x)), ''))" "$VM" "$DEV" 2>/dev/null)
   [ "$FE" = "$LOGVOL_FRONTEND" ] \
     || refuse claim "$VM holds no --required claim for $LOGVOL_HOLDER:$DEV at frontend $LOGVOL_FRONTEND (read back: '${FE:-none}') - the device string would name a frontend the domain never gets"
-  say "  claim       $LOGVOL_HOLDER:$DEV at $FE"
+  say "[INFO]   claim       $LOGVOL_HOLDER:$DEV at $FE"
 fi
 
 # 8 ------------------------------------------------------------------------- the domain MUST be down
@@ -110,7 +110,7 @@ ST=$(qvm-ls --raw-data --fields STATE "$VM" 2>/dev/null | tr -d '\n')
 [ -n "$ST" ] || refuse domain "cannot read the power state of $VM"
 [ "$ST" = Halted ] \
   || refuse domain "$VM is $ST - qemu-extra-args is read at DOMAIN CREATION and nowhere else, so writing it now would change nothing this guest can see while telling every later reader it had changed (campaign 40134888669 aborted on exactly that)"
-say "  domain      Halted"
+say "[INFO]   domain      Halted"
 
 # ---------------------------------------------------------------------------------------- the write
 WANT=$(logvol_devices_for "$PHASE") || refuse phase "the declaration for '$PHASE' could not be composed"
@@ -126,5 +126,5 @@ else
     declared: $WANT
     read back: $GOT"
 fi
-say "  readback    byte-identical to the declaration for '$PHASE'"
-say "APPLIED phase '$PHASE' to $VM"
+say "[INFO]   readback    byte-identical to the declaration for '$PHASE'"
+say "[INFO] APPLIED phase '$PHASE' to $VM"
