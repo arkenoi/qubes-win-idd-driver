@@ -72,11 +72,11 @@ function Walk($e, $depth) {
     try {
         $b = $e.Current.BoundingRectangle
         if ($b.Width -gt 0 -and $b.Height -gt 0) {
-            Write-Output ("{0}{1,-28} cls={2,-24} rect=({3},{4}) {5}x{6}  insets L={7} T={8} R={9} B={10}" -f `
+            Write-Output ("{0}{1,-28} cls={2,-24} aid={11,-22} rect=({3},{4}) {5}x{6}  insets L={7} T={8} R={9} B={10}" -f `
                 ('  ' * $depth), $e.Current.Name.PadRight(0).Substring(0, [Math]::Min(26, $e.Current.Name.Length)),
                 $e.Current.ClassName, [int]$b.Left, [int]$b.Top, [int]$b.Width, [int]$b.Height,
                 ([int]$b.Left - $r.Left), ([int]$b.Top - $r.Top),
-                ($r.Right - [int]($b.Left + $b.Width)), ($r.Bottom - [int]($b.Top + $b.Height)))
+                ($r.Right - [int]($b.Left + $b.Width)), ($r.Bottom - [int]($b.Top + $b.Height)), $e.Current.AutomationId)
         }
     } catch { Write-Output ("{0}<error reading element>" -f ('  ' * $depth)) }
 
