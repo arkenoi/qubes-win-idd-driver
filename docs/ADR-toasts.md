@@ -659,7 +659,11 @@ agent's 60 s `QGANOTIFNOTREADY` ERROR stays for it (Jev 0.49 against 0.49, no ve
 - Owner, 2026-11-24: «dom0 shows every card in order of appearance»
 - Owner, 2026-11-24: «combining is allowed for non-bridged toasts. it is not allowed for bridged bubbles.»
 - Owner, 2026-09-13: «no doubles»
+- Owner, 2026-11-24: «the black band. we do not want it COMPLETELY gone, just make it 2 pixels high»
 
 §10's "the shell shows banners one at a time, first in first out" is withdrawn. So are the two decisions built on it,
 which hold a toast back because another toast is on screen: §10 rule 5 (pre-emption) and the swap-edge gating that
 replaced it.
+
+Between two stacked cards, dom0 shows a black band 2 pixels high. The rest of the transparent gap is filled with the
+card's own background.
