@@ -284,6 +284,8 @@ banner is identified by its content, never by its window or by arrival order alo
 1. The agent keeps each toast's banner window unmapped in dom0 until THAT toast's verdict is known: `bridge` (or
    `forwarded`) - never mapped; `window` - mapped at once; none within 3 s - mapped, and the fall-back is logged loudly
    (`QGATOASTHOLDLATE`). A double is better than a loss; neither is the target.
+   **WITHDRAWN by §13** (2026-11-24): the 3 s fall-back that maps a banner whatever dom0 shows, and the ranking. The
+   ranking was never the owner's; the owner's words were «make sure nothing is lost, but no doubles» (2026-09-13).
 2. The bridge no longer writes `ShowBanner` (a sweep still restores markers older versions left). It publishes one
    record per listed notification - content identity hashes (sender, title, message; normalized the same way on both
    sides), verdict pending/bridge/window/forwarded, arrival tick - into a section the agent created, and signals an event
@@ -296,7 +298,8 @@ banner is identified by its content, never by its window or by arrival order alo
    record or fail open. The identity is read in the UI Automation raw view, on the toastcrop worker, bounded.
 4. A suppression is not final: a record that turns `window`, a bridge that dies before dom0's acknowledgement (unless
    the record says `forwarded`), and a suppression not acknowledged within 3 s each show the banner after all, loudly.
-   A dead bridge's unacknowledged records read as `window`.
+   A dead bridge's unacknowledged records read as `window`. **WITHDRAWN by §13** (2026-11-24) wherever such a show can
+   put the toast in both places: that end is a defect, not a decision.
 5. While a newer record is still `bridge` or `pending`, a displayed window-path banner is unmapped before an in-place
    swap can paint (pre-emption), bounded (3 s for `pending`, 15 s for `bridge`, never while the bridge is down).
    WITHDRAWN by §13.
@@ -660,6 +663,17 @@ agent's 60 s `QGANOTIFNOTREADY` ERROR stays for it (Jev 0.49 against 0.49, no ve
 - Owner, 2026-11-24: «combining is allowed for non-bridged toasts. it is not allowed for bridged bubbles.»
 - Owner, 2026-09-13: «no doubles»
 - Owner, 2026-11-24: «the black band. we do not want it COMPLETELY gone, just make it 2 pixels high»
+- Owner, 2026-11-24: «i want them to be stacked exactly like in non-seamless windows, just on dom0»
+- Owner, 2026-11-24: «get rid of doubles and overcrop. if a toast is delayed up to 3s it is fine, but not on default
+  path. if it is lost or double it is not tolerated.»
+- Owner, 2026-11-24, of the hold every banner takes for its verdict (measured on win11r, n=56: p50 875 ms, max
+  1093 ms): «1093 ms is fine. toasts are not exactly realtime.»
+- Owner, 2026-11-24: «if we need that long for everything to settle down, let be it and record user requirements as
+  ADRs. DO NOT INVENT ... LIKE DOUBLE TOASTS ARE OK OR SHOULD NOT DISPLAY MORE THAN ONE AT A TIME»
+
+§10 rule 1's "A double is better than a loss; neither is the target." was never the owner's and is withdrawn, with every
+end of a hold that can show a toast both in the guest window and as dom0's notification (§10 rule 1's 3 s fall-back,
+rule 4's shows). Such an end is a defect to fix, not a decided behaviour.
 
 §10's "the shell shows banners one at a time, first in first out" is withdrawn. So are the two decisions built on it,
 which hold a toast back because another toast is on screen: §10 rule 5 (pre-emption) and the swap-edge gating that
