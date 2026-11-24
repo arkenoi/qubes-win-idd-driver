@@ -521,7 +521,7 @@ jobs:
           #   2..7. one defect each via /p:ToastHoldDefect MUST FAIL - a check never seen to fail is
           #      decoration: NOFOLD (multi-line bodies stop matching), ORDERONLY (match by arrival order,
           #      the desync), VERDICTOVERRIDE (the classifier overrides a settled route), NOBOUND (a hold
-          #      never fails open), FAILCLOSED (doubt suppresses), NOPREEMPT (no pre-emption, the flash).
+          #      never fails open), FAILCLOSED (doubt suppresses).
           $proj = 'agent\vs2022\toasthold-test\toasthold-test.vcxproj'
           $exe  = 'agent\vs2022\toasthold-test\x64\Release\toasthold_test.exe'
           # BOUNDED, for the same reason as the toast-actions suite: TOASTHOLD_DEFECT_NOBOUND and
@@ -538,24 +538,20 @@ jobs:
           $rc = Invoke-Bounded $exe 300
           if ($rc -eq 124) { throw "toasthold_test suite HUNG on the clean build - a clean suite must finish" }
           if ($rc -ne 0) { throw "toasthold_test suite FAILED on the clean build (rc=$rc)" }
-          #   8..11. the review's blockers and majors as knobs: PREEMPT_IDENTGATE (pre-emption ends while a read
-          #      is in flight - the in-place swap maps the window while the bridged toast paints), SUPPRESS_FINAL
+          #   8..11. the review's blockers and majors as knobs: SUPPRESS_FINAL
           #      (a suppressed banner ignores its record turning window / the bridge dying before dom0's ack - a
           #      loss), NORECLAIM (a completed identity loses its consumed record), NOIDENT_IGNORES_BRIDGE (the
           #      no-identity hold waits out 3 s with the bridge down).
-          #   19. PREEMPT_UNMAPS restores rule 5: a pre-emption UNMAPS the displayed banner instead of gating
-          #      its frames, which is TOASTPREEMPTLOSESBANNER - the banner withdrawn seconds before the queued
-          #      toast's content arrives, and never re-mapped (run 40407378739: 680 ms of display).
           #   12..16. second review: NOFORWARDBOUND (a suppression awaiting dom0's ack never reopens), NOCARD_UNPACED
           #      (an unpaced second card-less read classes a banner mid-grow as a flyout), SIZE60 (the absolute
           #      ceiling that never held a 573 px banner at 768 px), DEADRECORDS (a dead bridge's records stay
           #      authoritative), NOBACKOFF (a refused identity request is retried without back-off).
-          foreach ($d in @('TOASTHOLD_DEFECT_NOBOUND', 'TOASTHOLD_DEFECT_FAILCLOSED', 'TOASTHOLD_DEFECT_NOPREEMPT',
-                           'TOASTHOLD_DEFECT_PREEMPT_IDENTGATE', 'TOASTHOLD_DEFECT_SUPPRESS_FINAL',
+          foreach ($d in @('TOASTHOLD_DEFECT_NOBOUND', 'TOASTHOLD_DEFECT_FAILCLOSED',
+                           'TOASTHOLD_DEFECT_SUPPRESS_FINAL',
                            'TOASTHOLD_DEFECT_NORECLAIM', 'TOASTHOLD_DEFECT_NOIDENT_IGNORES_BRIDGE',
                            'TOASTHOLD_DEFECT_NOFORWARDBOUND', 'TOASTHOLD_DEFECT_NOCARD_UNPACED', 'TOASTHOLD_DEFECT_SIZE60',
                            'TOASTHOLD_DEFECT_DEADRECORDS', 'TOASTHOLD_DEFECT_NOBACKOFF',
-                           'TOASTHOLD_DEFECT_RECLAIM_ANY', 'TOASTHOLD_DEFECT_PREEMPT_UNMAPS')) {
+                           'TOASTHOLD_DEFECT_RECLAIM_ANY')) {
             & "${{ steps.vs.outputs.msbuild }}" $proj /p:Configuration=Release /p:Platform=x64 `
                 /t:Rebuild "/p:ToastHoldDefect=$d"
             if ($LASTEXITCODE -ne 0) { throw "toasthold_test defect $d build failed to compile" }

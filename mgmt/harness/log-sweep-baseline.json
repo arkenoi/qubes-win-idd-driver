@@ -100,17 +100,10 @@
    "status": "expected"
   },
   {
-   "issue": "adr-toasts-10-swap-edge-gating",
-   "max_per_boot": 4,
-   "reason": "The pre-emption narrative, reworded when rule 5's unmap became a frame hold (TOASTPREEMPTLOSESBANNER). It REPLACES the level-W signature keyed on '... unmapped: a bridge-bound or still-pending toast ...', which can no longer be emitted on the normal path: the banner stays mapped. Carried forward at the retired key's verdict, Jev expected 0.77. DECLARED AS A PATTERN, LEVEL-AGNOSTIC, ON PURPOSE - the held line is Info (the design working) and the slot-exhaustion fallback is Warning (an anomaly), and this file's own note records the A6LEAK entries matching nothing for eleven days because they were keyed to a level that moved. The fallback line is deliberately NOT declared: 'no frame-gate slot was free' means the fix degraded to rule 5 and a banner was withdrawn, which must keep surfacing.",
-   "regex": "^agent\\|[IWE]\\|ToastHoldDecide: QGATOASTPREEMPT hwnd=0xH frames (held|resumed after N ms):",
-   "status": "expected"
-  },
-  {
-   "issue": "adr-toasts-10-swap-edge-gating",
+   "issue": "adr-toasts-13-settle-hold",
    "max_per_boot": 8,
-   "reason": "The frame gate's two ends, from the only two places that move it: the tracking pass (reason=preempt, and the resume that forces the repaint) and the swap edge on the hook thread. One line per TRANSITION and never per frame - the frames actually dropped are counted and reported as 'after N held' on the resume line, which is also the measurement of what the gate held back. toast-hold-grade.py's mapped_at reads this pair to tell a gated window from one showing the toast that just repainted it, so these lines are evidence, not noise.",
-   "regex": "^agent\\|[IWE]\\|ToastHold(Decide|NoteChanged): QGATOASTGATE hwnd=0xH frames (gated|resumed)",
+   "reason": "The settle hold's two ends (docs/ADR-toasts.md 13): closed at a shown banner's new frame (ToastHoldNoteFrame) or window event (ToastHoldNoteChanged), released by the tracking pass (ToastHoldDecide) when a read has named the cards. One line per TRANSITION and never per frame - the frames held are counted and reported as 'after N held' on the resume line. toast-hold-grade.py's mapped_at reads this pair to tell a held window from one showing the toast that just repainted it, so these lines are evidence, not noise. QGATOASTGATELATE (the 3 s bound, or no free slot) is deliberately NOT declared, so it surfaces.",
+   "regex": "^agent\\|[IWE]\\|ToastHold(Decide|NoteChanged|NoteFrame): QGATOASTGATE hwnd=0xH frames (gated|resumed)",
    "status": "expected"
   },
   {
