@@ -614,14 +614,25 @@ static LONG HoldAgentState(LONG seq)
 }
 
 // Listing thread: the verdict the newest record of `id` holds now; TH_VERDICT_NONE: no section, or not in the ring. Read only.
-static LONG HoldPeek(uint32_t id)
+// *seqOut / *arrivalOut (optional): that record's sequence (0 when none) and listing tick.
+static LONG HoldPeek(uint32_t id, LONG* seqOut = nullptr, ULONGLONG* arrivalOut = nullptr)
 {
     LONG best = 0, v = TH_VERDICT_NONE;
+    ULONGLONG arrival = 0;
     TH_IPC_RECORD r;
-    if (!g_hold) return TH_VERDICT_NONE;
-    for (int i = 0; i < TH_IPC_RECORDS; i++)
-        if (ThIpcRead(g_hold, i, &r) && r.NotifId == id && r.Seq > best) { best = r.Seq; v = r.Verdict; }
+    if (g_hold)
+        for (int i = 0; i < TH_IPC_RECORDS; i++)
+            if (ThIpcRead(g_hold, i, &r) && r.NotifId == id && r.Seq > best) { best = r.Seq; v = r.Verdict; arrival = r.ArrivalTick; }
+    if (seqOut) *seqOut = best;
+    if (arrivalOut) *arrivalOut = arrival;
     return v;
+}
+
+// The agent's toast hold runs (it published HoldActive): it claims every toast no banner decides - at the banner's end, or
+// by its no-banner scan - so the bridge waits for that word instead of giving a toast up by counting passes (ADR-toasts 13).
+static bool HoldAgentWatches()
+{
+    return g_hold && TI_LOAD32(&g_hold->HoldActive) != 0;
 }
 
 // Listing thread only: once per notification id (a toast left unseen for a retry is listed again).
@@ -2103,9 +2114,11 @@ static void VerdictStorePut(uint32_t id, int route, ToastActPlan const& plan, st
     InterlockedExchange(&g_listWanted, 1);
     if (g_mainWake) SetEvent(g_mainWake);   // a toast may be waiting for this verdict: re-list now, not on a tick
 }
-// Returns true and fills *out when a verdict exists. Otherwise counts this pass: a toast whose
-// verdict never arrives must NOT be deferred for ever - after kVerdictMaxPasses it takes the
-// window path, which is the fail-open direction (the user sees it as a guest window, as today).
+// Returns true and fills *out when a verdict exists. Otherwise counts this pass. The count decides only where NOBODY
+// ELSE CAN: with the agent's hold running (HoldAgentWatches) a non-allowlisted toast is never given up by it - the agent
+// claims it at its banner's end or by its no-banner scan (ADR-toasts 13). What the count still bounds: an allowlisted
+// toast, whose record is already `bridge` (banner suppressed), waits this many passes for the classifier's buttons and
+// is then forwarded without them; and with no agent hold (older agent, ToastHoldDisable) a toast takes the window path.
 static const int kVerdictMaxPasses = 3;           // ~6 s at the 2 s poll cadence
 // *passes is set to kVerdictMaxPasses when NO VERDICT CAN EVER ARRIVE (the store was never
 // initialised because the shadow worker is not running), so the caller decides immediately instead
@@ -4324,6 +4337,7 @@ static int BridgeMain()
     // (its guest Notification Center record remains the surviving copy).
     std::unordered_map<uint32_t, int> fwdFails;
     std::unordered_set<uint32_t> owned;   // listing thread only: ids whose record this thread has read as bridge and not yet forwarded (ADR-toasts 13)
+    std::unordered_set<uint32_t> givenBack;   // listing thread only: allowlisted ids whose bridge-born record this thread turned window (once)
     const int kFwdFailCap = 5;
     int failStreak = 0, backoff = 0;
     ULONGLONG nextReconnect = 0;
@@ -4607,8 +4621,10 @@ static int BridgeMain()
                                 (listed ? TH_REC_FLAG_ALLOWLISTED : 0u) | (windowOnly ? TH_REC_FLAG_WINDOWONLY : 0u) |
                                 (app.empty() ? TH_REC_FLAG_NO_SENDER : 0u));
                     ShadowClassify(un, id, aumid);
-                    // A window-only app: its click is its action, so the banner stays in the guest and nothing is forwarded.
-                    if (windowOnly)
+                    // A window-only app: its click is its action, so the banner stays in the guest and nothing is forwarded. While
+                    // the agent watches, its record waits below like any window record: a banner marks it shown, or the agent's
+                    // no-banner scan claims it for dom0 (ADR-toasts 13: never dropped).
+                    if (windowOnly && !HoldAgentWatches())
                     {
                         seen.insert(id); VerdictForget(id);
                         BLog(L"skip id=%u aumid=%s title='%s' (window path; window-only app)", id, aumid.c_str(), title.c_str());
@@ -4616,7 +4632,7 @@ static int BridgeMain()
                     }
                     if (!seamless)
                     {
-                        seen.insert(id); VerdictForget(id); owned.erase(id);
+                        seen.insert(id); VerdictForget(id); owned.erase(id); givenBack.erase(id);
                         // A toast listed earlier in seamless mode (record pending/bridge, left unseen for a retry)
                         // is settled here too, or its stale record would pre-empt banners once seamless returns.
                         HoldVerdict(id, TH_VERDICT_WINDOW, false);
@@ -4643,41 +4659,75 @@ static int BridgeMain()
                         // Every rung fails OPEN to the window path.
                         int passes = 0;
                         const bool known = VerdictLookup(id, &ve, &passes);
-                        const ToastActListingRoute lr = ToastActListingDecide(listed, known, ve.route == ToastRouteBridge, ve.plan, passes, kVerdictMaxPasses);
+                        ToastActListingRoute lr = ToastActListingDecide(listed, known, ve.route == ToastRouteBridge, ve.plan, passes, kVerdictMaxPasses);
+                        // NO PASS COUNTING while the agent watches (ADR-toasts 13, owner 2026-11-24 «fuck fallbacks»): a toast the
+                        // classifier has not answered is never given up as window after kVerdictMaxPasses - that rung fired before
+                        // the agent's banner end and, with no banner, showed the toast nowhere. The record stays pending until a
+                        // claim: the classifier's, or the agent's at its banner's end or by its no-banner scan.
+                        const bool agentWatches = HoldAgentWatches();
+                        if (agentWatches && !listed && !known && lr == ToastActListingRoute::Window) lr = ToastActListingRoute::AwaitVerdict;
                         // THE RECORD DECIDES (ADR-toasts 13, "Claim, no timer"): a toast is forwarded only when its record reads
                         // `bridge` - this thread's compare-exchange from pending, the classifier's (VerdictStorePut), the allowlist
-                        // at publish, or the AGENT's claim at its banner's end - and never when it reads `window`: the agent
-                        // mapped, or will map, that banner. No tick is compared here.
+                        // at publish, or the AGENT's claim - and never when it reads `window`: the agent mapped, or will map, that
+                        // banner. No tick is compared here.
                         LONG held;
                         if (!g_hold)                                   // no section (older agent): routed as before
                             held = lr == ToastActListingRoute::Window ? TH_VERDICT_WINDOW
                                  : lr == ToastActListingRoute::AwaitVerdict ? TH_VERDICT_PENDING : TH_VERDICT_BRIDGE;
                         else if (owned.count(id))                      // read as bridge on an earlier pass (failed forward, dom0 unreachable)
                             held = TH_VERDICT_BRIDGE;
-                        else if (lr == ToastActListingRoute::AwaitVerdict)
-                            held = HoldPeek(id);
+                        else if (windowOnly || lr == ToastActListingRoute::AwaitVerdict)
+                            held = HoldPeek(id);                       // window-only: published window, turned bridge only by the agent
                         else if (listed && lr == ToastActListingRoute::Window)
-                        {   // an allowlisted record was born bridge and the classifier refused it: the bridge gives its own record back
-                            HoldVerdict(id, TH_VERDICT_WINDOW, false);
-                            held = TH_VERDICT_WINDOW;
+                        {   // an allowlisted record was born bridge and the classifier refused it: the bridge gives its own record
+                            // back ONCE - written again, it would undo the agent's later no-banner claim every pass
+                            if (givenBack.insert(id).second) HoldVerdict(id, TH_VERDICT_WINDOW, false);
+                            held = HoldPeek(id);
                         }
                         else
                             held = HoldVerdictSeq(id, (lr == ToastActListingRoute::Window || g_connDead) ? TH_VERDICT_WINDOW : TH_VERDICT_BRIDGE, true, nullptr);
-                        // A non-allowlisted record is bridge only by a compare-exchange; with no plan to carry, it was the agent's.
-                        const bool agentClaimed = g_hold && !listed && held == TH_VERDICT_BRIDGE && lr != ToastActListingRoute::ForwardWithPlan;
+                        // Bridge with no plan this thread could carry: the agent's claim (a window-only app's record, one the
+                        // classifier or the bridge made window, or a pending one).
+                        const bool agentClaimed = g_hold && held == TH_VERDICT_BRIDGE &&
+                            (windowOnly || (listed ? lr == ToastActListingRoute::Window : lr != ToastActListingRoute::ForwardWithPlan));
                         if (held == TH_VERDICT_PENDING || (held == TH_VERDICT_BRIDGE && listed && lr == ToastActListingRoute::AwaitVerdict))
                         {
                             // No verdict yet. Leave it UNSEEN so the next pass reconsiders it; this is the same retry that
                             // already stops a failed forward from dropping a toast. Nothing blocks and nothing is lost.
-                            BLog(L"await id=%u aumid=%s (%sverdict pending, pass %d/%d)", id, aumid.c_str(), listed ? L"allowlisted; " : L"", passes, kVerdictMaxPasses);
+                            if (agentWatches && !listed)
+                                BLog(L"await id=%u aumid=%s (verdict pending: the classifier's answer or the agent's claim decides it)", id, aumid.c_str());
+                            else
+                                BLog(L"await id=%u aumid=%s (%sverdict pending, pass %d/%d)", id, aumid.c_str(), listed ? L"allowlisted; " : L"", passes, kVerdictMaxPasses);
                             retryPending = true;   // re-listed when the verdict lands (g_mainWake) or on the retry deadline
                             continue;
                         }
+                        if (held == TH_VERDICT_WINDOW && agentWatches)
+                        {
+                            // A WINDOW record is done only when a banner showed it - the agent's shown mark. Until then the agent may
+                            // still claim it for dom0 (its no-banner scan), so it stays UNSEEN. Past the record's TTL nobody will act
+                            // on it any more (the scan stops there too): said as an error, and settled.
+                            LONG seq = 0;
+                            ULONGLONG arrival = 0;
+                            HoldPeek(id, &seq, &arrival);
+                            if (seq != 0 && HoldAgentState(seq) != TH_AGENT_SHOWN)
+                            {
+                                if (GetTickCount64() - arrival < TH_RECORD_TTL_MS)
+                                {
+                                    BLog(L"await id=%u aumid=%s (window: no banner has shown it yet - a banner marks it shown, or the agent claims it for dom0)", id, aumid.c_str());
+                                    retryPending = true;
+                                    continue;
+                                }
+                                BLogE(L"CLAIM id=%u aumid=%s title='%s': window record, no banner showed it and the agent did not claim it within %u ms - shown NOWHERE",
+                                      id, aumid.c_str(), title.c_str(), (unsigned)TH_RECORD_TTL_MS);
+                            }
+                        }
                         if (held != TH_VERDICT_BRIDGE)
                         {
-                            seen.insert(id); VerdictForget(id); owned.erase(id);
+                            seen.insert(id); VerdictForget(id); owned.erase(id); givenBack.erase(id);
                             if (held == TH_VERDICT_NONE)
                                 BLogE(L"CLAIM id=%u aumid=%s title='%s': its record left the ring before it was claimed - NOT forwarded", id, aumid.c_str(), title.c_str());
+                            else if (windowOnly)
+                                BLog(L"skip id=%u aumid=%s title='%s' (window path; window-only app%s)", id, aumid.c_str(), title.c_str(), agentWatches ? L", its banner shown" : L"");
                             else if (lr != ToastActListingRoute::Window)
                                 BLog(L"skip id=%u aumid=%s title='%s' (window path; claim lost: the record read %s first)", id, aumid.c_str(), title.c_str(), HoldVerdictName(held));
                             else if (known)
@@ -4692,7 +4742,7 @@ static int BridgeMain()
                         if (agentClaimed)
                         {
                             blind = true;
-                            BLogE(L"CLAIM id=%u aumid=%s title='%s': the AGENT claimed this record at its banner's end with no verdict (pending -> bridge): "
+                            BLogE(L"CLAIM id=%u aumid=%s title='%s': the AGENT claimed this record for dom0 (its banner ended undecided, or no banner showed it): "
                                   L"forwarded to dom0 WITHOUT a plan%s", id, aumid.c_str(), title.c_str(), known ? L"; the classifier's later answer is not applied" : L"");
                         }
                         else if (lr == ToastActListingRoute::ForwardBlind)
@@ -4734,7 +4784,7 @@ static int BridgeMain()
                     if (g_connDead) return;   // transient path: unlimited fail-open retry
                     if (++fwdFails[id] >= kFwdFailCap)
                     {
-                        seen.insert(id); fwdFails.erase(id); VerdictForget(id); owned.erase(id);
+                        seen.insert(id); fwdFails.erase(id); VerdictForget(id); owned.erase(id); givenBack.erase(id);
                         // Nobody will ever forward it: the banner is the toast's only way to the user.
                         HoldVerdict(id, TH_VERDICT_WINDOW, false);
                         BLog(L"GIVE UP id=%u after %d server rejections - not resent (guest center record kept)",
@@ -4762,7 +4812,7 @@ static int BridgeMain()
                     {
                         if (e.plan.ok && !e.plan.actions.empty())
                         {
-                            seen.insert(e.id); fwdFails.erase(e.id); VerdictForget(e.id); owned.erase(e.id);
+                            seen.insert(e.id); fwdFails.erase(e.id); VerdictForget(e.id); owned.erase(e.id); givenBack.erase(e.id);
                             HoldVerdict(e.id, TH_VERDICT_WINDOW, false);
                             BLog(L"skip id=%u aumid=%s title='%s' (window path; a toast with actions inside a burst of %u is not coalesced)",
                                  e.id, e.aumid.c_str(), e.title.c_str(), (UINT)fresh.size());
@@ -4782,7 +4832,7 @@ static int BridgeMain()
                         // this bridge dies (a `bridge` without the ack is reopened on bridge death: nobody knows whether
                         // dom0 has it). The classifier's verdict is forgotten only now that the toast is done.
                         // One FWDWAIT per id: the batch shares a send, but each toast's verdict was stored at its own tick.
-                        if (ok) for (auto const& e : plain) { seen.insert(e.id); fwdFails.erase(e.id); VerdictForget(e.id); owned.erase(e.id); HoldVerdict(e.id, TH_VERDICT_FORWARDED, false); FwdWaitLog(e.id, e.verdictTick, tSend, tAck); }
+                        if (ok) for (auto const& e : plain) { seen.insert(e.id); fwdFails.erase(e.id); VerdictForget(e.id); owned.erase(e.id); givenBack.erase(e.id); HoldVerdict(e.id, TH_VERDICT_FORWARDED, false); FwdWaitLog(e.id, e.verdictTick, tSend, tAck); }
                         else { for (auto const& e : plain) capFailed(e.id); retryPending = true; }
                         BLog(L"SENT coalesced x%u: %s%s", (UINT)plain.size(), ok ? L"OK" : L"FAIL",
                              ok ? L"" : L" (unseen, retried)");
@@ -4814,7 +4864,7 @@ static int BridgeMain()
                     bool ok = ForwardText(e.title, e.body.empty() ? e.app : e.body, e.id, NotifyKind::Info, actions, &seq);
                     const ULONGLONG tAck = GetTickCount64();
                     uint32_t dom0Id = 0;
-                    if (ok) { seen.insert(e.id); fwdFails.erase(e.id); VerdictForget(e.id); owned.erase(e.id); HoldVerdict(e.id, TH_VERDICT_FORWARDED, false); FwdWaitLog(e.id, e.verdictTick, tSend, tAck); }
+                    if (ok) { seen.insert(e.id); fwdFails.erase(e.id); VerdictForget(e.id); owned.erase(e.id); givenBack.erase(e.id); HoldVerdict(e.id, TH_VERDICT_FORWARDED, false); FwdWaitLog(e.id, e.verdictTick, tSend, tAck); }
                     else { capFailed(e.id); retryPending = true; }
                     if (withActions)
                     {
