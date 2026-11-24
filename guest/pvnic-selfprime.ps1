@@ -453,6 +453,9 @@ public class QwtngNetSetup : ServiceBase {
         } catch (Exception e) { Log('E', "arming the unplug latch failed: " + e.Message); }
     }
 
+    // Work's qubesdb session, left open for Reconcile (the next call on the same thread) - see Work's finally.
+    static IntPtr s_qdbHandoff = IntPtr.Zero;
+
     static void Work() {
         ArmLatch();
         // The marker describes THIS boot: clear the previous boot's verdict on a persistent root.
@@ -500,7 +503,13 @@ public class QwtngNetSetup : ServiceBase {
                     if (vmClass == null) Log("updates proxy: the qube class is unreadable from qubesdb - left to ensure-autologon part 7");
                     else if (vmClass != "TemplateVM") RemoveTemplateProxy(vmClass);
                     else Log("updates proxy: kept on this TemplateVM (ADR-updater section 18 point 1)");
-                } finally { qdb_close(h); }
+                } finally {
+                    // HANDED TO Reconcile, not closed (findings/issues.md QUBESDBCONNECTPERREAD): Reconcile runs next on
+                    // this same thread and keeps a session for the service's life, so closing here and reopening there
+                    // cost a second session and one daemon "QpsRead from client N failed: 109" per boot (measured
+                    // 2026-11-23, 346cac4d: qwtng-netsetup 2 pipes). Reconcile's /name check reopens a dead one.
+                    s_qdbHandoff = h;
+                }
             } else Loud("qubesdb never opened within 180 s (QdbDaemon late or absent) - falling back to the Q: cache, which may be another boot's or lineage's addressing");
         } catch (Exception e) { Log('E', "qdb EXCEPTION " + e.Message); }
 
@@ -649,7 +658,8 @@ public class QwtngNetSetup : ServiceBase {
         // 2 s tick and never closed any (no qdb_close import existed) - ~43k leaked connections
         // and handles per day into qubesdb-daemon, until opens fail for every consumer in the
         // guest. Reopen only when the connection is demonstrably dead.
-        IntPtr h = IntPtr.Zero;
+        IntPtr h = s_qdbHandoff;   // Work's session, when it opened one (IntPtr.Zero otherwise: opened below)
+        s_qdbHandoff = IntPtr.Zero;
         while (true) {
             System.Threading.Thread.Sleep(2000);
             try {
