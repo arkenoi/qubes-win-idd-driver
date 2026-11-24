@@ -96,7 +96,7 @@ EXPECT = {
     1: {  # the hold build (candidate): everything must be OK
         "S0": "OK-BRIDGED", "S1a": "OK-BRIDGED", "S1b": "OK-BRIDGED", "S2": "OK-WINDOW",
         "S3i-1": "OK-BRIDGED", "S3i-2": "OK-WINDOW", "S3ii-1": "OK-WINDOW", "S3ii-2": "OK-BRIDGED",
-        "S3iii-1": "OK-WINDOW", "S3iii-2": "OK-WINDOW",
+        "S3iii-1": "OK-WINDOW", "S3iii-2": "OK-WINDOW", "S3iv-1": "OK-WINDOW", "S3iv-2": "OK-BRIDGED",
         "S4": "OK-BRIDGED", "S5a": "OK-WINDOW-NS", "S5c": "OK-BRIDGED",
     },
     0: {  # the pre-hold build (control): what the defect predicts; these rows are the detectors' seen-to-fail proof

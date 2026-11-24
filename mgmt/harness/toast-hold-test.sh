@@ -559,7 +559,7 @@ scenario(){
   bm=$(th_bmark); [ -n "$bm" ] || { verdict "$labels" "INSTRUMENT could not read the bridge.log line count before firing"; return; }
   am=$(th_amark); [ -n "$am" ] || { verdict "$labels" "INSTRUMENT could not read the agent log line count before firing"; return; }
   log "--- $labels ($mode): firing $n toast(s)"
-  [ "$labels" = "S3iii-1,S3iii-2" ] && wtag=s3iii
+  case "$labels" in "S3iii-1,S3iii-2") wtag=s3iii ;; "S3iv-1,S3iv-2") wtag=s3iv ;; esac
   [ -n "$wtag" ] && witness_start "$wtag"
   if ! fire_steps "$labels" "$mode" "$tpl"; then
     verdict "${labels%%,*}-STIM" "INSTRUMENT the stimulus for $labels did not fully fire (see $OUT/fires/) - rows graded on whatever fired"
@@ -595,6 +595,11 @@ scenario "S3ii-1,S3ii-2" seamless "$AUMID_SYS,$AUMID_A" "FIRE:$FS+informational+
 # S3iii window-path then window-path in the shared banner window: the hold unmaps the shown banner when the second toast arrives
 #     in place and maps it again for that toast - the re-map dom0 needs the buffer re-announced for (REMAP-DUMP, 2026-10-06)
 scenario "S3iii-1,S3iii-2" seamless "$AUMID_SYS,$AUMID_SYS" "FIRE:$FS+informational+--title+@SLUG1@+--tag+@TAG1@ GAP:$GAP_MS FIRE:$FS+informational+--title+@SLUG2@+--tag+@TAG2@"
+# S3iv a persistent reminder (window path, stays on screen) and, 3 s later, a bridged toast that Windows stacks into the
+#     reminder's banner (ADR-toasts 13, findings/issues.md TOASTSTACKNOTSHOWN). The reminder's card is PriorityToastView, so
+#     the hold classes its banner not-a-banner and shows it; the witness says whether dom0's copy of that banner then also
+#     shows the bridged card - a DOUBLE the protocol lines cannot see, the window being mapped already and only growing.
+scenario "S3iv-1,S3iv-2" seamless "$AUMID_SYS,$AUMID_A" "FIRE:$FS+persistent+--title+@SLUG1@+--tag+@TAG1@ GAP:3000 FIRE:$FA+informational+--title+@SLUG2@+--tag+@TAG2@"
 # S4  an ALLOWLISTED app's first toast (NotifyBridgeAllow): bridge at listing, no classifier wait
 scenario "S4"    seamless "$AUMID_C"            "FIRE:$FC+informational+--title+@SLUG1@+--tag+@TAG1@"
 
