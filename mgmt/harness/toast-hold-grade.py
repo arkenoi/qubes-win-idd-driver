@@ -330,8 +330,11 @@ def parse_agent(lines: List[str], offset: dt.timedelta, tz: Optional[dt.tzinfo] 
         t = dt.datetime(int(y), int(mo), int(d), int(hh), int(mm), int(ss), int(ms) * 1000, tzinfo=tz) - offset
         kind, hwnd, kv = None, None, {}
         mm_ = re.search(r"QGAPROTO,msg=(CREATE|MAP|DESTROY),hwnd=" + HEX_RE, msg)
+        mc_ = None if mm_ else re.search(r"QGAPROTO,msg=CONFIGURE,hwnd=" + HEX_RE + r",.*?,h=(\d+)", msg)
         if mm_:
             kind, hwnd = mm_.group(1), mm_.group(2).lower()
+        elif mc_:
+            kind, hwnd, kv = "CONFIGURE", mc_.group(1).lower(), {"h": mc_.group(2)}
         elif re.search(r"Unmapping window " + HEX_RE, msg):
             kind = "UNMAP"; hwnd = re.search(r"Unmapping window " + HEX_RE, msg).group(1).lower()
         elif "QGATOASTHOLDLATE hwnd=" in msg:
@@ -873,6 +876,24 @@ class Grader:
             return True
         return False
 
+    def _grew_while_shown(self, f, a: dt.datetime, b: dt.datetime) -> Optional["Ev"]:
+        """A banner window dom0 is ALREADY showing, told to grow in [a, b] while this was the only toast fired since its
+        previous size: the shell stacked this toast's card into it (ADR-toasts 13), so dom0 shows that card in the window.
+
+        A forwarded toast's banner is never a NEW map in that case - the window was mapped for the toast already in it -
+        so the new-map test alone graded run 45316076853 S3iv-2 OK-BRIDGED while the guest's banner, mapped since
+        05:34:02.709 for the reminder, was configured 157 -> 169 -> 278 high at 05:34:05.130-.148 with S3iv-2 in it."""
+        others = [parse_ts(g["t0"], self.guest_tz) for g in self.fires if g is not f and g.get("fired")]
+        for hwnd in self.banner_hwnds():
+            prev = None
+            for e in sorted([e for e in self.agent if e.kind == "CONFIGURE" and e.hwnd == hwnd], key=Ev.key):
+                h = int(e.kv["h"])
+                if (prev is not None and h > int(prev.kv["h"]) and a <= e.t <= b and self.mapped_at(hwnd, e.t, e.idx)
+                        and not any(prev.t <= o <= e.t for o in others)):
+                    return e
+                prev = e
+        return None
+
     @staticmethod
     def _held_start(e: "Ev") -> Tuple:
         """Where the agent's hold of the content a line names began, as an event key. ThCoreStartHold sets HoldSince on a hold
@@ -972,6 +993,11 @@ class Grader:
             # hold did not own)? Did the guest show a banner at all?
             mapped_any = self._any_banner_map(t0, t0 + dt.timedelta(seconds=CONTROL_BANNER_WINDOW_S), nid, th)
             seen = self.guest_banner_seen(label)
+            grew = self._grew_while_shown(f, t0, t0 + dt.timedelta(seconds=CONTROL_BANNER_WINDOW_S)) if deliv and not mapped_any else None
+            if grew:
+                return "DOUBLE", (f"forwarded, and its card stacked into hwnd=0x{grew.hwnd}, already shown in dom0: configured to "
+                                  f"h={grew.kv['h']} at {grew.t.strftime('%H:%M:%S.%f')[:-3]} with no other toast fired since its "
+                                  f"previous size double=stacked-into-shown")
             if deliv and not mapped_any:
                 return "OK-BRIDGED", "no banner examined by the hold, no banner window mapped" + (" (guest showed a banner)" if seen else "")
             if deliv and mapped_any:

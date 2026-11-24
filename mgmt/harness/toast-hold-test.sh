@@ -597,8 +597,8 @@ scenario "S3ii-1,S3ii-2" seamless "$AUMID_SYS,$AUMID_A" "FIRE:$FS+informational+
 scenario "S3iii-1,S3iii-2" seamless "$AUMID_SYS,$AUMID_SYS" "FIRE:$FS+informational+--title+@SLUG1@+--tag+@TAG1@ GAP:$GAP_MS FIRE:$FS+informational+--title+@SLUG2@+--tag+@TAG2@"
 # S3iv a persistent reminder (window path, stays on screen) and, 3 s later, a bridged toast that Windows stacks into the
 #     reminder's banner (ADR-toasts 13, findings/issues.md TOASTSTACKNOTSHOWN). The reminder's card is PriorityToastView, so
-#     the hold classes its banner not-a-banner and shows it; the witness says whether dom0's copy of that banner then also
-#     shows the bridged card - a DOUBLE the protocol lines cannot see, the window being mapped already and only growing.
+#     the hold classes its banner not-a-banner and shows it. If dom0's copy of that banner then also shows the bridged
+#     card, that is a DOUBLE: the grader reads it from the shown window's CONFIGURE growing after the bridged toast fired.
 scenario "S3iv-1,S3iv-2" seamless "$AUMID_SYS,$AUMID_A" "FIRE:$FS+persistent+--title+@SLUG1@+--tag+@TAG1@ GAP:3000 FIRE:$FA+informational+--title+@SLUG2@+--tag+@TAG2@"
 # S4  an ALLOWLISTED app's first toast (NotifyBridgeAllow): bridge at listing, no classifier wait
 scenario "S4"    seamless "$AUMID_C"            "FIRE:$FC+informational+--title+@SLUG1@+--tag+@TAG1@"
