@@ -1149,24 +1149,31 @@ public static class QdbP {
 "@
     }
 }
+# ONE qubesdb SESSION PER APPLY PASS (findings/issues.md QUBESDBCONNECTPERREAD). QdbUp opened and closed one and each
+# QdbGet another, so a pass cost up to 6 sessions (QdbUp, ip, netmask, gateway, two DNS) and a daemon teardown warning
+# for each - 4 on a qube with no netvm (no /qubes-ip: QdbValues returns before the DNS reads), the shape of the
+# unnamed 4-session client measured 2026-11-23 on win11r-thold, netvm '' (346cac4d, pid 2252: pipes -6..-9 in 130 ms).
+# QdbUp now keeps the session it opens; QdbGet reads through it; QdbDrop closes it whenever a pass waits, so a pass
+# after a daemon restart opens a fresh one instead of reading a dead handle.
+$script:QdbH = [IntPtr]::Zero
+function QdbDrop {
+    if ($script:QdbH -ne [IntPtr]::Zero) { try { [QdbP]::qdb_close($script:QdbH) } catch { }; $script:QdbH = [IntPtr]::Zero }
+}
 function QdbGet([string]$path) {
     # Reliable qubesdb value read via the client DLL (mirror of guest/qubesdb-read.ps1). The old
     # "in-process reads are broken" belief was a P/Invoke marshaling bug; this is measured working.
     try {
-        QdbType
-        $h = [QdbP]::qdb_open([IntPtr]::Zero)
-        if ($h -eq [IntPtr]::Zero) { return $null }
-        try {
-            $l = [uint32]0
-            $p = [QdbP]::qdb_read($h, $path, [ref]$l)
-            if ($p -eq [IntPtr]::Zero) { return $null }
-            return [Runtime.InteropServices.Marshal]::PtrToStringAnsi($p, [int]$l)
-        } finally { [QdbP]::qdb_close($h) }
+        if ($script:QdbH -eq [IntPtr]::Zero -and -not (QdbUp)) { return $null }
+        $l = [uint32]0
+        $p = [QdbP]::qdb_read($script:QdbH, $path, [ref]$l)
+        if ($p -eq [IntPtr]::Zero) { return $null }
+        return [Runtime.InteropServices.Marshal]::PtrToStringAnsi($p, [int]$l)
     } catch { return $null }
 }
 function QdbUp {
-    # qubesdb daemon reachable? (qdb_open succeeds) - replaces network-setup.exe's rc 21 oracle.
-    try { QdbType; $h = [QdbP]::qdb_open([IntPtr]::Zero); if ($h -eq [IntPtr]::Zero) { return $false }; [QdbP]::qdb_close($h); return $true } catch { return $false }
+    # qubesdb daemon reachable? (qdb_open succeeds) - replaces network-setup.exe's rc 21 oracle. The session is KEPT.
+    if ($script:QdbH -ne [IntPtr]::Zero) { return $true }
+    try { QdbType; $script:QdbH = [QdbP]::qdb_open([IntPtr]::Zero); return ($script:QdbH -ne [IntPtr]::Zero) } catch { $script:QdbH = [IntPtr]::Zero; return $false }
 }
 function QdbValues {
     # L3 config straight from qubesdb - the ONLY source now. network-setup.exe matched the adapter
@@ -1229,6 +1236,7 @@ while ((Get-Date) -lt $deadline) {
     $qdbEverUp = $true
     $script:want = QdbValues            # L3 config straight from qubesdb - the ONLY source
     if (-not $script:want) {
+        QdbDrop                         # this pass waits: the next one reads through a fresh session
         # qubesdb up but /qubes-ip not published. No vif device => no netvm => nothing to apply.
         if (-not (VifDevicePresent)) { Ok 'qubesdb up, /qubes-ip absent, no vif device: no netvm, nothing to apply' }
         L 'qubesdb up, vif present, /qubes-ip not yet published - waiting'
