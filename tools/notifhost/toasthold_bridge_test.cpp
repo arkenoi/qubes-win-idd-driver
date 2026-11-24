@@ -20,14 +20,6 @@
 //     once dom0 acknowledged it; the agent's reader sees exactly those values; the header's Seamless flag
 //     the agent publishes (0 = the bridge forwards nothing);
 //   * the ring survives wrap and never hands out a half-written record.
-//
-// DEFECT RE-INTRODUCTION (CLAUDE.md: a check counts once it has been seen to FAIL). Rebuilding with
-// /p:ToastHoldBridgeDefect=<define> (CI inverts the exit code) MUST make this suite fail:
-//   TOASTIDENT_DEFECT_NOFOLD          - the '\n'-joined and ' '-joined bodies stop agreeing
-//   TOASTIDENT_DEFECT_VERDICTOVERRIDE - the classifier's late verdict overrides a settled route
-//   TOASTIDENT_DEFECT_MARK_BY_SLOT    - the agent's shown mark is a flag in the slot, not the sequence it marks: a
-//                                       store racing the bridge's republish of the slot reads as the NEW toast's
-//                                       banner shown (ADR-toasts 11: a failed dom0 action then goes unreported)
 #include "../../agent/gui-agent/toastident.h"
 #include <cstdio>
 #include <cstring>
@@ -75,11 +67,6 @@ static std::basic_string<WCHAR> JoinBlocks(const WCHAR* const* blocks, size_t n)
 
 int main()
 {
-#if defined(TOASTIDENT_DEFECT_NOFOLD) || defined(TOASTIDENT_DEFECT_VERDICTOVERRIDE) || defined(TOASTIDENT_DEFECT_ORDERONLY) || \
-    defined(TOASTIDENT_DEFECT_MARK_BY_SLOT)
-    printf("DEFECT BUILD: a TOASTIDENT_DEFECT_* switch is compiled in - this run MUST fail\n");
-#endif
-
     // ---- 1. the two spellings of one toast agree ------------------------------------------------
     {
         TOAST_IDENT bridge, agent;

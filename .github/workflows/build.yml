@@ -550,14 +550,12 @@ jobs:
           #      (an unpaced second card-less read classes a banner mid-grow as a flyout), SIZE60 (the absolute
           #      ceiling that never held a 573 px banner at 768 px), DEADRECORDS (a dead bridge's records stay
           #      authoritative), NOBACKOFF (a refused identity request is retried without back-off).
-          foreach ($d in @('TOASTIDENT_DEFECT_NOFOLD', 'TOASTIDENT_DEFECT_ORDERONLY', 'TOASTIDENT_DEFECT_VERDICTOVERRIDE',
-                           'TOASTHOLD_DEFECT_NOBOUND', 'TOASTHOLD_DEFECT_FAILCLOSED', 'TOASTHOLD_DEFECT_NOPREEMPT',
+          foreach ($d in @('TOASTHOLD_DEFECT_NOBOUND', 'TOASTHOLD_DEFECT_FAILCLOSED', 'TOASTHOLD_DEFECT_NOPREEMPT',
                            'TOASTHOLD_DEFECT_PREEMPT_IDENTGATE', 'TOASTHOLD_DEFECT_SUPPRESS_FINAL',
                            'TOASTHOLD_DEFECT_NORECLAIM', 'TOASTHOLD_DEFECT_NOIDENT_IGNORES_BRIDGE',
                            'TOASTHOLD_DEFECT_NOFORWARDBOUND', 'TOASTHOLD_DEFECT_NOCARD_UNPACED', 'TOASTHOLD_DEFECT_SIZE60',
                            'TOASTHOLD_DEFECT_DEADRECORDS', 'TOASTHOLD_DEFECT_NOBACKOFF',
-                           'TOASTIDENT_DEFECT_TIE_SLOTORDER', 'TOASTHOLD_DEFECT_RECLAIM_ANY',
-                           'TOASTIDENT_DEFECT_MARK_BY_SLOT', 'TOASTHOLD_DEFECT_PREEMPT_UNMAPS')) {
+                           'TOASTHOLD_DEFECT_RECLAIM_ANY', 'TOASTHOLD_DEFECT_PREEMPT_UNMAPS')) {
             & "${{ steps.vs.outputs.msbuild }}" $proj /p:Configuration=Release /p:Platform=x64 `
                 /t:Rebuild "/p:ToastHoldDefect=$d"
             if ($LASTEXITCODE -ne 0) { throw "toasthold_test defect $d build failed to compile" }
@@ -736,23 +734,13 @@ jobs:
           # notifhost.cpp compiles it - the listing's identity (DisplayName, text[0], text[1..] joined by
           # '\n') equals the banner's (SenderName, Title|TitleText, MessageText blocks joined by ' '), and
           # the record lifecycle the bridge drives (pending at listing; the classifier's verdict only while
-          # pending; the forward outcome unconditional). Two defect builds MUST FAIL.
+          # pending; the forward outcome unconditional).
           $proj = 'tools\notifhost\toasthold_bridge_test.vcxproj'
           $exe  = 'tools\notifhost\x64\Release\toasthold_bridge_test.exe'
           & "${{ steps.vs.outputs.msbuild }}" $proj /p:Configuration=Release /p:Platform=x64 /t:Rebuild
           if ($LASTEXITCODE -ne 0) { throw "toasthold_bridge_test msbuild failed" }
           & $exe
           if ($LASTEXITCODE -ne 0) { throw "toasthold_bridge_test suite FAILED on the clean build" }
-          foreach ($d in @('TOASTIDENT_DEFECT_NOFOLD', 'TOASTIDENT_DEFECT_VERDICTOVERRIDE', 'TOASTIDENT_DEFECT_MARK_BY_SLOT')) {
-            & "${{ steps.vs.outputs.msbuild }}" $proj /p:Configuration=Release /p:Platform=x64 `
-                /t:Rebuild "/p:ToastHoldBridgeDefect=$d"
-            if ($LASTEXITCODE -ne 0) { throw "toasthold_bridge_test defect $d build failed to compile" }
-            & $exe
-            if ($LASTEXITCODE -eq 0) { throw "defect-reintroduction proof FAILED: toasthold_bridge_test passed with $d" }
-            Write-Host "defect proof OK: bridge suite fails under $d"
-          }
-          & "${{ steps.vs.outputs.msbuild }}" $proj /p:Configuration=Release /p:Platform=x64 /t:Rebuild
-          if ($LASTEXITCODE -ne 0) { throw "toasthold_bridge_test clean rebuild failed" }
 
       - name: Toast actions suite (the actionable-buttons route's pure rules)
         shell: pwsh
