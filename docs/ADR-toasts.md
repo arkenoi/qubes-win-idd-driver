@@ -683,9 +683,17 @@ Confirmed by the owner, 2026-11-24 («yes, right.»): a window's new frames reac
 cards they show, at most 3 s later. A toast is never held back because another toast is on screen or queued.
 Pre-emption is removed.
 
-Ordered by the owner, 2026-11-24 («do the first fix. i do not know why you dance so much about "bridge dies". if
-bridge dies, everything else becomes a lesser problem»): the bridge's limit matches the agent's. Any verdict that
-arrives after a record has been pending for 3 s goes to the window path and is never forwarded.
+Chosen by the owner, 2026-11-24 («422ms on fast machine may exceed 3s on slow or resource exhausted one. so we
+may extend the wait and fail loudly», «fuck fallbacks», then the option "Claim, no timer"): the bridge has no
+clock. The agent and the bridge race on the record with one compare-exchange: the agent turns it pending -> window
+before it maps the banner, the bridge turns it pending -> bridge before it forwards. The winner decides, so no
+double is possible. The agent waits for the verdict for as long as the banner lives. Corrected by the owner the same
+day («claim, no timer and we do not drop it, we send it to dom0 way (because on windowed way it would be silently
+dismissed and not seen)»): when the banner nears its end (~4.5 s after first sight) with no verdict, the agent does
+NOT map it - it claims the record pending -> bridge and the bridge forwards it, logging an ERROR the log sweep
+flags. A toast is never dropped: one whose banner ended unshown, and one with no banner at all (banners off), goes
+to dom0 the bridge's way whatever its verdict. This replaces the earlier order of the same day («do the first fix»:
+a verdict after the record's 3 s goes to the window path and is never forwarded).
 
 Between two stacked cards, dom0 shows a black band 2 pixels high. The rest of the transparent gap is filled with the
 card's own background.
