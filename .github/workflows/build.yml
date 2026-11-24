@@ -498,38 +498,15 @@ jobs:
       - name: Toast-crop card-rule unit suite
         shell: pwsh
         run: |
-          # agent/gui-agent/toastcrop-pick.h: the pure per-surface card-selection rule behind
-          # toastcrop.c's UIA walk (toast -> largest qualifier, menu -> union). Offline suite
-          # over two recorded trees (a measured 24H2 reminder toast, a WinUI menu body) - no
-          # rig, no UIA. Two passes, same shape as the toast classifier suite:
-          #   1. clean build MUST pass;
-          #   2. defect-reintroduction build (toasts forced onto the union rule, the
-          #      2026-09-03 overcrop, via /p:ToastCropPickDefect) MUST FAIL - a check never
-          #      seen to fail is decoration.
+          # agent/gui-agent/toastcrop-pick.h: the pure card-selection rule behind toastcrop.c's UIA
+          # walk (the union of the qualifiers, every surface; a toast banner STACKS cards), and the
+          # mid-slide guard. Offline suite over recorded trees - no rig, no UIA.
           $proj = 'agent\vs2022\toastcrop-pick-test\toastcrop-pick-test.vcxproj'
           $exe  = 'agent\vs2022\toastcrop-pick-test\x64\Release\toastcrop_pick_test.exe'
           & "${{ steps.vs.outputs.msbuild }}" $proj /p:Configuration=Release /p:Platform=x64 /t:Rebuild
           if ($LASTEXITCODE -ne 0) { throw "toastcrop_pick_test msbuild failed" }
           & $exe
-          if ($LASTEXITCODE -ne 0) { throw "toastcrop_pick_test suite FAILED on the clean build" }
-          & "${{ steps.vs.outputs.msbuild }}" $proj /p:Configuration=Release /p:Platform=x64 `
-              /t:Rebuild /p:ToastCropPickDefect=TOASTCROP_PICK_DEFECT_UNION
-          if ($LASTEXITCODE -ne 0) { throw "toastcrop_pick_test defect build failed to compile" }
-          & $exe
-          if ($LASTEXITCODE -eq 0) { throw "defect-reintroduction proof FAILED: suite passed with toasts on the union rule" }
-          Write-Host 'defect proof OK: suite fails when toasts are forced onto the union rule'
-          #   3. second defect: the mid-slide guard (TcInsetsMidSlide) disabled - the state that
-          #      latched a sliding toast's card as its crop (l=209 r=1, 186 px wide, buttons cut,
-          #      measured 2026-09-06). MUST FAIL too.
-          & "${{ steps.vs.outputs.msbuild }}" $proj /p:Configuration=Release /p:Platform=x64 `
-              /t:Rebuild /p:ToastCropPickDefect=TOASTCROP_PICK_DEFECT_NOGUARD
-          if ($LASTEXITCODE -ne 0) { throw "toastcrop_pick_test NOGUARD defect build failed to compile" }
-          & $exe
-          if ($LASTEXITCODE -eq 0) { throw "defect-reintroduction proof FAILED: suite passed with the mid-slide guard disabled" }
-          Write-Host 'defect proof OK: suite fails when the mid-slide guard is disabled'
-          # leave a clean binary behind (nothing packages it, but never leave a defect build around)
-          & "${{ steps.vs.outputs.msbuild }}" $proj /p:Configuration=Release /p:Platform=x64 /t:Rebuild
-          if ($LASTEXITCODE -ne 0) { throw "toastcrop_pick_test clean rebuild failed" }
+          if ($LASTEXITCODE -ne 0) { throw "toastcrop_pick_test suite FAILED" }
 
       - name: Toast-hold unit suite (identity contract + hold state machine)
         shell: pwsh

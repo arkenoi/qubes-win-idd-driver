@@ -659,7 +659,8 @@ agent's 60 s `QGANOTIFNOTREADY` ERROR stays for it (Jev 0.49 against 0.49, no ve
 
 ## 13. Stacked toasts are normal and required: never corrected, held or cut to one card
 
-**Status.** ACCEPTED (owner, 2026-11-24). Not built: the agent's behaviours listed under Consequences contradict it.
+**Status.** ACCEPTED (owner, 2026-11-24). Partly built: the crop keeps every card (agent 3888b34); the hold and
+the pre-emption gate listed under Consequences still contradict it.
 
 **Context.** When toasts arrive close together, Windows stacks them as several cards in its one banner window, the
 window growing to hold them (2026-09-13 on win11-up: two cards in a 364x326 window; 2026-10-20 to 11-22 on win11-nfy,
@@ -675,9 +676,10 @@ toast "painting into another's window", and nothing holds, gates, unmaps or crop
 the shell queues banners instead of stacking them is the case to explain, not the reference.
 
 **Consequences** (each is a defect against this decision, findings/issues.md TOASTSTACKNOTSHOWN):
-* The card crop picks one card (`toastcrop-pick.h` TcPickLargest, "the single largest qualifying element (toasts)",
-  since 2026-09-06): measured on win11-nfy, the 364x326 two-card buffer is re-cut to 364x157, the lower card only, so
-  dom0 is sent one card of two.
+* The card crop picked one card (`toastcrop-pick.h` TcPickLargest, "the single largest qualifying element (toasts)",
+  2026-09-06 to 2026-11-24): the equal cards tied and the first in the walk, the OLDEST, was kept (win11-nfy: 364x326
+  re-cut to 364x157). Agent 3888b34: every surface takes the UNION of the qualifiers - every card of a stack (win11r
+  26300 UIA dump: 3 cards 364x157 at x=4740, union 364x495), and on one card the card itself.
 * §10's hold and the pre-emption gate assume one toast per banner window: a newer record "queued behind this shown
   banner ... would paint into this window in place" gates dom0's frames. On a stack the newer card is beside the old one,
   not in its place, and gating it holds the stack. Not yet measured on a stack.
