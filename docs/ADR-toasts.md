@@ -679,5 +679,9 @@ rule 4's shows). Such an end is a defect to fix, not a decided behaviour.
 which hold a toast back because another toast is on screen: §10 rule 5 (pre-emption) and the swap-edge gating that
 replaced it.
 
+Confirmed by the owner, 2026-11-24 («yes, right.»): a window's new frames reach dom0 only after a read has named the
+cards they show, at most 3 s later. A toast is never held back because another toast is on screen or queued.
+Pre-emption is removed.
+
 Between two stacked cards, dom0 shows a black band 2 pixels high. The rest of the transparent gap is filled with the
 card's own background.
