@@ -628,6 +628,23 @@ static LONG HoldPeek(uint32_t id, LONG* seqOut = nullptr, ULONGLONG* arrivalOut 
     return v;
 }
 
+// Listing thread, after a listing that completed: every ring record whose toast is no longer in the Notification Center
+// (dismissed by the user, cleared, removed by its app) is marked gone, once, so the agent's no-banner scan does not claim
+// it for a forward that cannot happen - toast-hold 2026-11-24 S3iii: id=15, cleared while queued at 22:45:39, was
+// claimed at 22:45:42 with an ERROR saying the bridge forwards it, and nothing could be.
+static void HoldMarkUnlisted(std::unordered_set<uint32_t> const& listed)
+{
+    TH_IPC_RECORD r;
+    if (!g_hold) return;
+    for (int i = 0; i < TH_IPC_RECORDS; i++)
+    {
+        if (!ThIpcRead(g_hold, i, &r) || (r.Flags & TH_REC_FLAG_GONE) || listed.count(r.NotifId)) continue;
+        if (!ThIpcMarkGone(g_hold, i, r.Seq)) continue;
+        BLog(L"HOLD id=%u seq=%ld gone from the listing (record %s)%s", r.NotifId, r.Seq, HoldVerdictName(r.Verdict),
+             r.Verdict == TH_VERDICT_BRIDGE ? L": claimed for dom0 but removed before it was forwarded - not forwarded" : L"");
+    }
+}
+
 // The agent's toast hold runs (it published HoldActive): it claims every toast no banner decides - at the banner's end, or
 // by its no-banner scan - so the bridge waits for that word instead of giving a toast up by counting passes (ADR-toasts 13).
 static bool HoldAgentWatches()
@@ -4907,6 +4924,11 @@ static int BridgeMain()
                     if (ok && ToastActSentAnomaly(e.row, actions.size() / 2))
                         BLog(L"ANOMALY id=%u: a toast with choice buttons went to dom0 without them, the choice is lost", e.id);
                 }
+            }
+            {
+                std::unordered_set<uint32_t> listed;
+                for (auto const& un : list) listed.insert(un.Id());
+                HoldMarkUnlisted(listed);
             }
             // bound the seen-set: INTERSECT with what is still in the center. A plain rebuild
             // from the center would re-mark ids deliberately left unseen for the fail-open
