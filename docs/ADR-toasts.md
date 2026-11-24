@@ -81,7 +81,7 @@ flowchart TD
 | 10 | The guest banner is suppressed by not mapping it, never by ShowBanner | ACCEPTED (owner, Jev); built for 4.3.35, guest acceptance owed | 2026-10-04 |
 | 11 | A toast's buttons travel to dom0 as actions, and a dom0 click is carried out in the guest - all of them or none | ACCEPTED (owner, 2026-10-31); shipped - 4.3.36 carries seven fixes to the buttons a forwarded notification carries | 2026-10-31 |
 | 12 | An explicit Deny of notification access stops the bridge by its own reading: it says why and stands down | ACCEPTED (owner, Jev 0.95); not built | 2026-11-13 |
-| 13 | Stacked toasts are normal and required: never corrected, held or cut to one card | ACCEPTED (owner); not built - the card crop and §10's hold contradict it | 2026-11-24 |
+| 13 | Stacked toasts | ACCEPTED (owner) | 2026-11-24 |
 
 Status words and the section format are defined in `docs/ADR-README.md`.
 
@@ -274,14 +274,7 @@ fucking ugly P1").
 
 Measured 2026-10-04 on retail Windows 11 26300 and Windows 10 19045: ONE ShellExperienceHost banner window
 (`Windows.UI.Core.CoreWindow`, "New notification") serves every toast of the session; in that probe the shell showed
-banners one at a time, first in first out, a queued one seconds after its arrival. (2026-11-24: SUPERSEDED by §13 - stacked
-toasts are normal and required, owner. That is ONE probe's
-observation, not how Windows behaves. Its data - scratchpad/toast-banner-probe/ - is gone and its script was never
-committed, so the firing interval and the senders are unknown. It contradicts 2026-09-13 on win11-up: two toasts STACKED
-as two cards in one 364x326 banner window - agent main.c "THE BLACK BAND BETWEEN STACKED TOASTS", fixed in 4.3.30 - and
-was written here without that record. Toast-hold runs on win11r queue; why it stacked then and queues now is NOT
-measured, and a banner that never times out blocks every toast behind it only because it queues -
-TOASTBANNERLOSTONDIRECTPATH.) A new banner arrives either by a collapse-and-grow
+banners one at a time, first in first out, a queued one seconds after its arrival. A new banner arrives either by a collapse-and-grow
 cycle or in place (same rectangle, a burst of location changes). The card's UI Automation tree names it by
 non-localized ids: `NormalToastView` (the card), `SenderName`, `Title` (11) or `TitleText` (10), `MessageText`. So a
 banner is identified by its content, never by its window or by arrival order alone.
@@ -306,6 +299,7 @@ banner is identified by its content, never by its window or by arrival order alo
    A dead bridge's unacknowledged records read as `window`.
 5. While a newer record is still `bridge` or `pending`, a displayed window-path banner is unmapped before an in-place
    swap can paint (pre-emption), bounded (3 s for `pending`, 15 s for `bridge`, never while the bridge is down).
+   WITHDRAWN by §13.
 6. Only the banner is held: the ShellExperienceHost banner surface (a surface >= 90 % of the screen is not one); a window
    with no toast card in two reads at least 250 ms apart is a flyout and is shown at once.
 7. Nothing runs at rest: deadlines are armed only while something is held, suppressed or pre-empted.
@@ -342,7 +336,7 @@ non-seamless forwarding nothing - and failed only rule 5's case.
 **Open.** Not fixed by this section: a toast whose banner timed out before a correction is only in the guest's
 Notification Center; the identity of system toasts whose display name differs between the notification database and
 the card is unmeasured (a mismatch fails open: the double returns, logged).
-**DECIDED AND BUILT 2026-10-31: rule 5 is replaced by swap-edge gating.** The displayed window-path banner stays MAPPED and
+**WITHDRAWN by §13.** **DECIDED AND BUILT 2026-10-31: rule 5 is replaced by swap-edge gating.** The displayed window-path banner stays MAPPED and
 that window's frames are held back until a fresh identity read says which toast it now carries. The measurement this section
 was waiting on - "whether the capture path can hold back one mapped window's frames" (Jev 0.75) - is taken, from source:
 `SendWindowDamageEvent` has exactly ONE definition (`agent/gui-agent/send.c`, declared in `send.h`), every forwarding path
@@ -351,8 +345,6 @@ a rect there - the negative-geometry refusal, counted and logged. So the hold ne
 provable by there being a single definition rather than by visiting call sites. On that measurement Jev moved swap-edge
 gating from 0.44 to 0.79, against the 0.44/0.36/0.08 of 2026-10-06.
 
-(§13, 2026-11-24: a STACK is not a swap - its cards are never held or gated; what follows is the reasoning for one toast
-replacing another in place, and it assumed that replacement is the only way a second toast arrives.)
 Why holding frames is the right semantics: Windows toasts reuse ONE banner window, which is why rule 5 unmapped rather than
 leaving toast B's pixels inside the window dom0 was told is toast A. But the pre-emption fires on the mere EXISTENCE of a
 newer unconsumed record - measured 4.47 s before that toast's content arrived - so the cure ran far ahead of the disease and
@@ -657,33 +649,17 @@ the bridge leaves before it publishes a pid, as the measured policy refusal does
 was written (Evidence). A policy refusal is still left to the access check and records nothing, so the
 agent's 60 s `QGANOTIFNOTREADY` ERROR stays for it (Jev 0.49 against 0.49, no verdict).
 
-## 13. Stacked toasts are normal and required: never corrected, held or cut to one card
+## 13. Stacked toasts
 
-**Status.** ACCEPTED (owner, 2026-11-24). Partly built: the crop keeps every card (agent 3888b34); the hold and
-the pre-emption gate listed under Consequences still contradict it.
+**Status.** ACCEPTED (owner, 2026-11-24).
 
-**Context.** When toasts arrive close together, Windows stacks them as several cards in its one banner window, the
-window growing to hold them (2026-09-13 on win11-up: two cards in a 364x326 window; 2026-10-20 to 11-22 on win11-nfy,
-almost daily: the window grows from 396x200 to 396x369, two cards and the transparent gap at y=156). §10 was built on
-"the shell shows banners one at a time, first in first out" - one headless probe of 2026-10-04 whose data was not kept,
-written there without reconciling it with the 2026-09-13 stack. The toast hold, the pre-emption gate, the toast-hold
-harness and the register's stuck-banner analysis all took that sentence as how Windows behaves.
+**Decision.**
+- Owner, 2026-11-24: «stacking toasts is NORMAL and REQUIRED and should not be "corrected" or "held"»
+- Owner, 2026-11-24: «toast must show once»
+- Owner, 2026-11-24: «dom0 shows every card in order of appearance»
+- Owner, 2026-11-24: «combining is allowed for non-bridged toasts. it is not allowed for bridged bubbles.»
+- Owner, 2026-09-13: «no doubles»
 
-**Decision.** The owner, 2026-11-24: «stacking toasts is NORMAL and REQUIRED and should not be "corrected" or "held"».
-A stack of toast cards is the shell working as designed. dom0 shows the stack the guest shows - every card, at the
-window's full size. Nothing in the agent, the bridge or the harness treats a stack as an error, a swap, a queue or a
-toast "painting into another's window", and nothing holds, gates, unmaps or crops a stack to fewer cards. A guest on which
-the shell queues banners instead of stacking them is the case to explain, not the reference.
-
-**Consequences** (each is a defect against this decision, findings/issues.md TOASTSTACKNOTSHOWN):
-* The card crop picked one card (`toastcrop-pick.h` TcPickLargest, "the single largest qualifying element (toasts)",
-  2026-09-06 to 2026-11-24): the equal cards tied and the first in the walk, the OLDEST, was kept (win11-nfy: 364x326
-  re-cut to 364x157). Agent 3888b34: every surface takes the UNION of the qualifiers - every card of a stack (win11r
-  26300 UIA dump: 3 cards 364x157 at x=4740, union 364x495), and on one card the card itself.
-* §10's hold and the pre-emption gate assume one toast per banner window: a newer record "queued behind this shown
-  banner ... would paint into this window in place" gates dom0's frames. On a stack the newer card is beside the old one,
-  not in its place, and gating it holds the stack. Not yet measured on a stack.
-* The toast-hold harness's owed-banner wait and the grader's comments stated one banner at a time as the shell's
-  behaviour. Measured since: win11r STACKS persistent (reminder) toasts 15-19 s apart - 2 then 3 cards, crop-before-map
-  2026-11-24 - and the same agent gated every grow as a swap and cut the 2-card stack to its oldest card. Toast-hold's
-  default toasts 0.85 s apart queued; whether the scenario or the interval decides is not measured.
+§10's "the shell shows banners one at a time, first in first out" is withdrawn. So are the two decisions built on it,
+which hold a toast back because another toast is on screen: §10 rule 5 (pre-emption) and the swap-edge gating that
+replaced it.
