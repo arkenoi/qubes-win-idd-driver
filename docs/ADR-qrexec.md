@@ -120,7 +120,8 @@ fail nor to pass. Owed: that line on every boot of the acceptance, and a call ma
 
 **Status:** PROPOSED, 2026-11-14. Built on the owner's order; items 2 to 4 of the audit's §1.4. Jev on the
 fixes: points 1, 4 and 5 at or above the floor (0.98 and 0.90, 0.76, 0.81); points 2 and 3 no verdict (0.63,
-0.23).
+0.23). The build left main the same day with the rest of the audit intake (superproject 647f1cec), so 4.3.44 to
+4.3.46 ship none of it. Points 2 and 3 are restored by winutils fbe86fd (2026-11-25), with #10 (below).
 
 **Context.** Any error a message handler returned left the agent's main loop: the service ended and dom0
 dropped every connection of the qube. One client that vanished mid-handshake ended the pipe server's accept
@@ -147,11 +148,25 @@ Point 3, with a one-shot probe on its own pipes: a connect to an instance whose 
 it answers ERROR_NO_DATA, and a read on such an inbound instance still returns what the client wrote. #34
 itself was not reproduced. Points 1, 4 and 5 were not driven.
 
-**Open.** §7.4, §7.11. A caller that takes the name of the second pipe and never opens it still parks the
-accept thread (#10). Seen on both builds: the next call made inside the qube hung and nothing was logged.
-On this build a call from another qube was still served afterwards. The form that ends needs an overlapped
-connect and was not built. The 100 ms wait before a pipe worker thread is killed stays (#11, narrowed:
-`AUDIT-qrexec` §1.6).
+6. Each client's handshake runs on a thread of its own, so a client that takes the name of the second pipe and
+   never opens it (#10) holds that thread only, and the accept loop goes on to the next client. The client's
+   process exit ends the handshake: a wait on the process, registered before the name is sent, opens the second
+   pipe itself, so the waiting connect completes. The client counts as gone only when that open succeeds; a client
+   that opened its second pipe and then exited is served, as before. A client that left is dropped with one
+   warning line, any other failed step with one error line. No time limit (section 4).
+
+**Cost (6).** One short thread per connection. A client that stays alive and never opens its second pipe holds
+its thread and two pipe handles until it exits.
+
+**Evidence (6).** Seen to fail on 2026-11-25 with 4.3.46's windows-utils (9dfa251), on the 26300 subject
+win11r-cfly, qubesdb's local pipe: a complete client was served in 92 ms; a client took the second pipe's name and
+left; the next complete client found no instance to connect to in 10 s ("The semaphore timeout period has
+expired"), while a qrexec call into the qube was still answered. Seen to pass the same day with fbe86fd
+(package 6dab98b4, same subject and sequence): control served in 107 ms, the client after the stimulus served in
+100 ms. ca1a045 (who counts as gone; one line per dropped client): owed, same sequence.
+
+**Open.** §7.4, §7.11. The 100 ms wait before a pipe worker thread is killed stays (#11, narrowed:
+`AUDIT-qrexec` §1.6). Points 1, 4 and 5 and the other fixes of the intake are still out of main.
 
 ## 4. A fix adds no time limit and no counted retry; what cannot succeed fails at once
 
