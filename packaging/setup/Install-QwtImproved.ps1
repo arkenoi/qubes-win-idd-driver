@@ -807,7 +807,15 @@ function Set-BootResume {
     $global:LASTEXITCODE = $null
     try { & schtasks.exe /Query /TN $script:TaskName *>&1 | Out-Null } catch { }
     if ($LASTEXITCODE -ne 0) { Fail "schtasks /Create reported success but '$script:TaskName' does not exist (query rc '$LASTEXITCODE') - cannot arm the post-reboot resume" }
-    Write-Log "boot resume armed as SYSTEM task '$script:TaskName': $cmd"
+    # The scheduler's own record of whether this task ran at the next boot (201/203 in
+    # Microsoft-Windows-TaskScheduler/Operational) exists only while that channel is on, and client
+    # Windows ships it off. Register-QwtDeathReporter turns it on in STAGE 2 - after the boot this
+    # task must fire in - so on a clean install the boot that matters kept no record, and
+    # STAGE2RESUMETASKSILENTLYDOESNOTFIRE could not be read. A diagnostic: a failure is said, never fatal.
+    $global:LASTEXITCODE = $null
+    try { & wevtutil.exe set-log Microsoft-Windows-TaskScheduler/Operational /enabled:true *>&1 | Out-Null } catch { }
+    $taskLog = if ($LASTEXITCODE -eq 0) { 'on' } else { "NOT on (wevtutil rc '$LASTEXITCODE') - the next boot keeps no record of whether it ran" }
+    Write-Log "boot resume armed as SYSTEM task '$script:TaskName': $cmd; task scheduler history $taskLog" $(if ($LASTEXITCODE -eq 0) { 'INFO' } else { 'WARN' })
 }
 
 function Clear-BootResume {
