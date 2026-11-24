@@ -1254,4 +1254,10 @@ owner not shown yet, a popup mostly over it is held the same way only when it is
 smaller one keeps its own window. A popup mostly outside its owner, a popup with a caption (a dialog), and any popup
 below the direct floor keep their own window.
 
+**Decision (Start and Search).** A WinUI menu or flyout of a framed Start or Search - owned by it, or ownerless in
+its process - is not announced when at least 90% of it lies over that surface's card. Start's capture draws it: one
+copy, moving with Start. Other WinUI menus keep strict containment.
+
 **Cost.** Such a popup cannot be moved or stacked in dom0 apart from its owner, and it is clipped to the owner.
+For Start and Search: a popup more than 10% outside the card keeps its own window at its guest position, which
+dom0 does not move with Start (open).
