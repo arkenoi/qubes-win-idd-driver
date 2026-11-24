@@ -16,7 +16,8 @@
 //     normalization on EITHER side fails here;
 //   * the record lifecycle the bridge drives: pending at listing, then the classifier's verdict only if
 //     still pending (a compare-exchange: a WindowOnly / allowlisted / forward-decided route is never
-//     overridden), the forward outcome unconditional - `window` when it cannot be forwarded, `forwarded`
+//     overridden) and only within the record's 3 s - at ArrivalTick + 3 s a `bridge` answer is stored `window`,
+//     never forwarded (ADR-toasts 13) -, the forward outcome unconditional - `window` when it cannot be forwarded, `forwarded`
 //     once dom0 acknowledged it; the agent's reader sees exactly those values; the header's Seamless flag
 //     the agent publishes (0 = the bridge forwards nothing);
 //   * the ring survives wrap and never hands out a half-written record.
@@ -181,8 +182,8 @@ int main()
         TiIdentFromTexts(TW("Calendar"), TW("Meeting"), TW("in 5 min"), &id);
         LONG s = ThIpcPublish(h, 300, 0, 0x9u, &id, TH_VERDICT_BRIDGE, 5000);
         Check("actions: a fresh record carries no agent mark", ThIpcRead(h, 0, &r) && r.AgentShownSeq == 0 && ThIpcAgentState(h, s) == TH_AGENT_NONE);
-        Check("actions: the forward's ack -> forwarded, the sequence handed back", ThIpcSetVerdictSeq(h, 300, TH_VERDICT_FORWARDED, FALSE, &seq) && seq == s);
-        Check("actions: a failed click turns the FORWARDED record window (unconditional), same sequence", ThIpcSetVerdictSeq(h, 300, TH_VERDICT_WINDOW, FALSE, &seq) && seq == s && ThIpcRead(h, 0, &r) && r.Verdict == TH_VERDICT_WINDOW);
+        Check("actions: the forward's ack -> forwarded, the sequence handed back", ThIpcSetVerdictSeq(h, 300, TH_VERDICT_FORWARDED, FALSE, &seq, 0, nullptr) && seq == s);
+        Check("actions: a failed click turns the FORWARDED record window (unconditional), same sequence", ThIpcSetVerdictSeq(h, 300, TH_VERDICT_WINDOW, FALSE, &seq, 0, nullptr) && seq == s && ThIpcRead(h, 0, &r) && r.Verdict == TH_VERDICT_WINDOW);
         Check("actions: the agent's mark on that record reads back", (ThIpcAgentMarkShown(h, s), ThIpcAgentState(h, s) == TH_AGENT_SHOWN));
         Check("actions: a mark asked for a sequence not in the ring reads none", ThIpcAgentState(h, s + 1) == TH_AGENT_NONE && ThIpcFindSeq(h, s + 1) < 0);
         Check("actions: a mark naming another sequence reads none (a flag would not be enough)", (TI_STORE32(&ThIpcRecords(h)[0].AgentShownSeq, s + 7), ThIpcAgentState(h, s) == TH_AGENT_NONE));
@@ -197,7 +198,28 @@ int main()
         Check("actions: ...and the old toast's record reads none too (it is gone, nothing to reopen)", ThIpcAgentState(h, s) == TH_AGENT_NONE);
         ThIpcAgentMarkShown(h, last);
         Check("actions: a mark for the new toast itself reads back", ThIpcAgentState(h, last) == TH_AGENT_SHOWN);
-        Check("actions: a verdict change for an id no longer in the ring says so (the bridge goes straight to the notice)", !ThIpcSetVerdictSeq(h, 300, TH_VERDICT_WINDOW, FALSE, &seq) && seq == 0);
+        Check("actions: a verdict change for an id no longer in the ring says so (the bridge goes straight to the notice)", !ThIpcSetVerdictSeq(h, 300, TH_VERDICT_WINDOW, FALSE, &seq, 0, nullptr) && seq == 0);
+    }
+
+    // ---- 3c. the classifier's answer on the record's clock (ADR-toasts 13): 3 s from ArrivalTick --------
+    {
+        unsigned char block[TH_IPC_BYTES];
+        TH_IPC_HEADER* h = (TH_IPC_HEADER*)block;
+        TH_IPC_RECORD r0, r1, r2;
+        TOAST_IDENT id;
+        BOOL l0 = TRUE, l1 = FALSE, l2 = FALSE;
+        ThIpcInit(h);
+        TiIdentFromTexts(TW("Mail"), TW("New message"), TW("From Bob"), &id);
+        ThIpcPublish(h, 500, 0, 0, &id, TH_VERDICT_PENDING, 1000);
+        ThIpcPublish(h, 501, 0, 0, &id, TH_VERDICT_PENDING, 1000);
+        ThIpcPublish(h, 502, 0, 0, &id, TH_VERDICT_PENDING, 1000);
+        const bool w0 = ThIpcSetVerdictSeq(h, 500, TH_VERDICT_BRIDGE, TRUE, nullptr, 1000 + TH_HOLD_BOUND_MS - 1, &l0);
+        const bool w1 = ThIpcSetVerdictSeq(h, 501, TH_VERDICT_BRIDGE, TRUE, nullptr, 1000 + TH_HOLD_BOUND_MS, &l1);
+        const bool w2 = ThIpcSetVerdictSeq(h, 502, TH_VERDICT_WINDOW, TRUE, nullptr, 1000 + TH_HOLD_BOUND_MS, &l2);
+        Check("late verdict: bridge 2999 ms after listing is stored bridge; at 3000 ms it is stored window and reported late; a late window is reported late too",
+              w0 && !l0 && ThIpcRead(h, 0, &r0) && r0.Verdict == TH_VERDICT_BRIDGE &&
+              w1 && l1 && ThIpcRead(h, 1, &r1) && r1.Verdict == TH_VERDICT_WINDOW &&
+              w2 && l2 && ThIpcRead(h, 2, &r2) && r2.Verdict == TH_VERDICT_WINDOW);
     }
 
     // ---- 4. the matcher from the bridge's point of view: a bannerless older record ---------------

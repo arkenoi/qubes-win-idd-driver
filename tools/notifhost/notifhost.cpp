@@ -586,17 +586,42 @@ static bool HoldSeamlessGoingDown()
 // onlyIfPending: the classifier's answer may never override a route the listing settled (WindowOnly app,
 // allowlist, forward outcome); a `false` is the listing's own final word. Returns whether the record was
 // still in the ring; *seqOut (optional) is its sequence, for the agent-mark read-back (ADR-toasts 11).
-static bool HoldVerdictSeq(uint32_t id, LONG verdict, bool onlyIfPending, LONG* seqOut)
+// *lateOut (optional): the classifier's answer came at or after the record's ArrivalTick + 3 s - the record holds
+// `window` and the caller must never forward it (ADR-toasts 13, owner 2026-11-24).
+static bool HoldVerdictSeq(uint32_t id, LONG verdict, bool onlyIfPending, LONG* seqOut, bool* lateOut = nullptr)
 {
+    LONG seq = 0;
+    BOOL late = FALSE;
     if (seqOut) *seqOut = 0;
+    if (lateOut) *lateOut = false;
     if (!g_hold) return false;
-    if (ThIpcSetVerdictSeq(g_hold, id, verdict, onlyIfPending ? TRUE : FALSE, seqOut))
+    // The time is taken AT the write (ThIpcSetVerdictSeq compares it with the record's ArrivalTick).
+    if (!ThIpcSetVerdictSeq(g_hold, id, verdict, onlyIfPending ? TRUE : FALSE, &seq, GetTickCount64(), &late))
     {
-        HoldSignal();
-        BLog(L"HOLD id=%u verdict=%s%s", id, HoldVerdictName(verdict), onlyIfPending ? L" (classifier, was pending)" : L"");
-        return true;
+        if (seqOut) *seqOut = seq;
+        return false;
     }
-    return false;
+    if (seqOut) *seqOut = seq;
+    if (onlyIfPending && !late && verdict == TH_VERDICT_BRIDGE)
+    {
+        // The tick was read BEFORE the compare-exchange. Had this thread been held between the two, the agent may have
+        // read `pending` past ArrivalTick + 3 s and mapped the banner. A tick read AFTER the write settles it: late now
+        // means late. The verdict store does not have this id yet (VerdictStorePut fills it after this returns), so the
+        // listing cannot have forwarded it.
+        const int slot = ThIpcFindSeq(g_hold, seq);
+        if (slot >= 0 && GetTickCount64() >= ThIpcRecordsC(g_hold)[slot].ArrivalTick + TH_HOLD_BOUND_MS)
+        {
+            late = TRUE;
+            ThIpcSetVerdictSeq(g_hold, id, TH_VERDICT_WINDOW, FALSE, nullptr, 0, nullptr);
+        }
+    }
+    const LONG stored = (late && verdict == TH_VERDICT_BRIDGE) ? TH_VERDICT_WINDOW : verdict;
+    if (lateOut) *lateOut = (late != FALSE);
+    HoldSignal();
+    BLog(L"HOLD id=%u verdict=%s%s", id, HoldVerdictName(stored),
+         !onlyIfPending ? L"" : late ? L" (classifier, was pending; LATE: after the record's 3 s - window path, never forwarded)"
+                                    : L" (classifier, was pending)");
+    return true;
 }
 
 static void HoldVerdict(uint32_t id, LONG verdict, bool onlyIfPending)
@@ -2048,6 +2073,7 @@ struct VerdictEntry
 {
     int route = ToastRouteWindow;
     int row = 0;              // the classifier's row (4 = real-choice buttons: the SENT line asserts actions went with it)
+    bool late = false;        // the classifier said bridge at or after the record's 3 s: route is Window, never forwarded
     ToastActPlan plan;        // ok with actions (possibly none) when route is bridge
     std::wstring clsid;       // "{...}" when any action is a COM activation
     /* When this verdict was stored. THE SAME INSTANT the hold record turns `bridge` (VerdictStorePut
@@ -2071,20 +2097,28 @@ static void VerdictInit()
 static void VerdictStorePut(uint32_t id, int route, ToastActPlan const& plan, std::wstring const& clsid, int row)
 {
     if (!g_verdict.init) return;
+    // THE RECORD FIRST, THEN THE STORE, THEN THE WAKE (ADR-toasts 13, owner 2026-11-24: "Any verdict that arrives after
+    // a record has been pending for 3 s goes to the window path and is never forwarded"). The agent is holding this
+    // toast's banner on the record published at listing: the verdict goes to it NOW, from this thread (the ETW tier
+    // answers within the second; the listing adds its own latency). Only while the record is still pending - a settled
+    // route stands - and never `bridge` while dom0 is unreachable: nobody would forward it, so the banner must show.
+    // The record write decides whether the answer is in time (ThIpcSetVerdictSeq, the record's ArrivalTick + 3 s); the
+    // store carries what it decided BEFORE the listing thread can see the entry, so a late `bridge` takes the Window
+    // branch there and is never forwarded. Before this order the store was filled and the listing woken first, and the
+    // listing's own unconditional `bridge` write then forwarded whatever the record said.
+    bool late = false;
+    HoldVerdictSeq(id, (route == ToastRouteBridge && !g_connDead) ? TH_VERDICT_BRIDGE : TH_VERDICT_WINDOW, true, nullptr, &late);
+    const bool lateBridge = (route == ToastRouteBridge && late);
     {
         CsGuard g(&g_verdict.lock);
         if (g_verdict.route.size() > 4096) { g_verdict.route.clear(); g_verdict.passes.clear(); }
         VerdictEntry& e = g_verdict.route[id];
-        e.route = route; e.row = row; e.plan = plan; e.clsid = clsid;
+        e.route = lateBridge ? ToastRouteWindow : route; e.late = lateBridge;
+        e.row = row; e.plan = plan; e.clsid = clsid;
         e.putTick = GetTickCount64();
     }
     InterlockedExchange(&g_listWanted, 1);
     if (g_mainWake) SetEvent(g_mainWake);   // a toast may be waiting for this verdict: re-list now, not on a tick
-    // The agent is holding this toast's banner on the record published at listing: give it the verdict NOW,
-    // from this thread, rather than after the re-listing above (the ETW tier answers within the second; the
-    // listing adds its own latency). Only while the record is still pending - a settled route stands - and
-    // never `bridge` while dom0 is unreachable: nobody would forward it, so the banner must show.
-    HoldVerdict(id, (route == ToastRouteBridge && !g_connDead) ? TH_VERDICT_BRIDGE : TH_VERDICT_WINDOW, true);
 }
 // Returns true and fills *out when a verdict exists. Otherwise counts this pass: a toast whose
 // verdict never arrives must NOT be deferred for ever - after kVerdictMaxPasses it takes the
@@ -4632,9 +4666,10 @@ static int BridgeMain()
                             seen.insert(id); VerdictForget(id);
                             HoldVerdict(id, TH_VERDICT_WINDOW, false);   // the listing's final word (reopens an allowlisted toast's held banner)
                             if (known)
-                                BLog(L"skip id=%u aumid=%s title='%s' (window path; %s verdict%s%s)", id, aumid.c_str(), title.c_str(),
+                                BLog(L"skip id=%u aumid=%s title='%s' (window path; %s verdict%s%s%s)", id, aumid.c_str(), title.c_str(),
                                      listed ? L"allowlisted sender, but the classifier's" : L"classifier",
-                                     ve.plan.ok ? L"" : L"; actions ", ve.plan.ok ? L"" : ToastActSlug(ve.plan).c_str());
+                                     ve.plan.ok ? L"" : L"; actions ", ve.plan.ok ? L"" : ToastActSlug(ve.plan).c_str(),
+                                     ve.late ? L"; LATE: bridge after the record's 3 s, never forwarded" : L"");
                             else
                                 BLog(L"skip id=%u aumid=%s title='%s' (window path; no verdict after %d passes)", id, aumid.c_str(), title.c_str(), kVerdictMaxPasses);
                             continue;

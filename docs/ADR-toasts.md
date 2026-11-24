@@ -683,5 +683,9 @@ Confirmed by the owner, 2026-11-24 («yes, right.»): a window's new frames reac
 cards they show, at most 3 s later. A toast is never held back because another toast is on screen or queued.
 Pre-emption is removed.
 
+Ordered by the owner, 2026-11-24 («do the first fix. i do not know why you dance so much about "bridge dies". if
+bridge dies, everything else becomes a lesser problem»): the bridge's limit matches the agent's. Any verdict that
+arrives after a record has been pending for 3 s goes to the window path and is never forwarded.
+
 Between two stacked cards, dom0 shows a black band 2 pixels high. The rest of the transparent gap is filled with the
 card's own background.
