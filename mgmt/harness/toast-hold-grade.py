@@ -407,6 +407,12 @@ def parse_agent(lines: List[str], offset: dt.timedelta, tz: Optional[dt.tzinfo] 
             kind = "CARD"; hwnd = re.search(HEX_RE + r": toast card in", msg).group(1).lower()
         elif "Seamless mode changed to" in msg:
             kind = "MODE"; kv["seamless"] = re.search(r"Seamless mode changed to (\d)", msg).group(1)
+        elif "QGATOASTCARDS hwnd=" in msg:
+            # A stacked banner's cards (agent 40c8abf+): which toast ids it keeps OUT of the window's crop.
+            # A card kept out is not on dom0's copy of the window whatever the window's frames do.
+            kind = "CARDS"; hwnd = re.search(r"QGATOASTCARDS hwnd=" + HEX_RE, msg).group(1).lower()
+            kv = {"out": " ".join(re.findall(r"card\d+=id(\d+)/[^/ ]+/out", msg)),
+                  "shown": " ".join(re.findall(r"card\d+=id(\d+)/[^/ ]+/shown", msg))}
         elif "QGATOASTQUEUED hwnd=" in msg:
             mq = re.search(r"QGATOASTQUEUED hwnd=" + HEX_RE + r" destroyed with id=(\d+) still queued behind id=(\d+)", msg)
             if not mq:
@@ -980,7 +986,18 @@ class Grader:
                 segunmaps = [e for e in self.agent if e.hwnd == p.hwnd and is_unmap(e) and p.key() < e.key() < end]
                 remaps = [e for e in self.agent if e.hwnd == p.hwnd and e.kind == "MAP" and p.key() < e.key() < end
                           and any(u.key() < e.key() for u in segunmaps)]
-                shown = [r for r in resumes if self.repaint_paid(p.hwnd, r.key(), end)] + remaps
+                # A STACKED card kept out of the window's crop is not on dom0's copy of the window, so a resume
+                # does not show it: run 45368490875 S3iv-2 was graded DOUBLE on a resume at 16:02:56.262 while
+                # every dom0 cut of the window was 364x157 at 4740,1222 - the reminder's card alone, read in the
+                # pixels. Judged on the hwnd's latest cards line that NAMES this toast at or before the resume
+                # (same millisecond counts: the agent writes it at the end of the pass that resumed): a card
+                # kept out stays out until a line says it is shown, and once it leaves the stack it cannot come
+                # back - the resume that run counted, 16:03:00.787, came after "n=1", the toast already gone.
+                def kept_out(r):
+                    named = [e for e in self.agent if e.hwnd == p.hwnd and e.kind == "CARDS" and e.t <= r.t
+                             and (nid in e.kv.get("out", "").split() or nid in e.kv.get("shown", "").split())]
+                    return bool(named) and nid in max(named, key=Ev.key).kv.get("out", "").split()
+                shown = [r for r in resumes if self.repaint_paid(p.hwnd, r.key(), end) and not kept_out(r)] + remaps
                 detail = (f"queued behind the displayed banner in hwnd=0x{p.hwnd}, frames gated "
                           f"{p.t.strftime('%H:%M:%S.%f')[:-3]}; gate resumes before another toast takes the window "
                           f"or it ends: {len(resumes)}, re-maps after an unmap: {len(remaps)}, reached dom0: {len(shown)}")
