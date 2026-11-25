@@ -258,6 +258,7 @@ INFORMATIONAL = (
     'next',                      # L1149/L1942 what the next boot does
     'bin_dir', 'leftovers_targeted', 'existing_qwt', 'upgrade_mode',      # L1741/L1742/L1754-1757/L1853 records
     'pv_boot_disk',              # L1747 probe result; the installer gates on it itself (UNKNOWN = at risk)
+    'retry_prestop',             # what the stop before the ADDLOCAL-only retry found; a service that did not stop Fails there
     'pvdisk_driver_installed', 'pvdisk_driver_package',                    # L1828/L1829 versions
     'emulated_storage_rearmed',  # L1970 marker
     'addlocal', 'msiexec_1618_retries',                                    # L2232 what was asked / L2217 bounded retry count

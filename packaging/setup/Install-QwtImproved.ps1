@@ -1118,35 +1118,23 @@ $script:RecoverySuspended = @{}
 $script:RecoveryAbsent = @{}
 
 function Read-QwtQubesDbValue {
-    # One qubesdb read through the client DLL (System32\qubesdb-client.dll, installed by the MSI's Core
-    # feature). $null = unreadable (no daemon, no pipe, dom0 not connected yet, key absent) - that is
-    # the NOT-READY answer, never an error. Inline mirror of guest/qubesdb-read.ps1's Get-QubesDbValue
-    # (that file lists the mirrors; this one carries its own type name so it can coexist with the
-    # per-boot priming block's QdbPrime in the same process).
+    # One qubesdb read, OUT OF THIS PROCESS: tools\qubesdb-read.exe from this setup tree (release-package
+    # always builds it, make-setup hashes it into SHA256SUMS) loads System32\qubesdb-client.dll, reads, and
+    # exits. $null = unreadable (no daemon, no pipe, dom0 not connected yet, key absent) - that is the
+    # NOT-READY answer, never an error.
+    # NEVER IN-PROCESS AGAIN. This read used to [DllImport] qubesdb-client.dll into the installer itself, and
+    # that DLL is a file of the MSI's Core feature: once the QdbDaemon readiness probe had run, the installer
+    # held it mapped, so the ADDLOCAL-only retry (REINSTALLMODE=amus, every file replaced) had the Restart
+    # Manager close the holder - the installer. Measured 2026-11-26, WIN10-reinstall on win10-acc: RestartManager
+    # 10002 "Shutting down ... 'Windows PowerShell'" at 00:52:06, the installer gone mid-retry, no RESULT,
+    # QrexecAgent still held, the cell an "install STALLED". The per-boot priming block's QdbPrime still loads the
+    # DLL in-process; it runs after the last msiexec of the stage.
     param([Parameter(Mandatory)][string]$Path)
-    try {
-        if (-not ('QwtQdbProbe' -as [type])) {
-            Add-Type @'
-using System; using System.Runtime.InteropServices;
-public static class QwtQdbProbe {
-    [DllImport("qubesdb-client.dll", CallingConvention=CallingConvention.Cdecl)]
-    public static extern IntPtr qdb_open(IntPtr vmname);
-    [DllImport("qubesdb-client.dll", CallingConvention=CallingConvention.Cdecl, CharSet=CharSet.Ansi)]
-    public static extern IntPtr qdb_read(IntPtr h, string path, out uint value_len);
-    [DllImport("qubesdb-client.dll", CallingConvention=CallingConvention.Cdecl)]
-    public static extern void qdb_close(IntPtr h);
-}
-'@
-        }
-        $h = [QwtQdbProbe]::qdb_open([IntPtr]::Zero)
-        if ($h -eq [IntPtr]::Zero) { return $null }
-        try {
-            $len = [uint32]0
-            $ptr = [QwtQdbProbe]::qdb_read($h, $Path, [ref]$len)
-            if ($ptr -eq [IntPtr]::Zero) { return $null }
-            return [Runtime.InteropServices.Marshal]::PtrToStringAnsi($ptr, [int]$len)
-        } finally { [QwtQdbProbe]::qdb_close($h) }
-    } catch { return $null }
+    $exe = Join-Path $PSScriptRoot 'tools\qubesdb-read.exe'
+    if (-not (Test-Path -LiteralPath $exe)) { Fail "setup tree has no $exe - a release package always carries it; the installer reads qubesdb only through it" }
+    $out = & $exe $Path 2>$null
+    if ($LASTEXITCODE -ne 0) { return $null }   # 1 = key absent, >=2 = DLL/daemon not there yet
+    return (@($out) -join "`n")
 }
 
 # Readiness, where it is cheaply observable. A service without an entry is ready when the SCM says RUNNING.
@@ -3963,6 +3951,25 @@ function Invoke-Stage2 {
         if ($script:SameVersionReinstall) {
             Write-Log ("gui-agent.exe absent or requested features not LOCAL after REINSTALL=ALL - the MSI " +
                        "records a feature as Absent, which REINSTALL skips. Retrying ONCE with ADDLOCAL only.") 'WARN'
+            # THE RETRY GETS THE MAIN PASS'S PRECONDITION: nothing of ours holds a file of the package. Between the two
+            # passes the serial start brought QdbDaemon up (recovery armed), and QwtngNetSetup runs from boot; with
+            # REINSTALLMODE=amus the Restart Manager closed both in one session - the bulk teardown the pre-msiexec stop
+            # exists to prevent (2026-09-27) - and, through the in-process qubesdb read Read-QwtQubesDbValue no longer
+            # does, the installer itself. Measured 2026-11-26 WIN10-reinstall: RestartManager 10002 for 'Qubes PV NIC
+            # address applier' 00:52:04, 'QubesDB daemon' 00:52:06, 'Windows PowerShell' 00:52:06. So: disarm the
+            # relauncher, stop by the SCM's pid, and refuse the retry if one survives.
+            $retryStop = [ordered]@{}
+            foreach ($svc in 'QdbDaemon', 'QwtngNetSetup') {
+                [void](Suspend-QubesServiceRecovery -Name $svc)
+                $st = Stop-ServiceProcess -Name $svc -TimeoutSec 60
+                $retryStop[$svc] = if (-not $st.present) { 'absent' } else { $st.detail }
+                if ($st.present -and -not ($st.stopped -and $st.gone)) {
+                    $script:Result.detail.retry_prestop = (($retryStop.GetEnumerator() | ForEach-Object { "$($_.Key): $($_.Value)" }) -join '; ')
+                    Fail "before the ADDLOCAL-only retry: $svc did not stop ($($st.detail)) - the Restart Manager would close it, and the measured stall trigger is that teardown"
+                }
+            }
+            $script:Result.detail.retry_prestop = (($retryStop.GetEnumerator() | ForEach-Object { "$($_.Key): $($_.Value)" }) -join '; ')
+            Write-Log "before the ADDLOCAL-only retry: $($script:Result.detail.retry_prestop)"
             # Same QWTNG_SERIALSTART=1 as the main run: this msiexec may install a feature whose service was
             # Absent, and that service is then started below, serially, like the others - never by the MSI.
             $retryArgs = @('/i', "`"$msi`"", '/qn', '/norestart', "ADDLOCAL=$addlocal", $serialProp,
@@ -3980,6 +3987,9 @@ function Invoke-Stage2 {
             # post-msiexec "none running" assertion is NOT repeated here - the first pass legitimately left
             # QdbDaemon/QrexecAgent running, so it could not tell our start from the MSI's.
             Start-QwtServicesSerially -AfterRetry
+            # The relauncher the pre-retry stop disarmed goes back on, after the start as at the first pass. QwtngNetSetup's
+            # is not this function's: pvnic-selfprime, later in this stage, recreates that service and arms it where it does.
+            Set-QubesServiceRecovery
             $fc = & $featureCheck $features
             $script:Result.detail.features_installed = $fc.states
         }
