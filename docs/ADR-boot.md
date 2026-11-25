@@ -54,6 +54,7 @@ flowchart TD
 | 3 | Stage 2 switches devices LIVE on a guest that is about to power off | PROPOSED (Jev); NOT BUILT - one measurement decides it | 2026-10-29 |
 | 4 | A dom0 call's ring unmap moves out of the console session's first minute | REVERTED (owner); was ACCEPTED (owner), its first version REJECTED (measured) | 2026-11-14, 2026-11-18 |
 | 5 | A removal keeps the Xen PV drivers while Xen will unplug the emulated disk | ACCEPTED under Jev's floor, not a verdict; not yet measured on a build | 2026-11-15 |
+| 6 | The installer re-arms the PV disk latch before the power-off, so the first post-install boot is on the PV disk (F2) | ACCEPTED (owner); not yet built | 2026-11-26 |
 
 Status words and the section format are defined in `docs/ADR-README.md`.
 
@@ -126,9 +127,12 @@ approval of the exact text.
 invalidate for every page the guest removes from its physmap (`XENMEM_decrease_reservation`, or unmapping a
 mapped grant). The vCPU then waits synchronously for QEMU in the stub domain, and QEMU 9.0.2's invalidate
 handler runs `bdrv_drain_all` first. Every qrexec call INTO the guest makes the guest map the caller's vchan
-ring and unmap it at close, because the service side is the vchan client. That is two synchronous QEMU round
-trips per call. The guest's own outgoing calls and the agent's control channel only GRANT pages and do not pay
-this.
+ring and both data buffers and unmap them at close, because the service side is the vchan client. The ring is
+one page and each buffer is 16 (`VCHAN_BUFFER_SIZE` 65536, `findings/wedge.md`), and xenbus unmaps one page per
+hypercall (xenbus/src/xenbus/gnttab.c:771-777), while Xen sends one invalidate per hypercall (xen
+arch/x86/hvm/hypercall.c, `mapcache_invalidate` at hypercall exit). That is 33 synchronous QEMU round trips per
+call at close, plus the reservation drops at map time (corrected 2026-11-26; this said "two"). The guest's own
+outgoing calls and the agent's control channel only GRANT pages and do not pay this.
 
 Four recorded freezes (#3, #5, #6, E18) were each a call into the guest that landed in stage 2, between the
 moment QWT's services came up after msiexec and the stage's power-off: the window of the device work. Before
@@ -222,8 +226,11 @@ release gate as it runs, with no harness quiet window.
 
 **Open.** Not fixed by this section:
 
-- a freeze in a post-install boot (#4: our agent was running and answered the harness's first-answer burst,
-  which the stage-2 hold does not reach; the every-boot form, F2, waits on a premise probe);
+- a freeze in a post-install boot, which the stage-2 hold does not reach: #4, and 2026-11-25
+  (rel-45608968441-d WIN10-reinstall), where vcpu0 was held by Xen right after the unmap of the vchan ring in the
+  ordinary close of a completed harness VMShell call (qrexec-wrapper pid 3284, call 6 of 7 back to back), with
+  close+pin, A6QUIET, SVCPIN and CPUPIN all armed, in a boot whose system disk was on QEMU's emulated path. §6 (F2)
+  removes that boot's emulated disk;
 - a freeze with no QWT at all (J-C sp.1);
 - QEMU's own hang, which is not ours to patch (dom0 is not patched; owner);
 - the pre-msiexec part of an upgrade (the previous QWT's agent answers until `vchan_prestop` stops it) and the
@@ -445,5 +452,78 @@ and the next boot came up on the PV disk with `xenbus` and `xenvbd` bound - but 
 "Removal completed successfully", `msiexec /x` 3010, no product registered, and the next boot on the PV disk with
 `xenbus`, `xenfilt` and `xenvbd` boot-start, `xenvbd` bound and `DISKS=1` armed again. `xenvif` and `xennet` were
 absent before the uninstall as after it, so this run says nothing about the network packages.
+
+## 6. The installer re-arms the PV disk latch before the power-off, so the first post-install boot is on the PV disk
+
+**Status:** ACCEPTED (owner), 2026-11-26: «approved, apply the ADR once measurement confirms». Not yet built. Not a
+Jev verdict.
+
+**Context.** §2's mechanism makes every page a call into the guest unmaps a synchronous round trip to QEMU in the
+stub domain, and QEMU drains its block layer before answering. When the guest's system disk is itself served by
+QEMU's emulated path, every one of those round trips queues behind the guest's whole disk.
+
+Why a post-install boot comes up emulated, read in source and in an msiexec log:
+- xenbus's INF writes the latch to zero whenever its service is installed: `AddReg = ..., XenBus_Unplug`
+  (xenbus/src/xenbus.inf:92), `[XenBus_Unplug] HKLM,%UnplugKey%,"DISKS",0x00010001,0` (:106-108), with no
+  NOCLOBBER. It is the same clobber as NICS (guest/pvnic-selfprime.ps1:26), which the installer already repairs
+  before the power-off (`Install-QwtImproved.ps1`, the PV NIC latch site).
+- A same-version reinstall (`REINSTALL=ALL`) runs that install. From a reinstall cell's msiexec log
+  (rel-44303078804 win10-reinstall, `qwt-install.log`): "Attempting to repair driver with INF ...xenbus.inf",
+  "The device 'PCI\VEN_5853&DEV_0001...' is not a phantom. Hence the driver will be installed on the device.",
+  "A reboot is needed to install the component". An upgrade over an older package whose removal still runs
+  DIFxApp's driver step (before §5) does the same: uninstall, then reinstall on the device (rel-44303078804
+  win10-upgrade).
+- xen.sys reads the latch delete-on-read at boot start and unplugs only when it is non-zero and an
+  `Enum\XENBUS` subkey contains "VBD" (xen/unplug.c `UnplugSetRequest`, `UnplugCheckEnumKey`). So that boot keeps
+  the emulated disk. xenvbd, running in it, sets the latch again (`UnplugIncrementValue`), so the next boot is PV.
+
+Measured:
+- 2026-11-25 WIN10-reinstall specimen (the freeze in §2 Open): xentop, guest VBD row 0, stub domain row 3,247,024
+  sectors read and 123,232 written. The 11-09 WIN10-upgrade and 11-21 win11r-p46 boot-2 specimens show the same
+  split (2.5-3.2M read, 97-123k written through the stub). Healthy and other captures show the stub at about
+  333k read and at most 60 written.
+- 2026-11-26 control, an in-place upgrade 4.3.45 -> 4.3.47 on win10-up (`quick-upgrade.sh`, 12/0): boot 1
+  after the install read 2,152,214 sectors through the guest's own VBD and 134,680 (the boot loader) through the
+  stub, boot 2 likewise, and the guest then shows `XENSRC PVDISK bus=SCSI` with `DISKS=1`. Its setupapi log has
+  only `SetupCopyOEMInf` for xenbus, xeniface and xenvbd, no device install. So a current upgrade does not take
+  this path; a same-version reinstall and an upgrade from a pre-§5 package do.
+
+Against it, stated plainly: the 2026-09-28/29 SOAK stalls were ordinary cold boots with the disk path never read,
+so an emulated disk is not shown to be NECESSARY for this family of freezes. No passing reinstall's first boot has
+been captured.
+
+**Decision.** No extra reboot. The installer re-arms DISKS before the power-off, the same way and at the same site
+as NICS:
+
+1. As its last act before the stage-2 power-off, the installer writes `XEN\Unplug DISKS=1`, reads it back, and
+   records `pvdisk_latch` in the RESULT.
+2. It arms only when all of these hold, checked at that moment:
+   - C: was on the PV path when the install started (`Test-BootDiskOnPvPath`, true);
+   - the xenvbd service is boot-start and its image is on disk;
+   - the package's xenvbd is not older than the installed one (the existing downgrade gate);
+   - an `Enum\XENBUS` subkey containing VBD exists (xen.sys's own veto, checked here rather than at boot).
+3. When any of them fails, the latch stays at the INF's 0 and the first boot is emulated, as before. The reason is
+   logged at ERROR, and the RESULT records `pvdisk_latch=not-armed:<reason>`.
+4. A clean install is unchanged.
+5. Every boot logs its disk path (the system disk's model and bus) in the per-boot line
+   (guest/pvnic-selfprime.ps1, `latch re-armed`). A boot after the first post-install boot whose system disk is
+   emulated while xenvbd is installed and boot-start logs ERROR.
+
+**Cost and the risk taken.** The emulated first boot used to prove that the reinstalled xenvbd runs before any boot
+unplugs the emulated disk: a xenvbd that cannot bind never re-arms, so the next boot stays emulated and the guest
+survives. Arming in stage 2 removes that proof. If the driver step leaves xenvbd unable to bind, the first boot has
+no disk: 0x7B, and under Qubes the domain is destroyed (`findings/install.md`, §5). The owner's call, 2026-11-26:
+«if PV disk cannot bind then we have more serious problem». That state was never safe, only silent: such a guest
+stayed on the emulated disk for good with nothing saying so, which rule 5 now reports. The gates in rule 2 are the
+checks the uninstall gate already trusts, plus xen.sys's own veto. They do not cover a driver that is installed and
+boot-start but fails when it runs.
+
+**Evidence.** Owed: a reinstall cell on a build carrying this, with the disk path read in its first boot (xentop
+host-side, and rule 5's line). Arithmetic to state with any stall result: at about 1 in 19 post-install boots, ten
+clean repetitions happen 58% of the time with nothing fixed; 95% confidence needs 56 clean boots.
+
+**Open.** Why QEMU did not complete the invalidate request needs dom0 (stub domain ioreq state, QMP), and is not
+ours to patch. xenbus unmaps one page per hypercall, and batching the unmap would cut a call's 33 round trips to 3
+on every boot; it needs a forked xenbus, retired 2026-09-14, and is not decided here.
 
 ---
