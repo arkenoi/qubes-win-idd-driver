@@ -8,6 +8,41 @@
  "note": "normalized SIGNATURE patterns + a reason each; never captured log content. status: expected | benign | known-defect | unsettled. max_per_boot is the rise ceiling (rise = > max(ceiling*rise_factor, ceiling+rise_min_delta)). Newly-seen signatures whose Jev verdict was below the 0.5 floor are deliberately NOT recorded here: they must keep surfacing as new until a human judges them, or the refresh would turn unjudged lines into silent ones. | 2026-10-21: the two A6LEAK signature entries were REPLACED by one level-agnostic pattern. They were keyed at level W while the product has emitted Info since fc94490 (2026-10-10), and one of them carried a wording that exists nowhere in the source - so both matched nothing and the line was judged fresh every campaign.",
  "patterns": [
   {
+   "regex": "^winutils\\|E\\|[A-Za-z0-9_]+: qrexec-client-vm \\(qubes\\.NotifyTools\\) did not return within",
+   "status": "unsettled",
+   "reason": "NEVER OBSERVED. core-agent/src/advertise-tools/advertise-tools.c:194, NotifyDom0's wait on qrexec-client-vm returning anything but WAIT_OBJECT_0. 0 of the 52 advertise-tools logs under /home/user/qwt-accept (2026-11-25) carry it. If it fires, error_lines_undeclared still breaches. Jev never-observed-failure-path 0.98 (scratchpad/jev-advtools-classes-out.json)."
+  },
+  {
+   "regex": "^winutils\\|E\\|[A-Za-z0-9_]+: gui-only advertise refused: gui-agent\\.exe is not installed",
+   "status": "unsettled",
+   "reason": "NEVER OBSERVED. advertise-tools.c:343 (core-agent 8e13e42), the gui-only advertise asked for on a guest without gui-agent.exe. 0 of 52 logs. Jev never-observed-failure-path 0.97."
+  },
+  {
+   "regex": "^winutils\\|E\\|[A-Za-z0-9_]+: qdb_open \\(gui-only advertise\\)",
+   "status": "unsettled",
+   "reason": "NEVER OBSERVED. advertise-tools.c:352 (8e13e42), win_perror after qdb_open failed in the gui-only advertise. 0 of 52 logs. Jev never-observed-failure-path 0.97."
+  },
+  {
+   "regex": "^winutils\\|E\\|[A-Za-z0-9_]+: gui-only advertise: a /qubes-tools write failed",
+   "status": "unsettled",
+   "reason": "NEVER OBSERVED. advertise-tools.c:360 (8e13e42), a /qubes-tools os/gui/gui-emulated write failed, dom0 not notified. 0 of 52 logs. Jev never-observed-failure-path 0.98."
+  },
+  {
+   "regex": "^winutils\\|E\\|[A-Za-z0-9_]+: RegSetValueExW\\(AdvertiseGuiOnly\\\\\\\\Result\\)",
+   "status": "unsettled",
+   "reason": "NEVER OBSERVED. advertise-tools.c:373 (8e13e42), win_perror2 when the gui-only Result value cannot be written for the installer; its success twin `gui-only advertise result 0 recorded` is in all 52 logs, this line in none. NOT A JEV VERDICT: never-observed-failure-path 0.72, conf 0.58."
+  },
+  {
+   "regex": "^winutils\\|E\\|[A-Za-z0-9_]+: RegOpenKeyExW\\(AdvertiseGuiOnly\\)",
+   "status": "unsettled",
+   "reason": "NEVER OBSERVED. advertise-tools.c:421 (8e13e42), the volatile gui-only marker key opened with a status other than success or not-found (fail closed). 0 of 52 logs. Jev never-observed-failure-path 0.96."
+  },
+  {
+   "regex": "^winutils\\|E\\|[A-Za-z0-9_]+: the gui-only marker is unreadable, so nothing is advertised",
+   "status": "unsettled",
+   "reason": "NEVER OBSERVED. advertise-tools.c:422 (8e13e42), the fail-closed line paired with :421. 0 of 52 logs. Jev never-observed-failure-path 0.94."
+  },
+  {
    "issue": "findings/issues.md P1 DESLICECROPFALLSBACKONWIN11",
    "max_per_boot": 2,
    "reason": "A REAL FALLBACK, FILED AND TRACKED - not normal operation. The broker's live-rect derivation refused because the card is outside the captured texture, and it kept the racy inset: `QGACROPFALLBACK hwnd=0x901ce card outside the capture - cropped 0,0 not 4740,1251`. The emitter's own comment (agent/gui-agent/main.c:5735) says that is \"how this surface published 31 frames of one colour while every counter said the capture was healthy. Loud, because the alternative is a wrong rectangle that looks like a dead capture.\" MEASURED on acceptance run 40037710497: once per registration on win11-clean (x2), win11-reinstall (x2) and win11-appvm (x1) - the ONLY breach in each of those three cells, with error_lines_undeclared=0, dom0_loud_failures=0 and death_events=0, while the whole win10 track and win11-upgrade passed. NOT MEASURED AS MATERIALISED: no pixel check in that campaign reported a one-colour surface and the de-slice checks in those cells passed, so what is established is the fallback firing, not a bad frame - Jev named that gap itself (insufficient-evidence 0.24 beside known-defect 0.74). KNOWN-DEFECT, NOT EXPECTED: this entry keeps the line visible and attached to its issue so the gate reports it as a known defect PRESENT instead of an unclassified alert; it does not say the behaviour is acceptable, and it must be removed when the crop is fixed. Jev rated 0.28 that it should block a release cut. DECLARED AS A PATTERN 2026-11-08, after the exact key went BLIND for two weeks: commit 93a1b27 (2026-10-24, ABI 28 CropWinValid) grew the warning prose a (card N,N; window origin N,N) tail, the exact signature key stopped matching, and the first run in which the line fired again - supervision 20261108T211221Z - judged it as NEW and failed SW with signatures_unclassified=1. The regex is anchored on family, level, function and tag only, so a later detail addition cannot blind it again; the level stays W deliberately, because a move to E would be a severity change we want to see.",
@@ -4792,5 +4827,5 @@
   }
  },
  "version": 1,
- "preaccounted_at": "62b793deb7ee1ffd1663160062598d46738d4c1b"
+ "preaccounted_at": "75dd79c384597c26d0eb9ac12cefd8c804ab3408"
 }

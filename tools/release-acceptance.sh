@@ -271,6 +271,16 @@ if bash tools/verify-release-package.sh --tree "$SETUP" --commit "$HEAD" >>"$LOG
 else
   die "verify-release-package.sh FAILED - see $LOG. Nothing below would be meaningful."
 fi
+# ---- 3b. the sweep knows every log line this tree emits - the census, at minute 0 ---------------
+# The supervision-gate feature test runs this same census, but only after the whole matrix:
+# rel-45608968441-c spent 2.5 h before it refused on lines a minute-0 run names at once.
+say "--- census: has the log sweep been told about every log line this tree emits?"
+if _census=$(bash mgmt/harness/sweep-census.sh 2>&1); then
+  say "PASS  $(printf '%s\n' "$_census" | tail -1)"
+else
+  printf '%s\n' "$_census" >>"$LOG"
+  die "census REFUSED - the sweep would meet log lines it was never told about (named in $LOG); the supervision-gate test would fail this run hours from now. $(printf '%s\n' "$_census" | grep -m3 -E 'UNACCOUNTED|UNREADABLE|FAIL' | tr '\n' ' ' | cut -c1-400)"
+fi
 
 # ---- 4. the campaign ---------------------------------------------------------------------------
 # ---- 4b. ENTRY FIXTURES EXIST - checked BEFORE the campaign, not discovered by a cell 55 min in.

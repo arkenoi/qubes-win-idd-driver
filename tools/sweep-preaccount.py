@@ -131,6 +131,10 @@ LOGFILE_BY_PATH = (
     ("core-agent/src/qrexec-agent/", "qrexec-agent-1.log"),
     ("core-agent/src/qrexec-wrapper/", "qrexec-wrapper-1.log"),
     ("core-agent/src/relocate-dir/", "relocate-dir-1.log"),       # FAMILY_BY_NAME: binddirs
+    # advertise-tools logs through windows-utils into advertise-tools-<date>.log, which the sweep reads
+    # and FAMILY_BY_NAME files under winutils (WINUTILS_MODULES). Unmapped, its 9 lines from core-agent
+    # 8e13e42 (the gui-only advertise) came back UNREADABLE and refused the supervision gate.
+    ("core-agent/src/advertise-tools/", "advertise-tools-20260101.log"),
     # The PowerShell qrexec services and the guest helpers log one file per script per day through
     # core-agent/src/qubes-rpc-services/log.ps1, which FAMILY_BY_NAME matches by name.
     ("core-agent/src/qubes-rpc-services/", "log.ps1-20260101.log"),
