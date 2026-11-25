@@ -317,9 +317,25 @@ grep -q NONOTEPAD <<<"$typed" && fail "INSTRUMENT: notepad vanished between the 
 grep -q TYPED <<<"$typed" || fail "marker typing never executed in the guest"
 sleep 4
 qq shot "$OUT/shot2.tar" >/dev/null 2>&1
-# By here a notepad window is PROVEN to exist in a real session, so an empty tar is no longer
-# ambiguous: the guest has a window and dom0 did not receive it. That is a product verdict.
-[ -s "$OUT/shot1.tar" ] && [ -s "$OUT/shot2.tar" ] || fail "notepad is running in session $npsess and the marker typed, but dom0 received NO windows - the guest is not presenting its windows"
+# By here a notepad window is PROVEN to exist in a real session - but an empty tar still does not
+# mean dom0 lacks it: local.WinScreenshot grabs only frames whose map state is IsViewable
+# (dom0/15 rect_of), so a guest window on another dom0 workspace, or minimized there, yields the
+# same empty tar. rel-45608968441 WIN11-clean graded exactly that as "dom0 received NO windows"
+# while an agent restart showed the window at once. So ask dom0 for the guest's whole window list
+# (local.WinGeom: every window by _QUBES_VMNAME, with its map state) before naming the product.
+# The screen pseudo-window (at the origin, the largest area, never mapped) is not a guest window.
+if [ ! -s "$OUT/shot1.tar" ] || [ ! -s "$OUT/shot2.tar" ]; then
+    QTEST_VM="$VM" timeout -k 8 200 "$HERE/tools/qtest-geom" > "$OUT/geom-empty-shot.txt" 2>&1
+    grc=$?
+    read -r gall gview < <(awk '!/^#/ && NF >= 7 { n++; id[n]=$1; x[n]=$2; y[n]=$3; a[n]=$4*$5; m[n]=$7; if ($4*$5 > big) big=$4*$5 }
+        END { for (i=1; i<=n; i++) { if (x[i]==0 && y[i]==0 && a[i]==big && m[i]==0) continue; all++; if (m[i]==1) v++ }
+              printf "%d %d\n", all+0, v+0 }' "$OUT/geom-empty-shot.txt")
+    log "empty shot: dom0 window list rc=$grc, guest windows=$gall viewable=$gview ($OUT/geom-empty-shot.txt)"
+    [ "$grc" = 0 ] || fail "INSTRUMENT: a shot came back empty and dom0's window list could not be read (qtest-geom rc=$grc) - whether dom0 holds the window is unknown. Not a product verdict."
+    [ "$gall" -gt 0 ] || fail "notepad is running in session $npsess and the marker typed, but dom0 holds NO window of this guest - the guest is not presenting its windows"
+    [ "$gview" -gt 0 ] || fail "INSTRUMENT: dom0 holds $gall window(s) of this guest but none is viewable (another dom0 workspace, or minimized there), so no shot can photograph it. Not a product verdict."
+    fail "INSTRUMENT: a shot came back empty while dom0 lists $gview viewable window(s) of this guest - the capture discarded them. Not a product verdict."
+fi
 h1=$(sha256sum "$OUT/shot1.tar" | cut -d' ' -f1); h2=$(sha256sum "$OUT/shot2.tar" | cut -d' ' -f1)
 [ "$h1" != "$h2" ] || fail "shots identical - guest pixels are not reaching dom0"
 log "pixels change confirmed (tars differ)"
