@@ -751,6 +751,12 @@
    "status": "unsettled",
    "max_per_boot": null,
    "reason": "NEVER OBSERVED (0 in 77 readable bridge logs since 2026-11-24), AND DELIBERATELY NOT SILENCED. notifhost.cpp BridgeMain: claimed toasts held unforwarded while dom0 is unreachable, forwarded when the connection returns. Jev: expected 0.31; keep_armed 0.85."
+  },
+  {
+   "regex": "^agent\\|W\\|[^|]*: QGACROPLATE hwnd 0x(%x|H) \\(class (%s|[^)]*)\\) mapped after (%lu|N) ms with NO slice content",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "NEVER OBSERVED (agent b3193da, not yet built), AND DELIBERATELY NOT SILENCED. agent/gui-agent/main.c UpdateWindowData: a held window reached CROP_BEFORE_SHOW_TIMEOUT_MS with no slice content and was mapped; the line carries visible/iconic/seen/copies/refused to tell WIN10STARTMAPSAFTERCROPTIMEOUT's three candidate causes apart. Under the old 'mapped uncropped' text the condition fired on every Windows 10 Start opening with a tracked Search window (four runs, 2026-11-25). The old form keeps no row. Jev (scratchpad/jev-preaccb3193-*, floor 0.5): insufficient-evidence 0.48; keep_armed 0.86."
   }
  ],
  "signatures": {
