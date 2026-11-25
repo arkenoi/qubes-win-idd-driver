@@ -26,7 +26,14 @@ mkdir -p "$(dirname "$OUT")"
 say(){ echo "$(date -u +%H:%M:%SZ) fetch-core: $*"; }
 
 state=$(qvm-ls --raw-data --fields NAME,STATE 2>/dev/null | awk -F'|' -v v="$VM" '$1==v{print $2}')
-[ "$state" = Running ] || { say "TERMINAL: $VM is '$state', not Running - there is no memory to image"; exit 2; }
+# TRANSIENT IS NOT "GONE". A guest that spins while shutting down is Transient to Qubes and still a running
+# domain to Xen: win11-acc, 2026-11-25, Transient for 25 min while the forensics capture read four vCPUs in
+# state r at ~10 s per 10 s - and this guard refused the core as "no memory to image". Whether a domain
+# exists is decided where it can be: the dom0 service's `xl domid`, which refuses an absent one.
+case "$state" in
+  Running|Transient) ;;
+  *) say "TERMINAL: $VM is '$state', not Running - there is no memory to image"; exit 2 ;;
+esac
 
 # Guest RAM decides the size; +1 GiB of headroom so this cannot be the thing that fills the disk.
 ram_mb=$(qvm-prefs "$VM" memory 2>/dev/null)
