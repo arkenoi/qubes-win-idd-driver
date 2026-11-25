@@ -167,6 +167,8 @@ ERROR_FLAGS = [
     ('pvnic_prime',             starts('FAILED', 'error:'),               'L3611/L3616: narrative of pvnic_prime_failed'),
     ('pvnic_latch',             starts('not-armed', 'unconfirmed', 'error:'), 'L3662 ERROR not armed / L3673 WARN NICS did not read back 1 / L3677 WARN threw'),
     ('net_reapply_task',        starts('failed'),                         'L3736 WARN: schtasks /create QubesNetworkReapply failed'),
+    ('pvdisk_latch',            lambda v: starts('unconfirmed', 'error:')(v) or (starts('not-armed')(v) and 'was not on the PV path' not in _s(v)),
+                                'ADR-boot 6: DISKS did not read back 1 / threw / a PV-booted guest failed a gate (ERROR); not-armed because C: started off the PV path (clean install) is the design'),
     # -- pre-msiexec conditions (the installer Fails on most of these; the WARN forms proceed)
     ('pnp_settle',              starts('timeout', 'unavailable'),         'L1422 WARN timeout (a Fail since L1711/L2188) / L1426 WARN the API would not load = no wait at all'),
     ('private_disk_gate',       starts('WARN', 'FAIL'),                   'L1585/L1598 WARN proceeding under -NoMoveUsers / L1588/L1601 Fail'),
