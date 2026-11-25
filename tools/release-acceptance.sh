@@ -236,6 +236,13 @@ esac
 BUILDTAG=$(tools/build-tag.sh create "$RUN" 2>>"$LOG") \
   || die "run $RUN has no build tag: tools/build-tag.sh refused (see $LOG) - nothing is accepted without the identity of what it is"
 HARNESS=$(git rev-parse HEAD 2>/dev/null)
+# THE SUITES RUN FROM THE RIG CHECKOUT, WHATEVER TREE LAUNCHED THIS: matrix.sh and the feature tests
+# `cd /home/user/qubes-win-idd-driver`. 4.3.47.1494 (2026-11-25) was launched from a worktree at 05b6b089
+# while that checkout sat at 55986efd - every suite ran the older code, template-update read its stale
+# seal record, and the receipt would have named 05b6b089 as the harness. One tree, or no run.
+RIG_HEAD=$(git -C /home/user/qubes-win-idd-driver rev-parse HEAD 2>/dev/null)
+[ "$RIG_HEAD" = "$HARNESS" ] \
+  || die "harness ${HARNESS:0:12} launched this run, but its suites cd into /home/user/qubes-win-idd-driver at ${RIG_HEAD:0:12} - bring that checkout to ${HARNESS:0:12} first"
 say "build: $BUILDTAG (commit ${HEAD:0:12}); harness ${HARNESS:0:12}"
 
 # ---- 2. artifacts ------------------------------------------------------------------------------

@@ -77,6 +77,11 @@ BUILDTAG=$(tools/build-tag.sh resolve "$RUN" 2>/dev/null) || {
 }
 BUILDSHA=$(git rev-parse --verify --quiet "refs/tags/${BUILDTAG}^{commit}") || exit 2
 HARNESS=$(git rev-parse HEAD) || exit 2   # the provenance of this run's verdicts, recorded per module - never a name
+# The suites cd into the rig checkout whatever tree launched this (the acceptance driver's same guard
+# says what that cost on 4.3.47.1494): one tree, or no run.
+RIG_HEAD=$(git -C /home/user/qubes-win-idd-driver rev-parse HEAD 2>/dev/null)
+[ "$RIG_HEAD" = "$HARNESS" ] || {
+  echo "ERROR: harness ${HARNESS:0:12} launched this run, but its suites cd into /home/user/qubes-win-idd-driver at ${RIG_HEAD:0:12} - bring that checkout to ${HARNESS:0:12} first" >&2; exit 2; }
 COVFILE="scratchpad/gate-coverage-$BUILDTAG.json"
 OUTDIR="$HOME/qwt-accept/remainder-$BUILDTAG"
 WORK="$OUTDIR/work"
