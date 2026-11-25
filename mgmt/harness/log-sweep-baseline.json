@@ -637,6 +637,120 @@
    "status": "unsettled",
    "max_per_boot": null,
    "reason": "NEVER OBSERVED in this form (0 in 156 gui-agent logs dated 2026-11-17 or later under qwt-quick-upgrade and qwt-accept), AND DELIBERATELY NOT SILENCED. agent/gui-agent/main.c HelperTaskRegister (agent e4bdaa1): schtasks /create /xml failed, so the helper does not start; the line now carries the exit code and schtasks' own text. Jev on the sweep's rubric (scratchpad/jev-preacc1452-*): defect 0.29; keep_armed 0.72 -> armed."
+  },
+  {
+   "regex": "^agent\\|E\\|[^|]*: QGACAPSTRIPWAIT 0x",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "NEVER OBSERVED (0 in 231 rig logs dated 2026-11-24 or later), AND DELIBERATELY NOT SILENCED. agent/gui-agent/main.c CapHelperAdd (agent 41e0fe9, GWeck post 241 B): the caption helper's exit cannot be waited on (helper table full or RegisterWaitForSingleObject failed), so the window is announced before its strip lands and dom0's placement may compare a changed frame. Jev (scratchpad/jev-preacc1494-*, floor 0.5): insufficient-evidence 0.21; keep_armed 0.83."
+  },
+  {
+   "regex": "^agent\\|W\\|[^|]*: QGACAPSTRIPWAIT 0x",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "NEVER OBSERVED (0 in 231 rig logs since 2026-11-24), AND DELIBERATELY NOT SILENCED. main.c CapHelperRunning (agent 41e0fe9): the caption-strip helper exited non-zero, so the window is announced with its own caption. Jev: insufficient-evidence 0.21; keep_armed 0.71."
+  },
+  {
+   "regex": "^agent\\|E\\|[^|]*: qdb_open \\(Init\\)",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "NEVER OBSERVED (0 in 231 rig logs since 2026-11-24), AND DELIBERATELY NOT SILENCED. main.c Init (agent 3c415a5, one qubesdb session for the start): the open failed, Init fails and the watchdog respawns into a readable qubesdb. Jev: expected 0.55; keep_armed 0.71."
+  },
+  {
+   "regex": "^agent\\|E\\|[^|]*: QGATOASTCLAIM hwnd=",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "NEVER OBSERVED (0 in 231 rig logs since 2026-11-24, incl. two CLEAN toast-hold runs on 54434104), AND DELIBERATELY NOT SILENCED. agent/gui-agent/toasthold.c ThLogEndReport and ToastHoldDecide: a banner ended, was replaced in place or evicted with no verdict, and the agent claimed its record for the bridge - 'the banner-end claim as an ERROR (fail loudly)' (ADR-toasts 13). Jev: expected 0.53 / 0.43; keep_armed 0.78 / 0.80."
+  },
+  {
+   "regex": "^agent\\|W\\|[^|]*: QGATOASTCLAIM hwnd=",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "NEVER OBSERVED (0 in 231 rig logs since 2026-11-24), AND DELIBERATELY NOT SILENCED. toasthold.c ToastHoldDecide: the bridge is down with the record pending, so the agent claims it for the window. Jev: insufficient-evidence 0.27; keep_armed 0.80."
+  },
+  {
+   "regex": "^agent\\|E\\|[^|]*: QGATOASTUNSHOWN hwnd=",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "NEVER OBSERVED (0 in 231 rig logs since 2026-11-24), AND DELIBERATELY NOT SILENCED. toasthold.c ThLogEndReport and ToastHoldDecide: a banner ended or left with NO record; its identity is remembered and a later matching record is claimed for the bridge. Jev: insufficient-evidence 0.51 / 0.35; keep_armed 0.85 / 0.84."
+  },
+  {
+   "regex": "^agent\\|W\\|[^|]*: QGATOASTUNSHOWN hwnd=",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "NEVER OBSERVED (0 in 231 rig logs since 2026-11-24), AND DELIBERATELY NOT SILENCED. toasthold.c ToastHoldDecide: a banner ended with NO identity read - not mapped, nothing to remember. Jev: expected 0.33; keep_armed 0.71."
+  },
+  {
+   "regex": "^agent\\|E\\|[^|]*: QGATOASTNOBANNER id=",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "NEVER OBSERVED (0 in 231 rig logs since 2026-11-24), AND DELIBERATELY NOT SILENCED. toasthold.c ThLogNoBanner (agent 94cd678/7f03c45): no banner showed a listed toast within its bound and the agent claimed it for dom0 - 'One ERROR per no-banner claim: the log sweep flags every one'. Jev: insufficient-evidence 0.23; keep_armed 0.82."
+  },
+  {
+   "regex": "^agent\\|E\\|[^|]*: QGATOASTGATELATE hwnd=",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "NEVER OBSERVED (0 in 231 rig logs since 2026-11-24), AND DELIBERATELY NOT SILENCED - 33ac06fa left it undeclared 'so it surfaces'; armed it still surfaces. toasthold.c ToastHoldDecide: no read named a held banner's cards within the settle bound while a newer record is PENDING; dom0 keeps its last frame. Jev: insufficient-evidence 0.21; keep_armed 0.83."
+  },
+  {
+   "regex": "^agent\\|W\\|[^|]*: QGATOASTGATELATE hwnd=",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "NEVER OBSERVED (0 in 231 rig logs since 2026-11-24), AND DELIBERATELY NOT SILENCED (33ac06fa: 'stays undeclared so it surfaces'). toasthold.c ToastHoldDecide (settle bound passed, no pending newer record) and ToastHoldNoteChanged (no frame-gate slot free). Jev: insufficient-evidence 0.24 / 0.31; keep_armed 0.78 / 0.75."
+  },
+  {
+   "regex": "^agent\\|E\\|[^|]*: QGATOASTFWDLATE hwnd=",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "NEVER OBSERVED (0 in 231 rig logs since 2026-11-24), AND DELIBERATELY NOT SILENCED. toasthold.c ToastHoldDecide: a bridge-bound toast suppressed past its bound with no dom0 acknowledgement; not mapped, shown only if the bridge turns it window. Jev: insufficient-evidence 0.29; keep_armed 0.85."
+  },
+  {
+   "regex": "^agent\\|E\\|[^|]*: QGATOASTIDENT hwnd=",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "NEVER OBSERVED (0 in 231 rig logs since 2026-11-24), AND DELIBERATELY NOT SILENCED. toasthold.c ToastHoldApplyIdentity (agent 8c2cfa2): the UI Automation call on a tracked banner FAILED. Owner 2026-11-24: 'classification errors and timeouts should not happen. it is a sign of something going wrong'. Jev: defect 0.39; keep_armed 0.89."
+  },
+  {
+   "regex": "^bridge\\|[^|]*\\|.*ACTIVATOR id=",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "NEVER OBSERVED (0 in 77 readable bridge logs since 2026-11-24), AND DELIBERATELY NOT SILENCED. tools/notifhost/notifhost.cpp ShadowClassifyWork: the activator shortcut scan did not finish within kToastActRouteLookupBudgetMs, the toast takes the window path (its click is not carried). Jev: insufficient-evidence 0.24; keep_armed 0.78."
+  },
+  {
+   "regex": "^bridge\\|[^|]*\\|.*CLASSIFY id=[^ ]* src=none etw=(probe|enqueue)-threw",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "NEVER OBSERVED (0 in 77 readable bridge logs since 2026-11-24), AND DELIBERATELY NOT SILENCED. notifhost.cpp ShadowClassifyWork / ShadowClassify catch(...): the classify probe or its enqueue threw; the toast is classed window. Jev: defect 0.17 / 0.20; keep_armed 0.77 / 0.81."
+  },
+  {
+   "regex": "^bridge\\|[^|]*\\|.*NOTIFY deferred: no route yet \\(not handed off: ",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "NEVER OBSERVED (0 in 77 readable bridge logs since 2026-11-24), AND DELIBERATELY NOT SILENCED. notifhost.cpp NotifyDeferWrite (61eef18c): a notification with no dom0 connection from this process is queued for the session bridge. Jev: expected 0.61; keep_armed 0.72."
+  },
+  {
+   "regex": "^bridge\\|[^|]*\\|.*CLAIM id=",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "NEVER OBSERVED (0 in 77 readable bridge logs since 2026-11-24), AND DELIBERATELY NOT SILENCED. notifhost.cpp BridgeMain, three ERRORs: a window record no banner showed and the agent did not claim (shown NOWHERE); a record that left the ring before it was claimed (NOT forwarded); the AGENT claimed a record for dom0 (forwarded WITHOUT a plan). Jev: insufficient-evidence 0.27 / 0.28 / 0.23; keep_armed 0.80 / 0.81 / 0.85."
+  },
+  {
+   "regex": "^bridge\\|[^|]*\\|.*skip id=.*no verdict after",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "NEVER OBSERVED (0 in 77 readable bridge logs since 2026-11-24), AND DELIBERATELY NOT SILENCED. notifhost.cpp BridgeMain: a toast skipped to the window path with no verdict after kVerdictMaxPasses. Jev: insufficient-evidence 0.45; keep_armed 0.78."
+  },
+  {
+   "regex": "^bridge\\|[^|]*\\|.*ALLOWLIST id=",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "NEVER OBSERVED (0 in 77 readable bridge logs since 2026-11-24), AND DELIBERATELY NOT SILENCED. notifhost.cpp BridgeMain: an allowlisted sender forwarded WITHOUT a verdict; any buttons are lost in dom0. Jev: defect 0.17; keep_armed 0.85."
+  },
+  {
+   "regex": "^bridge\\|[^|]*\\|.*toast\\(s\\) claimed for dom0 while dom0 is unreachable",
+   "status": "unsettled",
+   "max_per_boot": null,
+   "reason": "NEVER OBSERVED (0 in 77 readable bridge logs since 2026-11-24), AND DELIBERATELY NOT SILENCED. notifhost.cpp BridgeMain: claimed toasts held unforwarded while dom0 is unreachable, forwarded when the connection returns. Jev: expected 0.31; keep_armed 0.85."
   }
  ],
  "signatures": {
@@ -4661,5 +4775,5 @@
   }
  },
  "version": 1,
- "preaccounted_at": "ae0cee20"
+ "preaccounted_at": "62b793deb7ee1ffd1663160062598d46738d4c1b"
 }
