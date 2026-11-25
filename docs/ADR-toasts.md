@@ -595,6 +595,47 @@ provoked by `toastfire --unregister` between the forward and the click (`ACTION 
 `QGATOASTHOLD ... record-turned-window` with the banner mapped, or the dom0 error notice). Whether dom0's daemon shows
 the buttons at all is read off the dom0 screen by that human.
 
+**Decision (owner, 2026-11-25): a click that can be carried is carried.** «when we can carry click through we should.
+if we can not, then keep the list where we can not». An informational toast (no buttons, no input) is forwarded
+without its default click when the click is not carried; dom0's click then only dismisses it.
+
+**Current state, 2026-11-25 - not decisions.** Rows marked "measured" come from the bridge's `CLASSIFY`/`SENT` lines in
+the rig's run data; the rest are read from `tools/notifhost/toastactions.h` and not yet seen on a guest.
+
+| Default click | Carried | Why | Seen |
+|---|---|---|---|
+| Protocol, launch URI passes `UriValid` | yes | `ShellExecute` as the user | measured: Windows Security (English) |
+| Foreground, unpackaged sender with a toast activator | yes | `INotificationActivationCallback::Activate` | measured: toastfire's COM sender |
+| Foreground, shell sender without an activator (`Windows.SystemToast.*`) | **cannot** | the shell runs it internally; nothing callable is registered | measured: `Windows.SystemToast.AutoPlay` "DIAG (Z:)" |
+| Foreground, packaged UWP sender | **cannot** | only the notification platform delivers a UWP toast activation; a launch with the same arguments is not that activation | default allowlist: Snipping Tool, Camera, Photos |
+| Background, packaged UWP sender | **cannot** | a background task the platform starts | - |
+| Unrecognised `activationType` | **cannot** | nothing defined to carry out | - |
+| Protocol, launch refused by `UriValid` (scheme + `:`, no character <= 0x20, <= 2048) | not yet - ours | the check is ours; the launch string is not logged, so whether Windows launches it is not known | measured: `Windows.Defender.SecurityCenter` "Windows-Firewall aktivieren" (de) |
+| Foreground, unpackaged, activator lookup still pending | not yet - ours | an informational toast does not wait for the lookup (750 ms budget) | - |
+| Foreground, arguments over 4096 characters | not yet - ours | our cap; the arguments stay in the guest | - |
+| Background, unpackaged sender with a toast activator | not yet - ours | the same `Activate` call; out of scope under 1. | - |
+| Foreground, packaged (MSIX) desktop sender with a manifest COM activator | not yet - ours | the activator is in the package registration, not read (Open below) | - |
+
+Unpackaged senders registered with NO toast activator - their foreground click cannot be carried - read 2026-11-25
+from `HKCR\AppUserModelId` and the user's `Notifications\Settings` on win11r (26300, "11") and win10 (19045, "10");
+`Windows.SystemToast.` shortened to `SystemToast.`: Microsoft.Office.OUTLOOK.EXE.15 (11,10); Microsoft.SkyDrive.Desktop
+(10); Microsoft.Windows.ControlPanel (10); Microsoft.Windows.Defender (11,10); Microsoft.Windows.Explorer (10);
+Windows.Copilot.Recommendations (11); Windows.Defender (11,10); SystemToast.AOMD.MainToast (11); SystemToast.AutoPlay
+(11,10); SystemToast.BdeUnlock (11,10); SystemToast.Bthprops (11,10); SystemToast.CameraTroubleshooter (11);
+SystemToast.CloudExperienceHostLauncher (10); SystemToast.ConnectionManager (11); SystemToast.DeviceConsent (11,10);
+SystemToast.DeviceEnrollmentActivity (11,10); SystemToast.DeviceManagement (11,10);
+SystemToast.DeviceManagementTokenRenewalRequired (11,10); SystemToast.Ethernet (11); SystemToast.Explorer (11,10);
+SystemToast.Graphics.AutoHDR (11); SystemToast.Graphics.SR (11); SystemToast.LocationManager (11,10);
+SystemToast.Messaging.SystemAlertNotification (11,10); SystemToast.NfpAppAcquire (11,10); SystemToast.NfpAppLaunch
+(11,10); SystemToast.NfpDevicePairing (11,10); SystemToast.NfpReceiveContent (11,10); SystemToast.PinConsent (11);
+SystemToast.PresenceSensing.OnlookerDetection (11); SystemToast.Print.Notification (11,10); SystemToast.RasToastNotifier
+(11,10); SystemToast.RecallSetup (11); SystemToast.ServiceInitiatedHealing.Notification (11,10); SystemToast.Share
+(11,10); SystemToast.StartupApp (11); SystemToast.Usb.Notification (11,10); SystemToast.WindowsStudio (11);
+SystemToast.WindowsUpdate.MoNotification, .MoNotification2, .MoNotificationApps (11); SystemToast.Winlogon (11,10).
+Every other registered unpackaged sender (54 on 11, 40 on 10) names a `CustomActivator`. A protocol click from any
+sender is carried regardless. Store (UWP) senders appear in these keys only once they have notified, so they are not
+listed; their foreground clicks are all in the "cannot" row.
+
 **Open.** Foreground rights of the activated app (measured on the guest). Packaged (MSIX) desktop apps register COM
 activators through their manifest and could be carried later from the package's registration - not now. Which
 `NotificationClosed` reason dom0's daemon sends after an action (the table keeps an entry through an expiry and drops it

@@ -271,7 +271,9 @@ mapped. Caveat: PASS-UNPROVEN per SG11 - the naive-cloak fail-proof build is sti
    search view Start turns into when the user types** (owner 2026-11-20, "Frame the search view": SearchHost on
    Win11, SearchApp on Win10), so the keyboard stays with the qube. On Win10 the same SearchApp window is the
    taskbar search box while Start is shown, collapsed by a window region; collapsed, it stays a popup, and it is
-   framed when typing expands it. Windows 11's search view is cropped by Start's measured margin, the same
+   framed when typing expands it. With the taskbar search box hidden (SearchboxTaskbarMode 0) Windows draws no
+   region: the uncut window is not announced while Start is visible in the guest, and typing gives the one framed
+   search view (GWeck post 241 A). Windows 11's search view is cropped by Start's measured margin, the same
    flyout's shadow, when it is created, never after it is mapped (owner 2026-11-20, the black border). The
    entry opens Start guest-side; the
    dom0-forwarded Windows key stays dropped (`BlockMenuKey=1`, section 9). Toasts are not affected. `SeamlessStart` defaults to 1; section 11 governs whoever sets 0. The installer publishes
