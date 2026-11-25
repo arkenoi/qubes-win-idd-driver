@@ -905,6 +905,31 @@ Get-ChildItem -LiteralPath (Get-QwtLogDir) -Filter '*.log' -EA SilentlyContinue 
 L "--- run start (boot=$((Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToString('o')))"
 L "latch re-armed NICS=$((Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Services\XEN\Unplug').NICS)"
 
+# DISK PATH, EVERY BOOT (docs/ADR-boot.md 6 rule 5). A system disk served by QEMU's emulated path
+# makes every unmap of a call into the guest wait behind the guest's whole disk; the 2026-11-25
+# freeze was in such a boot, and nothing on the guest recorded it. With xenvbd boot-start an
+# emulated C: is the PV disk failing to bind - ERROR - except in the one boot the installer
+# marked (PvDiskEmulatedBootExpected: it left the latch unarmed and said why). The marker is
+# stamped with this boot on first use, so later runs in the same boot still read it as expected
+# and the next emulated boot does not.
+$dpKey = 'HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools'
+try {
+    $dp = Get-Partition -DriveLetter C -ErrorAction Stop | Get-Disk -ErrorAction Stop
+    $vbdStart = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Services\xenvbd' -EA SilentlyContinue).Start
+    $bootStamp = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToString('o')
+    $exp = (Get-ItemProperty $dpKey -Name PvDiskEmulatedBootExpected -EA SilentlyContinue).PvDiskEmulatedBootExpected
+    $dline = "disk path: C: '$($dp.FriendlyName)' bus=$($dp.BusType) xenvbd_start=$vbdStart"
+    if ([string]$dp.BusType -eq 'SCSI' -or $vbdStart -ne 0) {
+        L $dline
+        if ($exp -and [string]$dp.BusType -eq 'SCSI') { Remove-ItemProperty $dpKey -Name PvDiskEmulatedBootExpected -EA SilentlyContinue }
+    } elseif ($exp -and ($exp -notlike 'consumed:*' -or $exp -eq "consumed:$bootStamp")) {
+        if ($exp -notlike 'consumed:*') { Set-ItemProperty $dpKey -Name PvDiskEmulatedBootExpected -Value "consumed:$bootStamp" }
+        L "$dline - EMULATED, expected for this boot (the installer left the PV disk latch unarmed)"
+    } else {
+        LE "$dline - the system disk is EMULATED while xenvbd is boot-start: the PV disk did not bind"
+    }
+} catch { LW "disk path unreadable: $($_.Exception.Message)" }
+
 # A step that FAILS must leave the same machine-readable trail as the terminal Loud below (marker +
 # Application event) WITHOUT ending the run - the network apply still has to happen - and a later
 # step's success must not erase it. Fault records it; Ok, the only success exit, keeps the marker

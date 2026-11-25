@@ -5522,6 +5522,53 @@ public static class QdbPrime {
         } # end: latch armed only under a verified applier
     }
 
+    # --- PV DISK LATCH (docs/ADR-boot.md 6) -----------------------------------------------------
+    # The PV bus driver's INF writes Services\XEN\Unplug DISKS=0 whenever its service is installed
+    # (xenbus.inf AddReg XenBus_Unplug, no NOCLOBBER), and a same-version reinstall (REINSTALL=ALL)
+    # makes DIFxApp repair it onto the device. xen.sys reads the latch delete-on-read at boot start,
+    # so the next boot kept the EMULATED disk, and every unmap of a call into the guest then waited on
+    # a QEMU that was also carrying the system disk: the 2026-11-25 WIN10-reinstall freeze (xentop:
+    # guest VBD 0, stub 3,247,024 sectors read). Re-arm it here, as NICS is above. Gated: only a guest
+    # whose C: was on the PV path when this run started, whose xenvbd is boot-start with its image on
+    # disk, and which has the Enum\XENBUS VBD key xen.sys itself requires before it unplugs. Any gate
+    # failing leaves the INF's 0 (the first boot is emulated, as before), says why at ERROR, and tells
+    # the per-boot task (pvnic-selfprime.ps1) that that one boot is expected to be emulated.
+    $qwtStateKey = 'HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools'
+    $diskWhy = $null
+    try {
+        $vbdSvc = Get-ItemProperty -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Services\xenvbd' -EA SilentlyContinue
+        $vbdImg = if ($vbdSvc -and $vbdSvc.ImagePath) { "$($vbdSvc.ImagePath)" -replace '^\\SystemRoot\\', "$env:WINDIR\" -replace '^(?i)system32\\', "$env:WINDIR\System32\" } else { "$env:WINDIR\System32\drivers\xenvbd.sys" }
+        $vbdEnum = @(Get-ChildItem -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Enum\XENBUS' -EA SilentlyContinue |
+                     Where-Object { $_.PSChildName -match 'VBD' })
+        if ($script:Result.detail.pv_boot_disk -ne $true) { $diskWhy = "C: was not on the PV path when this run started (pv_boot_disk=$($script:Result.detail.pv_boot_disk))" }
+        elseif (-not $vbdSvc -or $vbdSvc.Start -ne 0) { $diskWhy = "xenvbd is not boot-start (Start='$($vbdSvc.Start)')" }
+        elseif (-not (Test-Path -LiteralPath $vbdImg)) { $diskWhy = "xenvbd image '$vbdImg' is not on disk" }
+        elseif ($vbdEnum.Count -eq 0) { $diskWhy = 'no Enum\XENBUS subkey names VBD - xen.sys would veto the unplug' }
+        if ($diskWhy) {
+            # A clean install starts on the emulated disk: not arming is the design there, INFO. A guest
+            # that WAS on the PV path and fails a later gate is an anomaly, ERROR; an unreadable probe, WARN.
+            $lvl = if ($script:Result.detail.pv_boot_disk -eq $false) { 'INFO' } elseif ($script:Result.detail.pv_boot_disk -eq $true) { 'ERROR' } else { 'WARN' }
+            Write-Log "PV disk unplug latch NOT armed: $diskWhy - the next boot runs on the EMULATED disk" $lvl
+            $script:Result.detail.pvdisk_latch = "not-armed: $diskWhy"
+            New-Item -Path $qwtStateKey -Force -EA SilentlyContinue | Out-Null
+            Set-ItemProperty -LiteralPath $qwtStateKey -Name PvDiskEmulatedBootExpected -Value $diskWhy
+        } else {
+            reg add "HKLM\SYSTEM\CurrentControlSet\Services\XEN\Unplug" /v DISKS /t REG_DWORD /d 1 /f | Out-Null
+            $disks = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Services\XEN\Unplug' -EA SilentlyContinue).DISKS
+            Remove-ItemProperty -LiteralPath $qwtStateKey -Name PvDiskEmulatedBootExpected -EA SilentlyContinue
+            if ($disks -eq 1) {
+                Write-Log "PV disk unplug latch armed for shutdown (DISKS=1; xenvbd '$vbdImg' boot-start, $($vbdEnum.Count) VBD enum key(s))"
+                $script:Result.detail.pvdisk_latch = 'armed'
+            } else {
+                Write-Log "PV disk unplug latch did NOT read back armed (DISKS='$disks') - the next boot may run on the EMULATED disk" 'ERROR'
+                $script:Result.detail.pvdisk_latch = "unconfirmed:$disks"
+            }
+        }
+    } catch {
+        Write-Log "arming the PV disk unplug latch failed: $($_.Exception.Message) - the next boot may run on the EMULATED disk" 'ERROR'
+        $script:Result.detail.pvdisk_latch = "error: $($_.Exception.Message)"
+    }
+
     # --- netvm hotplug: re-apply Qubes addressing when an interface appears ----------
     # QWT applies the qubesdb-driven static IP with network-setup.exe at BOOT, and nothing
     # re-runs it when a vif is hot-plugged, so `qvm-prefs <vm> netvm <net>` on a running
