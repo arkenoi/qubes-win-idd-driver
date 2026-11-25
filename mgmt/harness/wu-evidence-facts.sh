@@ -67,7 +67,14 @@ $up = Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows Security H
 $cv = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
 'EV|build=' + $cv.CurrentBuild + '.' + $cv.UBR
 'EV|hotfixes=' + ((Get-HotFix | ForEach-Object { $_.HotFixID }) -join ',')
-'EV|boot=' + (Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToString('s')
+# Boot time from the tick count, NOT from CIM (guest/install-reboot-audit.ps1:64-73, same idiom). Right
+# after an update reboot Get-CimInstance Win32_OperatingSystem returned nothing, so this line was never
+# written and tools/wu-exclusion-evidence.py refused the round as MISSING: rel-45608968441-c round 3,
+# "facts-before (no boot)", template-update INSTRUMENT. TickCount (not TickCount64: PowerShell 5.1 on
+# .NET Framework has none) wraps negative after ~24.8 days, which the add corrects.
+$ms = [long][Environment]::TickCount
+if ($ms -lt 0) { $ms += 4294967296 }
+'EV|boot=' + (Get-Date).AddMilliseconds(-$ms).ToString('s')
 'EV|whoami=' + [Security.Principal.WindowsIdentity]::GetCurrent().Name
 'EV|end=1'
 PS
