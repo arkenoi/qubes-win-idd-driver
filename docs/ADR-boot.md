@@ -13,9 +13,11 @@ never after a fixed number of seconds. Second, the service that lets dom0 run co
 kept stopped during the part of the install that reconfigures devices and drivers. Every incoming command from
 dom0 forces two synchronous round trips through the emulated hardware, exactly where the freezes were
 recorded. The service is started when that work is done. Installing the Windows Update agent is not device work and comes after
-that start (since 4.3.35). On the fully unattended install path it is not
-started in that stage at all, because the guest powers off seconds later and the service comes up on the next
-boot anyway.
+that start (since 4.3.35). On the fully unattended install path it stays stopped
+until the stage is about to power off, and is then started only to tell dom0 that our display agent is installed
+- not that the command service is. The next boot is our display agent's first, and without that word dom0 would
+give it a stand-in display and take it away the moment our agent connects; that hand-over is what killed the
+emulated hardware and hung the qube's power-off (amended 2026-11-25).
 
 The cost is a slower install, tens of seconds to about two minutes, and a window during which dom0 cannot talk
 to the guest. The owner explicitly rejected making the test harness go quiet for seven minutes instead: that
@@ -32,10 +34,13 @@ flowchart TD
     C --> D{"How does the stage end?"}
     D -->|"normal interactive path"| E["QREXEC-RELEASE: start QrexecAgent, observe RUNNING<br/>RESULT records the site and the held seconds"]
     D -->|"Fail / main catch / refused power-off"| E
-    D -->|"-Auto -RebootAtEnd"| F["Not started: the guest powers off in seconds,<br/>the auto-start service comes up on the next boot<br/>RESULT = not-started-powering-off"]
+    D -->|"-Auto -RebootAtEnd"| F["Still held at the release site<br/>RESULT = held-past-release"]
     E --> U["Windows Update agent deploy - not device work, so after the release<br/>(it may wait for the previous updater's running scan, with qrexec up)"]
     F --> U
-    U --> G["RESULT written"]
+    U -->|"other paths"| G["RESULT written"]
+    U -->|"-Auto -RebootAtEnd"| K["Right before the power-off: volatile marker, start QrexecAgent, observe RUNNING;<br/>advertise-tools tells dom0 gui=1 gui-emulated=0 and NOT qrexec<br/>RESULT = gui-only-before-power-off, gui_only_advertise"]
+    K --> G
+    K -. "no result / rc != 0" .-> J["gui_only_advertise_failed (red)"]
     E -. "release never reaches RUNNING" .-> H["svc_qrexec_start_failed (red)"]
     G -. "non-power-off path, service still held" .-> I["svc_qrexec_never_started (red)"]
 ```
@@ -62,7 +67,7 @@ Where the details live:
 |---|---|
 | `findings/wedge.md` | the stall measurements this file rests on |
 | `packaging/setup/Install-QwtImproved.ps1` | stage 2 of the install, where §2 is enforced |
-| `tools/tests/svc-serial-start-test.ps1`, `svc-serial-start-selftest.sh` | the offline suite that asserts §2's order |
+| `mgmt/harness/prime-run.sh` | §2 rule 5's effect on every clean install: no guest call before dom0 registers the agent, and the first registered boot must have started with gui=1, gui-emulated off and no qrexec |
 | `mgmt/harness/paced-ab.sh`, `mgmt/harness/stock-ab.sh` | the A/B runs that grade §1 |
 
 ## 1. Work that reaches QEMU or Xen in a fresh domain's first minutes is serialized and paced
@@ -148,9 +153,23 @@ test-harness quiet window: the property is enforced in the product.
    `svc_qrexec_held_secs`).
 4. Every exit path after msiexec that does not power off starts it before writing its RESULT: Fail, the main
    catch, a refused power-off.
-5. On the `-Auto -RebootAtEnd` path it is not started in this stage at all. The guest powers off within seconds,
-   the service is auto-start and comes up on the next boot as stock QWT's does, and the RESULT says so
-   (`not-started-powering-off`).
+5. On the `-Auto -RebootAtEnd` path it stays held at the release site (`held-past-release`) and is started right
+   before the power-off, only so that dom0 holds `gui`=1 and `gui-emulated`=0 before the next boot. The installer
+   creates a VOLATILE marker key (`AdvertiseGuiOnly`, gone at shutdown), starts the service observed RUNNING, and
+   advertise-tools, seeing the marker, writes only `os`, `gui`=1 and `gui-emulated`=0 - no `qrexec`, no
+   `default-user`, no logon wait - calls `qubes.NotifyTools`, and records qrexec-client-vm's exit code in the
+   marker. The RESULT records it (`gui_only_advertise`; a missing or non-zero result is `gui_only_advertise_failed`,
+   red), and the next boot advertises in full. Amended 2026-11-25 (WIN11CLEANSHUTDOWNSPIN): left unstarted, dom0
+   had neither `gui` nor `gui-emulated` at the next spawn (`qvm_start_daemon.py:783-789`), so our gui-agent's first
+   boot also got a stub-domain viewer, killed when our agent's vchan opened (`:748-754`, xside.c:5288), and a stub
+   QEMU display write on that closed vchan exits the device model (txrx-vchan.c handle_vchan_error): no USB, no
+   ACPI power-off (specimens 1366, 1494). `qrexec` is withheld because it fires dom0's template-postinstall, an
+   incoming call. No incoming call can land in these seconds: dom0 has no `qrexec` feature for the qube, and a call
+   to it fails at once while its agent has not said hello (qrexec-daemon.c:434 opens the socket only then;
+   qrexec-daemon-common.c:270). The guest cannot see dom0 APPLY the request, so the caller checks it before the
+   next start: prime-run hard-fails when the first boot with a registered agent did not start with `gui`=1,
+   `gui-emulated` off and no `qrexec`. Not a Jev verdict: "reliable with the dom0-side assert" share 0.74,
+   confidence 0.65 (floor 0.70); "nothing blocking" 0.79.
 6. Two errors of their own, both red in `mgmt/harness/result-flags.py`: a RESULT written on a non-power-off path
    with the service still held (`svc_qrexec_never_started`), and a release that does not reach RUNNING
    (`svc_qrexec_start_failed`).
@@ -161,7 +180,8 @@ test-harness quiet window: the property is enforced in the product.
    tasks); in 4.3.34 it only sat in that stretch. Since 4.3.35 it may wait for the previous updater's running
    scan (`docs/ADR-updater.md` §13), and that scan reaches dom0's update proxy over qrexec: inside the hold it had
    no network path to finish on, while dom0 could not reach the guest at all. Jev: move 0.99 over deferring only
-   the wait (0.01) or keeping it. The offline suite asserts the order (knob `deployinhold`).
+   the wait (0.01) or keeping it. The offline suite asserted the order (knob `deployinhold`) until it was deleted
+   on 2026-11-25 (Evidence, below).
 
 (The flowchart for this decision is in "In plain English" at the top of this file.)
 
@@ -170,16 +190,27 @@ test-harness quiet window: the property is enforced in the product.
 - On the interactive path (install.cmd, or /auto without /reboot) the no-qrexec phase of stage 2 grows by the
   device work: measured 33-60 s from msiexec's return to INSTALL COMPLETE over 25 archived runs (2026-09-05 to
   2026-10-03), on top of the ~60 s the MSI already takes.
-- On the `-Auto -RebootAtEnd` path (the clean install through prime-run) qrexec does not answer in stage 2 at
-  all.
-- dom0 calls issued meanwhile queue for `qrexec_timeout` and land together at the release. The harnesses already
-  live with a no-qrexec phase: `quick-upgrade.sh` and `e2e-wait.sh` call a stall only after `STALL_SECS` (300 s)
-  without an answer, and `admin.vm.Stats` needs no agent.
+- On the `-Auto -RebootAtEnd` path (the clean install through prime-run) qrexec answers in stage 2 only for the
+  seconds of the gui-only advertise (rule 5), and no call lands in them (below).
+- dom0 calls issued meanwhile queue for `qrexec_timeout` and land together at the release ON A QUBE THAT ALREADY
+  HAS `qrexec`=1 (an upgrade or reinstall). On a qube with no `qrexec` feature - a clean install until its first
+  full advertise - they fail at once instead: qrexec-daemon opens its socket only at the agent's hello, and the
+  client gives up on a missing one (corrected 2026-11-25, read in source). The harnesses already live with a
+  no-qrexec phase: `quick-upgrade.sh` and `e2e-wait.sh` call a stall only after `STALL_SECS` (300 s) without an
+  answer, `admin.vm.Stats` needs no agent, and prime-run makes no guest call until dom0 reports `qrexec`=1 and
+  Running, the state in which a call is served at once (qubesvm.py `is_fully_usable`).
+- Rule 5: the boot after the power-off has no emulated display until our gui-agent connects - the state every
+  later boot is already in; a gui-agent that fails there shows nothing (findings/issues.md, P2). If the advertise
+  fails or dom0 does not apply it, that boot is back to the stub viewer and its hand-over: red in the RESULT, and
+  prime-run stops. A qube whose owner set `gui-emulated`=1 by hand keeps a hand-over on every boot.
 - A death of one of our components during the hold reaches dom0 only through the guest log, because the death
   reporter's notification rides the local qrexec-agent (`guest/qwt-notify-error.ps1`). This is an honest limit.
 
 **Evidence.** Offline: every assertion of the suite fails under its knob (24 knobs; re-run by the reviewer,
-77 pass / 0 fail clean). On the rig: gate #6 on 4.3.34 (24e28f46, 2026-10-04) held QrexecAgent 24.2 s through
+77 pass / 0 fail clean). That suite (`svc-serial-start-test.ps1`) was deleted with rule 5's amendment on
+2026-11-25: it asserted the old rule 5 and its source-text anchors, and was never in the gate (it needs
+PowerShell). What enforces §2 now is result-flags (`svc_qrexec_never_started`, `svc_qrexec_start_failed`,
+`gui_only_advertise_failed`) and, for rule 5's effect, prime-run's first-registered-boot assert. On the rig: gate #6 on 4.3.34 (24e28f46, 2026-10-04) held QrexecAgent 24.2 s through
 stage 2's device work and did not start it before the power-off; all 8 install cells PASS with no stall, record
 CLEAN. 0 of 8 at the recent ~18% stall rate has P = 0.21, so this is consistent with the fix, not proof of it.
 Rule 8 seen to pass: two quick-upgrades of the 4.3.35 RC on the reporter's environment (2026-10-04) logged the

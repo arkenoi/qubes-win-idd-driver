@@ -57,6 +57,21 @@ log(){ case "$*" in
        esac
        echo "$(date -u +%H:%M:%S) prime-run[$CHURN]: $_m"; }
 state(){ qvm-ls --raw-data --fields state "$1" 2>/dev/null; }
+# REGISTRATION IS READ FROM dom0, NEVER BY CALLING THE GUEST (owner 2026-11-25: harness calls must not pile up in
+# dom0 and land together at the agent's first connect). A call to a qube with no qrexec feature fails at once
+# while its agent has not said hello - qrexec-daemon opens its socket only then (qrexec-daemon.c:434) and the
+# client gives up on a missing socket (qrexec-daemon-common.c:270). With qrexec=1, dom0 reports the qube Running
+# only once that socket exists (qubesvm.py is_fully_usable) and Transient before. So qrexec=1 AND Running is the
+# state in which a call is served at once and cannot queue. Under docs/ADR-boot.md 2 rule 5, qrexec=1 first
+# appears in the boot after stage 2's power-off, so the poll cannot reach the guest before that shutdown either.
+agent_registered(){ [ "$(qvm-features "$1" qrexec 2>/dev/null)" = 1 ] && [ "$(state "$1")" = Running ]; }
+# What dom0 starts a boot with. It spawns the stub-domain viewer when gui-emulated is set, or when neither gui nor
+# gui-emulated is (qvm_start_daemon.py:783-789). '-' = absent, empty = present and false.
+boot_start_features(){
+    local f v out=
+    for f in gui gui-emulated qrexec; do v=$(qvm-features "$1" "$f" 2>/dev/null) || v=-; out="$out $f=$v"; done
+    echo "${out# }"
+}
 
 # --- lifecycle (run-lib.sh): a killed prime-run must leave NO orphans and a MARKED subject ---
 # 2026-09-06, observed live: killing the calling harness left THIS script + its `sleep`s
@@ -460,6 +475,17 @@ log "  restarting it is THIS script's job (protocol 0.8: one owner per guest, wa
 # at all. Capture it, and say what libxl actually said.
 declare -F assert_sole_guest >/dev/null 2>&1 || . "$(dirname "${BASH_SOURCE[0]}")/serial-rig.sh"
 assert_sole_guest "$CHURN" || exit 1
+_bootfeat=$(boot_start_features "$CHURN")
+# WHERE THE FIRST-REGISTERED-BOOT ASSERT APPLIES: a job that runs OUR install.cmd with /auto /reboot (the -Auto
+# -RebootAtEnd path, docs/ADR-boot.md 2 rule 5) on a base dom0 has never been told about (no gui, no qrexec).
+# stock-422, pwfix and selftest do not run our installer, and on a qube dom0 already holds gui/qrexec for the
+# installer skips the gui-only advertise by design.
+gui_only_expected=0
+if command grep -qiE '^call C:\\qwtsetup\\install\.cmd .*/auto .*/reboot' "$JOBDIR/onboot.cmd" \
+   && [ "$_bootfeat" = "gui=- gui-emulated=- qrexec=-" ]; then
+    gui_only_expected=1
+fi
+log "first-registered-boot assert: $([ "$gui_only_expected" = 1 ] && echo ARMED || echo "not applicable (job $JOB, base started with [$_bootfeat])")"
 if ! _bootout=$(qvm-start "$CHURN" 2>&1); then
     log "[ERROR] TERMINAL: the DOMAIN WOULD NOT START - the guest never ran, so nothing about the stick,"
     log "  the payload or the product is inferable from this:"
@@ -565,7 +591,7 @@ while [ $(( $(date +%s) - t0 )) -lt "$DEADLINE" ]; do
     # contents first), so an rc here was written by THIS run.
     # rc=10 IS THE DOCUMENTED STAGE-1 EXIT and rc=0 is success - both must keep waiting, because
     # stage 2 still has to run after the reboot. Anything else is terminal.
-    if [ -n "${DIAGIMG:-}" ]; then                                           # GUARD:instfail
+    if [ -n "${DIAGIMG:-}" ]; then
         _pr_rc=$(mcopy -n -i "$DIAGIMG" ::/prime-progress.log - 2>/dev/null \
                  | tr -d '\r' | sed -n 's/.*installer rc=\([0-9][0-9]*\).*/\1/p' | tail -1)
         case "${_pr_rc:-}" in
@@ -592,7 +618,7 @@ while [ $(( $(date +%s) - t0 )) -lt "$DEADLINE" ]; do
     # quiet window that starts AFTER the first answer is too late. A halt (a stage ended) is still seen: the state is read from dom0
     # every iteration and the Halted branch below restarts the guest and starts a new boot's window. A guest that is frozen when the
     # window ends gets no pass - the loop runs on to its deadline and the stall classification.
-    if [ "${QUIET_BOOT_SECS:-0}" -gt 0 ] && [ "$st" = Running ] && [ $(( $(date +%s) - t_start )) -lt "${QUIET_BOOT_SECS}" ]; then   # GUARD:quietboot
+    if [ "${QUIET_BOOT_SECS:-0}" -gt 0 ] && [ "$st" = Running ] && [ $(( $(date +%s) - t_start )) -lt "${QUIET_BOOT_SECS}" ]; then
         [ "${_qb_boot:-}" = "$t_start" ] || { log "  t+${el}s QUIET BOOT: no guest call for ${QUIET_BOOT_SECS}s after this boot's start, or until the domain leaves Running"; _qb_boot=$t_start; }
         continue
     fi
@@ -652,6 +678,7 @@ while [ $(( $(date +%s) - t0 )) -lt "$DEADLINE" ]; do
         # installing". That is a confident wrong diagnosis of a product from a toolstack error,
         # and it cost a campaign cell plus the two cells that cascade off its park. Capture the
         # start's own error and say what actually happened.
+        _bootfeat=$(boot_start_features "$CHURN")
         if ! _startout=$(qvm-start "$CHURN" 2>&1); then
             log "  TERMINAL: the DOMAIN WOULD NOT START (this is not the guest rebooting):"
             log "    ${_startout}"
@@ -668,7 +695,24 @@ while [ $(( $(date +%s) - t0 )) -lt "$DEADLINE" ]; do
     # the status: the guest ANSWERED and the probe said it did not. The three other probes in this
     # file were fixed on 2026-10-14; this one hid behind a line continuation, where lint L23's
     # per-line scan could not see it. It is the probe that decides a clean install succeeded.
-    if command grep -qa '^QREADY' <<< "$(QTEST_VM=$CHURN timeout -k 5 45 ./tools/qtest run 'cmd /c echo QREADY' 2>/dev/null)"; then
+    # NO PROBE UNTIL dom0 HAS REGISTERED THIS BOOT'S AGENT (agent_registered, above): before that a call
+    # either fails at once or, on a qrexec=1 qube still Transient, waits in dom0 for the connect.
+    reg=0; agent_registered "$CHURN" && reg=1
+    # THE BOOT OUR AGENTS FIRST CONNECT IN HAS NO STUB-DOMAIN VIEWER (docs/ADR-boot.md 2 rule 5,
+    # WIN11CLEANSHUTDOWNSPIN). Stage 2 tells dom0 gui=1 / gui-emulated=0 and nothing else before it powers
+    # off; the guest cannot see dom0 apply it, so it is read here, from what this boot was started with.
+    # Anything else means dom0 spawned the stub viewer and kills it at our gui-agent's connect.
+    if [ "$reg" = 1 ] && [ "$gui_only_expected" = 1 ] && [ "${first_reg_checked:-0}" = 0 ]; then
+        first_reg_checked=1
+        if [ "$_bootfeat" != "gui=1 gui-emulated= qrexec=-" ]; then
+            log "[ERROR] TERMINAL: the first boot with a registered qrexec agent was started with [$_bootfeat], not [gui=1 gui-emulated= qrexec=-]:"
+            log "  dom0 gave it a stub-domain viewer and its hand-over - the stage-2 gui-only advertise did not take effect"
+            log "  (the installer's RESULT field gui_only_advertise says what the guest saw). Guest LEFT RUNNING as evidence."
+            exit 1
+        fi
+        log "  t+${el}s first registered boot was started with [$_bootfeat] - no stub-domain viewer"
+    fi
+    if [ "$reg" = 1 ] && command grep -qa '^QREADY' <<< "$(QTEST_VM=$CHURN timeout -k 5 45 ./tools/qtest run 'cmd /c echo QREADY' 2>/dev/null)"; then
         # LATCH FIRST: the agent has answered at least once in this run. Set before the quiet window
         # and before any `continue`, because the two paths that leave this block without ready=1 (the
         # guest going deaf in the quiet window, and the post-settle reboot that never comes back) are
@@ -683,7 +727,7 @@ while [ $(( $(date +%s) - t0 )) -lt "$DEADLINE" ]; do
         # (a stage ended - the loop's own Halted handling restarts it) or QUIET_WINDOW seconds pass; then ONE liveness probe. A guest
         # that went deaf while left alone gets no pass: the loop carries on to the deadline and its stall classification.
         # Only dom0-side state (qvm-ls) is read during the window.
-        if [ "${QUIET_AFTER_FIRST:-0}" = 1 ]; then   # GUARD:quietfirst
+        if [ "${QUIET_AFTER_FIRST:-0}" = 1 ]; then
             log "  t+${el}s FIRST ANSWER of this boot - QUIET: no guest call for up to ${QUIET_WINDOW:-300}s or until the domain leaves Running"
             _tq=$(date +%s); _left=0
             while [ $(( $(date +%s) - _tq )) -lt "${QUIET_WINDOW:-300}" ]; do
@@ -743,7 +787,7 @@ while [ $(( $(date +%s) - t0 )) -lt "$DEADLINE" ]; do
         # probe runs after the rescue check, so it acts on the next poll - a bounded ~60 s lag.
         noshow=$(rescue_noshow_step "$noshow" "$sv")
     fi
-    log "  t+${el}s state=$st restarts=$restarts cpu=${cpu} quiet=$quiet noshow=$noshow (no qrexec yet)$scr"
+    log "  t+${el}s state=$st reg=$reg restarts=$restarts cpu=${cpu} quiet=$quiet noshow=$noshow (no qrexec yet)$scr"
 done
 
 # SETTLE BEFORE DECLARING SUCCESS. First qrexec is not the end of the job: `stock-422` installs,
@@ -759,7 +803,7 @@ done
 if [ "$ready" = 1 ]; then
     log "  qrexec answered - settling ${SETTLE_SECS:-90}s to catch a post-install reboot the job may still do"
     rl_fg sleep "${SETTLE_SECS:-90}"   # interruptible: a TERM must not defer teardown by the settle window
-    if ! command grep -qa '^QREADY' <<< "$(QTEST_VM=$CHURN timeout -k 5 45 ./tools/qtest run 'cmd /c echo QREADY' 2>/dev/null)"; then
+    if ! agent_registered "$CHURN" || ! command grep -qa '^QREADY' <<< "$(QTEST_VM=$CHURN timeout -k 5 45 ./tools/qtest run 'cmd /c echo QREADY' 2>/dev/null)"; then
         log "  the guest stopped answering during the settle window - the job rebooted it after install"
         # WAIT FOR THE POWER-OFF TO LAND before deciding. This used to take ONE state sample, right
         # here - and a guest that is powering off reads Transient, not Halted, so the restart was
@@ -916,7 +960,7 @@ if [ "$ready" != 1 ]; then
     # EVERY STALL IS CAPTURED (2026-10-04): this used to fire only on MOVING ("a frozen domain has nothing to image") - but the
     # BLOCKED shape, every vCPU idle around one held in Xen waiting for QEMU, is FLAT, and it is exactly what #4 and #5 were; its
     # memory and Xen's pause_flags are what named the mechanism. Only UNREADABLE (no cpu_time at all) is left uncaptured.
-    if [ "${_pr_cs%% *}" = MOVING ] || [ "${_pr_cs%% *}" = FLAT ]; then   # GUARD:captureflat
+    if [ "${_pr_cs%% *}" = MOVING ] || [ "${_pr_cs%% *}" = FLAT ]; then
         log "  capturing the specimen automatically (dom0 forensics, then a memory image)"
         if timeout 300 qrexec-client-vm dom0 "local.WinWedgeForensics+$CHURN" </dev/null \
              > "$OUT/forensics.tar" 2>"$OUT/forensics.err"; then
