@@ -1259,6 +1259,11 @@ def line_version(lf, l):
     is - the last init with this pid at or before the line - with the earliest occurrence as the
     fallback for a line that precedes every init of its pid (a log whose head was rotated away).
     """
+    return (line_init(lf, l) or {}).get("version")
+
+
+def line_init(lf, l):
+    """The init record that governs this line - line_version()'s resolution, returning the record (None when none does)."""
     pid = str((l.extra or {}).get("pid") or "")
     if pid:
         own = None
@@ -1272,14 +1277,28 @@ def line_version(lf, l):
                     own = i
                     break
         if own is not None:
-            return own.get("version")
+            return own
     gov = None
     for i in lf.inits:
         if i.get("ts") is not None and l.ts is not None and i["ts"] <= l.ts:
             gov = i
         else:
             break
-    return (gov or {}).get("version")
+    return gov
+
+
+def legacy_framework(init):
+    """True when a pre-QWTBIRTH logging framework opened this init: an INFO-level `Log started` banner and no QWTBIRTH line.
+
+    THE WRITER'S LOGGING FRAMEWORK DECIDES WHEN ITS VERSION CANNOT. qubesdb-daemon declares 4.3.1.0 in the predecessor and
+    in the build under test, so on the rel-45823201373 win10-upgrade cell the predecessor's daemon (pid 3480, written before
+    the release's msiexec started) was billed to the candidate and its `QpsWrite: [N] client is disconnected` - a line the
+    candidate's pipe server logs at DEBUG since 0c61f5e7 - breached the cell. Current winutils/src/log.c writes `Log started`
+    at DEBUG (:342) and QWTBIRTH at INFO (:399); 16 clean captures since rel-45079168781 and both reinstall cells of
+    rel-45823201373 hold no INFO `Log started` init, and every such init in that campaign's two upgrade cells is a
+    predecessor process. Birth time cannot decide this: the release's MSI starts its own daemon before the first turned-over
+    module's init, and the upgrade runs a predecessor process after msiexec starts."""
+    return bool(init and init.get("legacy_banner") and not init.get("birth"))
 
 
 def line_boot(lf, l, boots):
@@ -1442,8 +1461,11 @@ def build_scope(files, build):
     # `not declared_unreadable(...)`: the pre-install clause is for sources that STRUCTURALLY carry
     # no version, never for a module that declared 0.0.0.0. Without it this clause billed 12 of our
     # own installer's ERROR lines to the predecessor - measured, see declared_unreadable().
+    # legacy_framework() applies only when a QWTBIRTH-era logger is in this capture at all - the build under test's framework.
+    births = any(i.get("birth") for f in files for i in f.inits)
     def prior(lf, l):
-        return is_prior_build(lf, l, builds, sup) or (pre_install(l) and not line_version(lf, l) and not declared_unreadable(lf, l))   # GUARD:priorbuild DEFECT: return False
+        return (is_prior_build(lf, l, builds, sup) or (pre_install(l) and not line_version(lf, l) and not declared_unreadable(lf, l))
+                or (births and legacy_framework(line_init(lf, l))))
 
     # THE THIRD CASE, which fell through BOTH clauses above and was therefore billed to the build
     # under test. MEASURED 2026-10-22 on the win10-upgrade cell of acceptance run 39767068509:
@@ -1526,7 +1548,7 @@ def build_scope(files, build):
     # thing it needs beyond version_is_prior() is its module - which comes from its file.
     _mod_by_file = {lf.name: lf.module for lf in files}
     def inst_prior(i):
-        return version_is_prior(_mod_by_file.get(i.get("file")), i.get("version"), builds, sup)
+        return version_is_prior(_mod_by_file.get(i.get("file")), i.get("version"), builds, sup) or (births and bool(i.get("legacy")))
 
     # DID THE BUILD UNDER TEST DECLARE ITSELF IN THIS CAPTURE AT ALL? One answer, carried, because
     # the question had grown two independent list comprehensions - compute_metrics' and
@@ -1775,6 +1797,7 @@ def parse_winutils(lf, raw_lines):
                        "session": None, "version": None, "module": lf.module}
                 lf.inits.append(rec)
             rec["module"] = rec.get("module") or lf.module
+            rec["birth"] = True   # legacy_framework(): a QWTBIRTH-era logger wrote this init
             if own_ver:
                 rec["version"] = own_ver
             elif kv.get("ver"):
@@ -1829,7 +1852,8 @@ def parse_winutils(lf, raw_lines):
             if mm:
                 lf.module = mm.group(1)
                 lf.inits.append({"ts": ts, "pid": None, "uptime_s": None, "boot_time": None,
-                                 "session": None, "version": None, "module": lf.module})
+                                 "session": None, "version": None, "module": lf.module,
+                                 "legacy_banner": lvl == "I"})   # legacy_framework(): log.c writes it at DEBUG now
             mm = re.match(r"Running as user: .*, process ID: (\d+)", msg)
             if mm:
                 lf.pid = int(mm.group(1))
@@ -3379,7 +3403,7 @@ def build_structure(files, boots, declared=None):
         _bid = lf.boot
         if _ibt and boots:
             _bid = min(boots, key=lambda b: abs((b["time"] - _ibt).total_seconds()))["id"]   # GUARD:instboot DEFECT: pass
-        inst = {"pid": _pid, "file": lf.name,
+        inst = {"pid": _pid, "file": lf.name, "legacy": legacy_framework(_init),
                 "boot": _bid,
                 "session": (_init or {}).get("session", lf.session) if _init else lf.session,
                 "version": (_init or {}).get("version", lf.version) if _init else lf.version,
