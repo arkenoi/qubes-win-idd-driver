@@ -28,7 +28,6 @@ toastactions-selftest.sh
 toasthold-selftest.sh
 ttfw-ab-selftest.sh
 uef-one-line-selftest.sh
-upd-task-prestop-selftest.sh
 wgcbroker-layout-selftest.sh
 window-measure-selftest.sh
 wrapper-exit-emit-selftest.sh

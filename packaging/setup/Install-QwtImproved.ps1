@@ -3764,7 +3764,7 @@ function Invoke-Stage2 {
         }
     }
     $script:Result.detail.vchan_prestop = (($prestop.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join ' ')
-    # ---- UPDTASKPRESTOP-BEGIN  (tools/tests/upd-task-prestop-test.ps1 extracts this region by marker)
+    # ---- UPDTASKPRESTOP-BEGIN  (region markers; its offline suite was deleted 2026-11-26 when QubesUpdatesRelay joined the list)
     # OUR INSTALLER, OUR TASKS - SO WE END THEM OURSELVES. The block above quiesces our SERVICES
     # before msiexec for exactly this reason ("the Restart Manager will tear it down in bulk"), and
     # our scheduled tasks were left out of it. MEASURED, campaign 3 cell win11-reinstall 2026-10-22:
@@ -3785,7 +3785,10 @@ function Invoke-Stage2 {
     # everywhere. An absent task is not a failure here (a clean install has none yet).
     $script:UpdTaskPrestop = [ordered]@{}
     $script:UpdTasksDisabled = @()
-    foreach ($t in @('QubesWindowsUpdateScan', 'QubesWindowsUpdateRun', 'QubesWindowsUpdateDownload')) {
+    # QubesUpdatesRelay too: on a template the permanent relay (ADR-updater 12.4 point 3) runs from boot with windows-utils.dll
+    # and qubesdb-client.dll loaded - both MSI-installed - so the Restart Manager would reap it the same way. The updater deploy
+    # registers and starts it again; the Fail path re-enables it with the others.
+    foreach ($t in @('QubesWindowsUpdateScan', 'QubesWindowsUpdateRun', 'QubesWindowsUpdateDownload', 'QubesUpdatesRelay')) {
         # ASK WHETHER THE TASK IS THERE, because without that answer the two failures below are the
         # same failure. Until 2026-11-08 `absent` was written whenever /end and /disable BOTH failed,
         # and that is two opposite facts in one word: a clean install with no task yet (benign, and

@@ -299,7 +299,9 @@ if ($updPrev -and $updPrev.phase -and ($UpdTerminalPhases -notcontains $updPrev.
 # machine-wide proxy and launches the relay underneath the relay replacement and task rewrite that
 # follow. So the tasks are disabled for the duration and re-enabled at the end. On a fresh install
 # they do not exist yet and every call below is a no-op.
-$UpdTasks = @('QubesWindowsUpdateScan','QubesWindowsUpdateRun','QubesWindowsUpdateDownload')
+# QubesUpdatesRelay too: the installer disables it before msiexec with the others (UPDTASKPRESTOP), and a deploy that throws
+# before step 7b registers it again must still hand it back enabled - the trap below re-enables what this list gated.
+$UpdTasks = @('QubesWindowsUpdateScan','QubesWindowsUpdateRun','QubesWindowsUpdateDownload','QubesUpdatesRelay')
 $updGated = @()
 function Set-UpdTaskState([string]$name, [string]$how) {
     # schtasks, not Disable-ScheduledTask: this runs on guests where the cmdlet set has been
@@ -933,6 +935,7 @@ $relayXml = @"
   <Triggers><BootTrigger><Enabled>true</Enabled></BootTrigger></Triggers>
   <Principals><Principal id="Author"><UserId>S-1-5-18</UserId><RunLevel>HighestAvailable</RunLevel></Principal></Principals>
   <Settings>
+    <Enabled>true</Enabled>
     <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
     <StartWhenAvailable>true</StartWhenAvailable>
     <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
