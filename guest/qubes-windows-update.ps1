@@ -3129,20 +3129,41 @@ $wuAuKey = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU'
 # 2026-09-30), holding Windows Update while our pass needed it (forum post 247: «falsely claiming another update is
 # running»). Owner 2026-09-30: «updates should be off unconditionally except maybe standalonevms». Every task in that folder
 # is set on every pass, so a task Windows turns back on is turned off again by the next one. wuauserv and UsoSvc are left
-# as they are: our pass drives the Windows Update Agent itself. A task Windows refuses to change is named, never hidden.
+# as they are: our pass drives the Windows Update Agent itself.
+# THE END STATE DECIDES, NOT THE EXCEPTION. rel-45847660698 updater-component (win11de-uc, a TemplateVM): Disable-ScheduledTask
+# threw "Element nicht gefunden." for StartOobeAppsScanAfterUpdate, and this logged that Windows "still runs" it - a claim no
+# measurement made. The folder is listed again after the attempts: a task gone from it is INFO, a task still not set is the
+# ERROR, with its state and the exception's HRESULT (the message is localized).
+# ONLY WHAT WE TURNED OFF IS TURNED BACK ON. The tasks this pass disables are kept in UsoTasksDisabled; a StandaloneVM with
+# direct internet re-enables those and no others, so a task Windows ships disabled stays as Windows set it.
 function Set-UsoTasks([bool]$Enabled) {
-  $changed = @(); $refused = @()
-  foreach ($t in @(Get-ScheduledTask -TaskPath '\Microsoft\Windows\UpdateOrchestrator\' -EA SilentlyContinue)) {
+  $path = '\Microsoft\Windows\UpdateOrchestrator\'; $mineKey = 'HKLM:\SOFTWARE\Qubes\Updates'
+  $mine = @((Get-ItemProperty -LiteralPath $mineKey -Name UsoTasksDisabled -EA SilentlyContinue).UsoTasksDisabled | Where-Object { $_ })
+  $changed = @(); $failed = @{}
+  foreach ($t in @(Get-ScheduledTask -TaskPath $path -EA SilentlyContinue)) {
     if (($t.State -ne 'Disabled') -eq $Enabled) { continue }
+    if ($Enabled -and $t.TaskName -notin $mine) { continue }
     try {
       if ($Enabled) { Enable-ScheduledTask -TaskPath $t.TaskPath -TaskName $t.TaskName -EA Stop | Out-Null }
       else { Disable-ScheduledTask -TaskPath $t.TaskPath -TaskName $t.TaskName -EA Stop | Out-Null }
       $changed += $t.TaskName
-    } catch { $refused += ("$($t.TaskName) (" + ("$($_.Exception.Message)" -replace "`r|`n", ' ').Trim() + ')') }
+    } catch { $failed[$t.TaskName] = ('0x{0:X8} {1}' -f $_.Exception.HResult, ("$($_.Exception.Message)" -replace "`r|`n", ' ').Trim()) }
   }
+  $now = @{}; foreach ($t in @(Get-ScheduledTask -TaskPath $path -EA SilentlyContinue)) { $now[$t.TaskName] = "$($t.State)" }
+  $gone = @(); $unset = @()
+  foreach ($n in $failed.Keys) {
+    if (-not $now.ContainsKey($n)) { $gone += $n }
+    elseif (($now[$n] -ne 'Disabled') -eq $Enabled) { $changed += $n }
+    else { $unset += "$n (state $($now[$n]); $($failed[$n]))" }
+  }
+  if ($Enabled) { $keep = @($mine | Where-Object { $now[$_] -eq 'Disabled' }) }
+  else { $keep = @(@($mine | Where-Object { $now.ContainsKey($_) }) + $changed | Sort-Object -Unique) }
+  if ($keep.Count) { SetV $mineKey 'UsoTasksDisabled' ([string[]]$keep) 'MultiString' }
+  else { Remove-ItemProperty -LiteralPath $mineKey -Name UsoTasksDisabled -EA SilentlyContinue }
   $verb = if ($Enabled) { 'enabled' } else { 'disabled' }
   if ($changed.Count) { Log ("USOTASKS $verb $($changed.Count): " + ($changed -join ', ')) }
-  if ($refused.Count) { Log ("USOTASKS Windows refused to set $($refused.Count) task(s) $verb, so its own update orchestrator still runs them: " + ($refused -join '; ')) 'ERROR' }
+  if ($gone.Count) { Log ("USOTASKS $($gone.Count) task(s) listed at the start of this pass are no longer in $path`: " + ($gone -join ', ')) }
+  if ($unset.Count) { Log ("USOTASKS $($unset.Count) task(s) are still not $verb after this pass set them: " + ($unset -join '; ')) 'ERROR' }
 }
 $selfUpdating = ($vmClassLive -eq 'StandaloneVM') -and (Test-DirectInternet)
 if ($selfUpdating) {
