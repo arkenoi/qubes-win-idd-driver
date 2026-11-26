@@ -3124,8 +3124,29 @@ Log "VM class (live from qubesdb): $vmClassLive"
 # itself - AUOptions=4 with NoAutoRebootWithLoggedOnUsers=1 leaves the restart to the signed-in user. The two values
 # are written before NoAutoUpdate is removed; when they cannot be written, NoAutoUpdate stays.
 $wuAuKey = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU'
+# WINDOWS' OWN UPDATE ORCHESTRATOR IS OFF WHERE DOM0 DRIVES UPDATES. NoAutoUpdate=1 stops automatic INSTALLS only; the
+# \Microsoft\Windows\UpdateOrchestrator\ tasks still scanned and scheduled work every ~30 min (findings/updates.md, measured
+# 2026-09-30), holding Windows Update while our pass needed it (forum post 247: «falsely claiming another update is
+# running»). Owner 2026-09-30: «updates should be off unconditionally except maybe standalonevms». Every task in that folder
+# is set on every pass, so a task Windows turns back on is turned off again by the next one. wuauserv and UsoSvc are left
+# as they are: our pass drives the Windows Update Agent itself. A task Windows refuses to change is named, never hidden.
+function Set-UsoTasks([bool]$Enabled) {
+  $changed = @(); $refused = @()
+  foreach ($t in @(Get-ScheduledTask -TaskPath '\Microsoft\Windows\UpdateOrchestrator\' -EA SilentlyContinue)) {
+    if (($t.State -ne 'Disabled') -eq $Enabled) { continue }
+    try {
+      if ($Enabled) { Enable-ScheduledTask -TaskPath $t.TaskPath -TaskName $t.TaskName -EA Stop | Out-Null }
+      else { Disable-ScheduledTask -TaskPath $t.TaskPath -TaskName $t.TaskName -EA Stop | Out-Null }
+      $changed += $t.TaskName
+    } catch { $refused += ("$($t.TaskName) (" + ("$($_.Exception.Message)" -replace "`r|`n", ' ').Trim() + ')') }
+  }
+  $verb = if ($Enabled) { 'enabled' } else { 'disabled' }
+  if ($changed.Count) { Log ("USOTASKS $verb $($changed.Count): " + ($changed -join ', ')) }
+  if ($refused.Count) { Log ("USOTASKS Windows refused to set $($refused.Count) task(s) $verb, so its own update orchestrator still runs them: " + ($refused -join '; ')) 'ERROR' }
+}
 $selfUpdating = ($vmClassLive -eq 'StandaloneVM') -and (Test-DirectInternet)
 if ($selfUpdating) {
+  Set-UsoTasks $true
   try {
     & { $ErrorActionPreference = 'Stop'; SetV $wuAuKey 'AUOptions' 4 'DWord'; SetV $wuAuKey 'NoAutoRebootWithLoggedOnUsers' 1 'DWord' }
     Log 'StandaloneVM with direct internet - it updates ITSELF via Windows Update, and a restart waits for the signed-in user (AUOptions=4, NoAutoRebootWithLoggedOnUsers=1). The qubes proxy updater is template-only: disabled. Undoing NoAutoUpdate=1.'
@@ -3139,6 +3160,7 @@ if ($selfUpdating) {
   # a template made from such a standalone kept Windows' own automatic updating ON, and so did every AppVM and DispVM booted
   # from it - against dom0 owning every install. On those classes it is the installer's value (install-updater-agent step 9)
   # and is restored here. An offline StandaloneVM is left as it is: it updates itself when it has a route.
+  Set-UsoTasks $false
   if ((Get-ItemProperty -LiteralPath $wuAuKey -Name NoAutoUpdate -EA SilentlyContinue).NoAutoUpdate -ne 1) {
     try {
       & { $ErrorActionPreference = 'Stop'; SetV $wuAuKey 'NoAutoUpdate' 1 'DWord' }
