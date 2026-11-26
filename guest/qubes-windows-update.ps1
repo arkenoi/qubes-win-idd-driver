@@ -2053,6 +2053,24 @@ function Test-CbsRebootPending {
   try { return [bool](Test-Path -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending' -EA Stop) }
   catch { return $null }
 }
+# IS WINDOWS' OWN SERVICING BUSY, AS FACTS (owner 2026-11-26: «if it is indeed conflicting update process initiated by different
+# sources, how can we resolve»). Our mutex orders OUR passes only; Windows Update can also be driven by its own orchestrator, by
+# Settings or by Defender, and nothing recorded whether it was. One line, each value as read: the agent's installer IsBusy and
+# RebootRequiredBeforeInstallation (wuapi IUpdateInstaller), the CBS restart marker, and which servicing processes run. A value
+# that cannot be read says so; it is never reported as idle.
+function Get-WuBusyState {
+  $busy = 'unreadable'; $rbi = 'unreadable'
+  try {
+    $inst = (New-Object -ComObject Microsoft.Update.Session).CreateUpdateInstaller()
+    $busy = "$([bool]$inst.IsBusy)"; $rbi = "$([bool]$inst.RebootRequiredBeforeInstallation)"
+  } catch { $busy = 'unreadable (' + ("$($_.Exception.Message)" -replace "`r|`n", ' ').Trim() + ')' }
+  $cbs = Test-CbsRebootPending
+  $cbsText = if ($null -eq $cbs) { 'unreadable' } else { "$cbs" }
+  $procs = @(Get-Process -Name TiWorker, TrustedInstaller, MoUsoCoreWorker, usoclient, wuauclt, MusNotification, MpCmdRun -EA SilentlyContinue |
+             ForEach-Object { "$($_.ProcessName)[$($_.Id)]" })
+  $procText = if ($procs.Count) { $procs -join ',' } else { 'none' }
+  return "installer_busy=$busy reboot_before_install=$rbi cbs_reboot_pending=$cbsText servicing_processes=$procText"
+}
 # The package list as PackageName -> PackageState, from the Dism module (Get-WindowsPackage -Online). The state is the module's own
 # enum, whose names are English whatever the system language - `dism /get-packages /format:table` prints its state words LOCALIZED,
 # and the reporter's guest is German, so that output can never be matched here (ADR-updater section 6). $null when the list cannot be
@@ -3189,6 +3207,7 @@ try {
   $script:St.phase='ensure-proxy'; Save; Ensure-Proxy
   $script:St.phase='sync-revocation'; Save; Sync-Revocation
   $script:St.phase='scan'; Save
+  Log ("WUBUSY at the start of this pass's Windows Update work: " + (Get-WuBusyState))
   # A LOSSY PASS MUST NEVER BE REPORTED AS "NOTHING TO UPDATE".
   # Measured 2026-08-15: five consecutive scans reported 0 updates on a guest that had three.
   # Windows Update was reachable the whole time - what failed were small plain-HTTP metadata
@@ -4087,6 +4106,17 @@ try {
       $script:St.error = ("Windows Update failed with 0x8024402C and the proxy-reachability probe did not run, so the " +
         "cause is UNMEASURED in this pass. Nothing was searched and no update state was reported to dom0")
     }
+    Save
+    Log $script:St.error
+  } elseif ($msg -match '8024(0009|0016|001B)') {
+    # ANOTHER OPERATION HOLDS WINDOWS UPDATE, said so by name instead of as a bare HRESULT: 0x80240009 WU_E_OPERATIONINPROGRESS,
+    # 0x80240016 WU_E_INSTALL_NOT_ALLOWED (another installation in progress, or a mandatory restart pending), 0x8024001B
+    # WU_E_SELFUPDATE_IN_PROGRESS (Microsoft's WUA error reference). The holder is not ours - our mutex admits one pass - so the
+    # facts read now go with it. No retry: the next pass dom0 starts meets whatever state is there then.
+    $busyName = switch -Regex ($msg) { '80240009' { 'WU_E_OPERATIONINPROGRESS' } '80240016' { 'WU_E_INSTALL_NOT_ALLOWED' } default { 'WU_E_SELFUPDATE_IN_PROGRESS' } }
+    $script:St.error = ("Windows Update refused this pass with ${busyName}: another Windows Update operation holds it (Windows' own " +
+      "orchestrator, Settings or Defender - not this updater, which runs one pass at a time), or Windows needs a restart first. " +
+      "At that moment: " + (Get-WuBusyState) + ". Nothing is retried; the next pass dom0 starts reads the state again")
     Save
     Log $script:St.error
   }
