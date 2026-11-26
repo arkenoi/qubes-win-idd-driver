@@ -334,8 +334,8 @@ updater_gates_diagnose(){
     port=$(printf '%s' "$lastlisten" | grep -aoE 'listen 127\.0\.0\.1:[0-9]+' | grep -aoE '[0-9]+$')
     selfpath=$(printf '%s' "$lastlisten" | grep -aoE 'self=[^ ]+' | sed 's/^self=//')
     if [ -n "$port" ] && [ "$port" != 8082 ] && ! printf '%s' "$lastlisten" | grep -qa 'parent='; then
-      ug_cand CONFIRMED "the running relay PREDATES --parent-pid: the launcher's flag VALUE became the listen port" \
-        "it bound $port with no parent= field, and the launcher passes '--parent-pid <its own pid>'. This is the measured shape (2540, 5956, 6688, 8228, 8892)."
+      ug_cand CONFIRMED "the running relay PREDATES its launcher's flags: a flag VALUE became the listen port" \
+        "it bound $port with no parent= field, and the relay task's launch (--permanent) logs parent=permanent. This is the measured shape of an older binary (2540, 5956, 6688, 8228, 8892)."
     elif [ -z "$lastlisten" ]; then
       ug_cand CONFIRMED "no relay ever logged a listen line this pass" "relay.log has no 'listen 127.0.0.1:<port>' entry"
     else
@@ -345,7 +345,7 @@ updater_gates_diagnose(){
       ug_cand CONFIRMED "the relay that logged this ran from ANOTHER image" "self=$selfpath is not the installed path"
     fi
     ug_has "$exe" 'marker=False' \
-      && ug_cand CONFIRMED "the installed binary itself lacks --parent-pid support" "exe.txt marker=False - so even a correct launch cannot bind 8082" \
+      && ug_cand CONFIRMED "the installed binary itself lacks the vouched flags" "exe.txt marker=False - so even a correct launch cannot bind 8082" \
       || ug_cand EXCLUDED "an unsupported installed binary" "the installed exe carries the marker, so the file is capable"
   fi
 
@@ -463,10 +463,10 @@ updater_gates_jev(){
          "replaced_after_move":"it was compiled and moved, then replaced or restored by something else",
          "wrong_input":"the compile used a different input than the vouched source",
          "unreadable":"the placed exe could not be read back to vouch it"' ;;
-    U3) crit='"stale_binary_running":"the running relay predates --parent-pid, so the launcher flag VALUE became its listen port",
+    U3) crit='"stale_binary_running":"the running relay predates the flags its launcher passes, so a flag VALUE became its listen port",
          "orphan_other_image":"a relay from a different image logged the listen line",
          "no_listen_at_all":"no relay reached its listener this pass",
-         "installed_exe_incapable":"the installed binary itself lacks --parent-pid support"' ;;
+         "installed_exe_incapable":"the installed binary itself lacks the vouched flags"' ;;
     U4) crit='"foreign_listener":"a listener this pass did not start held 8082 and the pass refused to adopt it",
          "port_table_unreadable":"the port-owner table could not be read, so the pass refused to serve blind",
          "upstream_u3":"there was no relay on 8082 to serve with - a consequence of U3"' ;;

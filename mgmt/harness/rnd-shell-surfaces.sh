@@ -156,8 +156,9 @@ log "=== disarm the update scan (P3: never concurrent with a rendering cell) ===
 cat > "$TMP/disarm.ps1" <<'PS'
 $t = Get-ScheduledTask -TaskName QubesWindowsUpdateScan -EA SilentlyContinue
 if ($t) { & schtasks /change /tn QubesWindowsUpdateScan /disable *>$null }
-# A running scan PASS owns its relay: end the TASK (the owner) and the relay exits with it
-# (--parent-pid). Never the relay by name (owner 2026-10-07) - that was any process so named.
+# A running scan PASS is ended through its TASK. The relay is not the pass's: on a template it is
+# permanent and idle without demand (ADR-updater 12.4 point 3), and it is never stopped by name
+# (owner 2026-10-07) - that was any process so named.
 # Read AFTER the disable, as guest/disarm-update-scan.ps1 does: a pass that started between a read
 # taken before the disable and the disable was never ended (measured there 2026-11-12).
 $t1 = Get-ScheduledTask -TaskName QubesWindowsUpdateScan -EA SilentlyContinue
