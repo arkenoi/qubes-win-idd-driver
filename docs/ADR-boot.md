@@ -455,8 +455,9 @@ absent before the uninstall as after it, so this run says nothing about the netw
 
 ## 6. The installer re-arms the PV disk latch before the power-off, so the first post-install boot is on the PV disk
 
-**Status:** ACCEPTED (owner), 2026-11-26: «approved, apply the ADR once measurement confirms». Not yet built. Not a
-Jev verdict.
+**Status:** ACCEPTED (owner), 2026-11-26: «approved, apply the ADR once measurement confirms». Built in `6e524f7d`.
+Measured in run 45722383288 (WIN10 and WIN11 reinstall, n=1 per OS): `pvdisk_latch` armed, and the first post-install
+boot ran on the PV disk (XENSRC PVDISK). Not released yet. Not a Jev verdict.
 
 **Context.** §2's mechanism makes every page a call into the guest unmaps a synchronous round trip to QEMU in the
 stub domain, and QEMU drains its block layer before answering. When the guest's system disk is itself served by

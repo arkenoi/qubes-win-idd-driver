@@ -4,8 +4,8 @@
 
 dom0 drives Windows updates for a Windows qube exactly as for Linux templates. Automatic updates are off in the
 guest, the qube reports what Windows offers, and dom0's own Qubes Update tool starts every install. The guest has
-no route of its own: the updater fetches every file itself through a relay to dom0's update proxy, and the relay
-exists only while a pass runs. Windows' peer-to-peer and background downloaders are never used.
+no route of its own: the updater fetches every file itself through a relay to dom0's update proxy. The relay runs
+permanently on a template and nowhere else. Windows' peer-to-peer and background downloaders are never used.
 
 One invariant governs the rest: what dom0 is told must be true. dom0 hears how many updates Windows is offering.
 An update we cannot place still counts. There are two exceptions: an offer the pass verified has no route on this
@@ -29,7 +29,8 @@ The whole path, in one picture (§1, §2, §4, §5, §12):
 flowchart TD
     D["dom0: qubes-vm-update"] -->|qrexec| H["wu-update.ps1, the dom0 handler:<br/>kicks the pass's task, tails update-status.json"]
     H --> P["qubes-windows-update.ps1: ONE scan or install pass<br/>(passes serialized by the updater mutex)"]
-    P -->|"starts it, holds it by handle"| R["qubes-updates-relay.cs on 127.0.0.1:8082<br/>(lives only as long as its pass)"]
+    T["QubesUpdatesRelay boot task<br/>(TemplateVM only)"] -->|"starts it"| R
+    P -->|"serves through it, identified by its record"| R["qubes-updates-relay.cs on 127.0.0.1:8082<br/>(permanent on a template; exits on any other class)"]
     R -->|"a sanctioned host"| X["qubes.UpdatesProxy -> Windows Update, the Update Catalog"]
     R -->|"any other host"| F403["final 403<br/>never a reset, a 5xx or a hang"]
     P -->|"the OFFERED count; the actionable split<br/>rides in update-status.json"| N["qubes.NotifyUpdates<br/>-> dom0's updates-available marker"]
@@ -102,7 +103,7 @@ reasons, measurements, Jev verdicts and history.
 
 **Decision.** Guest auto-update is off (`NoAutoUpdate=1`). dom0 drives every install. The guest reports
 availability to dom0 over `qubes.NotifyUpdates`. A guest with no netvm reaches Windows Update only through
-`qubes.UpdatesProxy`, and only while a pass is running.
+`qubes.UpdatesProxy`, through the template's relay, which serves update processes and winget only (§18).
 
 **Why.** This is the Qubes model: the admin decides when a template changes, and a template with no netvm
 cannot be left to update itself.
@@ -395,20 +396,30 @@ process with that name mid-transfer. A process found by name is any process with
 
 1. **A component touches only processes it started, and holds them by handle** (pid + start time).
 2. **Nothing is ever killed or adopted by process name.**
-3. **The pass owns exactly one relay,** the one it started, and stops exactly that one. If `127.0.0.1:8082` is
-   held by any other process, the pass refuses with a named reason.
-4. **A relay lives only as long as its pass** (`--parent-pid` and its own watchdog).
-5. **The handler's dead-pass cleanup kills nothing.** A relay that outlives the watchdog is reported as an
-   anomaly.
-6. **The installer kills nothing.** It waits for any relay to exit, or keeps the previous relay exe and says why.
+3. **On a TemplateVM the relay is permanent, and no pass owns it** (§18). Its own boot task, `QubesUpdatesRelay`,
+   starts it. Once it listens it records itself under `HKLM\SOFTWARE\Qubes\UpdatesProxy`: `Relay` = its pid and
+   start time, `RelayLog` = its log file. A pass serves through it only when the owner of `127.0.0.1:8082` matches
+   that record. If the port is free, the pass starts the task, logs it as an anomaly, and checks again. Any other
+   holder of the port is refused with a named reason. A pass never stops the relay.
+4. **The relay starts only on a TemplateVM, whoever starts it.** Before it listens it reads the class from
+   QubesDB, does not listen while QubesDB cannot answer, and exits on any other class.
+5. **The handler's dead-pass cleanup kills nothing.** The recorded relay is not a dead pass's leftover. Any other
+   listener on the port is reported as an anomaly.
+6. **The installer kills nothing by name or port.** It ends the relay through its task, replaces the exe, and
+   starts the task again. Any other listener: it waits for it to exit, or keeps the previous relay exe and says why.
 7. A commit-time lint refuses kill-by-name and adopt-by-name in shipped guest scripts.
+8. **A relay that stops on its own is reported; a stop that was asked for is not** (owner 2026-11-26: «as relay gets
+   permanent crash should be reported. do not confuse crash with intented shutdowns»). A crash (Application Error) or
+   any non-zero task result is a death report. The installer's `schtasks /end`, the stop before msiexec, a system
+   shutdown, and the exit off a template are not. The task has no time limit, so a Task Scheduler end of it is always
+   a requested one.
 
 ### 12.5 Network channels: what each one needs to reach the relay
 
 **Status:** RECORD, 2026-11-17, on the owner's order: what the shipped code does and what was measured on the rig
 (the row-47 runs of 2026-11-17). Line numbers are `guest/qubes-windows-update.ps1` unless a file is named.
 
-**The carrier.** Every channel leaves through the relay `127.0.0.1:8082` (started by the pass, up only during it),
+**The carrier.** Every channel leaves through the relay `127.0.0.1:8082` (on a template: started at boot by its own task, permanent, §12.4 point 3),
 then qrexec `qubes.UpdatesProxy`, to whatever the target dom0's policy names. The relay filters by host suffix and
 by process. Only a TemplateVM runs a pass.
 
@@ -544,8 +555,10 @@ failure."*
 symptom and was blamed on four wrong causes in turn, each costing about an hour of the operator's dom0. Two
 minutes of gates in front of it name the fault the first time.
 
-**Evidence.** `tools/tests/updater-component-selftest.sh` drives the seven gates against the real captures of
-2026-10-22: the post-fix pair passes, the pre-fix pair fails, and each gate fails alone without its own evidence.
+**Evidence.** `tools/tests/updater-component-selftest.sh` drove the seven gates against the real captures of
+2026-10-22: the post-fix pair passed, the pre-fix pair failed, and each gate failed alone without its own evidence.
+It was deleted 2026-11-26: those captures are of the pass-owned relay, and U3 and U4 now require the template's
+permanent relay (§12.4 point 3).
 
 ## 17. Windows never restarts a guest on its own; a restart waits for the user, and a policy that overrides this is detected and warned about
 
@@ -630,12 +643,14 @@ process more tidy, but that would be it."*
    Templates only:
    the owner, 2026-11-21, *"it should NOT exist on anything but templates. everything else takes direct path or fails"*.
    The pass already exits before any proxy activity outside a TemplateVM (`qubes-windows-update.ps1`, the class branch
-   after `Get-QubesVmClass`), and point 4 removes the configuration there; a standing relay must carry the same check
-   itself and exit outside a TemplateVM, not rely on whoever starts it. On an AppVM or StandaloneVM, winget goes
+   after `Get-QubesVmClass`), and point 4 removes the configuration there; the relay must carry the same check
+   itself and exit outside a TemplateVM, whoever starts it (§12.4 point 4). On an AppVM or StandaloneVM, winget goes
    direct through the netvm or fails.
 
 **Supersedes** the temporal gate: "the proxy is torn down when the pass ends" (`guest/qubes-updates-relay.cs:172-173`,
-owner 2026-08-21), and "up only during it" in §12.5.
+owner 2026-08-21), "up only during it" in §12.5, and §12.4's "the pass owns exactly one relay, the one it started"
+and "a relay lives only as long as its pass" (`--parent-pid`), corrected 2026-11-26 (owner: «the relay time-framing
+is stale record that outlived the decision to make it permanent»).
 
 **Open.** Which processes count as update processes, and how the gate tells them apart from a process that only
 carries the same name.
