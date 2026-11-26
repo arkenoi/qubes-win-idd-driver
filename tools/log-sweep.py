@@ -1461,11 +1461,13 @@ def build_scope(files, build):
     # `not declared_unreadable(...)`: the pre-install clause is for sources that STRUCTURALLY carry
     # no version, never for a module that declared 0.0.0.0. Without it this clause billed 12 of our
     # own installer's ERROR lines to the predecessor - measured, see declared_unreadable().
-    # legacy_framework() applies only when a QWTBIRTH-era logger is in this capture at all - the build under test's framework.
-    births = any(i.get("birth") for f in files for i in f.inits)
+    # legacy_framework() applies PER MODULE, only to a module that ALSO wrote a QWTBIRTH init in this capture - proof that
+    # this module's build under test writes one. Capture-wide it billed a 4.3.37 candidate's qwtng-netsetup, which still
+    # opened with the legacy banner, to the predecessor (build-attribution-selftest P2, a real 2026-10-23 capture).
+    birth_mods = {f.module for f in files for i in f.inits if i.get("birth")}
     def prior(lf, l):
         return (is_prior_build(lf, l, builds, sup) or (pre_install(l) and not line_version(lf, l) and not declared_unreadable(lf, l))
-                or (births and legacy_framework(line_init(lf, l))))
+                or (lf.module in birth_mods and legacy_framework(line_init(lf, l))))
 
     # THE THIRD CASE, which fell through BOTH clauses above and was therefore billed to the build
     # under test. MEASURED 2026-10-22 on the win10-upgrade cell of acceptance run 39767068509:
@@ -1548,7 +1550,8 @@ def build_scope(files, build):
     # thing it needs beyond version_is_prior() is its module - which comes from its file.
     _mod_by_file = {lf.name: lf.module for lf in files}
     def inst_prior(i):
-        return version_is_prior(_mod_by_file.get(i.get("file")), i.get("version"), builds, sup) or (births and bool(i.get("legacy")))
+        return (version_is_prior(_mod_by_file.get(i.get("file")), i.get("version"), builds, sup)
+                or (_mod_by_file.get(i.get("file")) in birth_mods and bool(i.get("legacy"))))
 
     # DID THE BUILD UNDER TEST DECLARE ITSELF IN THIS CAPTURE AT ALL? One answer, carried, because
     # the question had grown two independent list comprehensions - compute_metrics' and
