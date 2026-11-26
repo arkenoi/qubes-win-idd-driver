@@ -1132,8 +1132,13 @@ function Read-QwtQubesDbValue {
     param([Parameter(Mandatory)][string]$Path)
     $exe = Join-Path $PSScriptRoot 'tools\qubesdb-read.exe'
     if (-not (Test-Path -LiteralPath $exe)) { Fail "setup tree has no $exe - a release package always carries it; the installer reads qubesdb only through it" }
-    $out = & $exe $Path 2>$null
-    if ($LASTEXITCODE -ne 0) { return $null }   # 1 = key absent, >=2 = DLL/daemon not there yet
+    # LOCAL 'Continue': under this script's 'Stop', Windows PowerShell 5.1 turns a native command's stderr line
+    # into a TERMINATING error even with 2>$null - and qubesdb-read writes one on every not-ready exit (DLL
+    # missing, daemon down, key absent), so callers got a throw instead of $null (the stage-1 clock WARN).
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try { $out = & $exe $Path 2>$null; $rc = $LASTEXITCODE } finally { $ErrorActionPreference = $prevEap }
+    if ($rc -ne 0) { return $null }   # 1 = key absent, >=2 = DLL/daemon not there yet
     return (@($out) -join "`n")
 }
 
