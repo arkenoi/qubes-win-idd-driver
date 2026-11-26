@@ -2994,8 +2994,13 @@ function Test-ProxyServesWu {
 # an operator ever wants to opt a specific standalone in; we deliberately do not honour it here
 # (the requirement is template-ONLY).
 function Get-QubesDbValue([string]$path) {
+  # WHICH CALL OF INIT A STALLED PASS IS IN, ON THE RECORD (forum 42717 post 246: two passes saved phase 'init' and wrote no line).
+  # The compile below and the qdb_open after it are the only calls of init without a bound, and his logs cannot tell them apart,
+  # so each one is published as its own phase first - dom0's "update did not complete (last phase: ...)" then names it. This
+  # reader is called only by Get-QubesVmClass, and that only in init, which the caller restores after the read.
   try {
     if (-not ('QubesDb' -as [type])) {
+      $script:St.phase = 'init-compile'; Save
       Add-Type @'
 using System; using System.Runtime.InteropServices;
 public static class QubesDb {
@@ -3008,6 +3013,7 @@ public static class QubesDb {
 }
 '@
     }
+    if ($script:St.phase -ne 'init-qubesdb') { $script:St.phase = 'init-qubesdb'; Save }
     $h = [QubesDb]::qdb_open([IntPtr]::Zero)
     if ($h -eq [IntPtr]::Zero) { return $null }
     try {
@@ -3085,6 +3091,7 @@ function Get-WuAutoRestartCause($Au, $Wu, $Mdm) {
   return $c
 }
 $vmClassLive = Get-QubesVmClass
+$script:St.phase = 'init'; Save   # the reader's own sub-phases end with the read (Get-QubesDbValue)
 if (-not $vmClassLive) {
   # qubesdb is the authority and is reliably readable (qubesdb-client.dll is in SYSTEM32). If we
   # genuinely cannot classify, REFUSE to proxy rather than guess - never proxy a VM we cannot

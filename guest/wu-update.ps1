@@ -440,6 +440,8 @@ while ((Get-Date) -lt $deadline) {
 
     switch ($st.phase) {
         'init'         { Prog 1 }
+        'init-compile' { Prog 1 }
+        'init-qubesdb' { Prog 1 }
         'ensure-proxy' { Prog 1; Msg 'opening the Qubes updates proxy' }
         'scan'         { Prog 3; Msg 'scanning Windows Update' }
         'resolve'      { Prog 6 }
