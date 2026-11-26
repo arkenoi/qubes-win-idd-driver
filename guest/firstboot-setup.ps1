@@ -40,7 +40,9 @@ powercfg /change hibernate-timeout-ac 0
 # Pre-seed GUI agent settings BEFORE the MSI runs: its AppSearch skips seeding a value
 # that already exists, so ours win. Default install would be SeamlessMode=0 (fullscreen)
 # and DisableCursor=1.
-New-Item -Path 'HKLM:\Software\Invisible Things Lab\Qubes Tools' -Force | Out-Null
+# Guarded: New-Item -Force on an EXISTING key recreates it empty, and on a guest that already has QWT that
+# would wipe InstallDir and every module's config.
+if (-not (Test-Path -LiteralPath 'HKLM:\Software\Invisible Things Lab\Qubes Tools')) { New-Item -Path 'HKLM:\Software\Invisible Things Lab\Qubes Tools' -Force | Out-Null }
 Set-ItemProperty 'HKLM:\Software\Invisible Things Lab\Qubes Tools' SeamlessMode 1 -Type DWord
 Set-ItemProperty 'HKLM:\Software\Invisible Things Lab\Qubes Tools' DisableCursor 0 -Type DWord
 

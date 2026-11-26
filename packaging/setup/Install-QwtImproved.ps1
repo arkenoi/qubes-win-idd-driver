@@ -5560,7 +5560,10 @@ public static class QdbPrime {
             $lvl = if ($script:Result.detail.pv_boot_disk -eq $false) { 'INFO' } elseif ($script:Result.detail.pv_boot_disk -eq $true) { 'ERROR' } else { 'WARN' }
             Write-Log "PV disk unplug latch NOT armed: $diskWhy - the next boot runs on the EMULATED disk" $lvl
             $script:Result.detail.pvdisk_latch = "not-armed: $diskWhy"
-            New-Item -Path $qwtStateKey -Force -EA SilentlyContinue | Out-Null
+            # NEVER New-Item -Force on an existing key: it recreates the key EMPTY (values and subkeys gone). This is
+            # winutils' REG_CONFIG_KEY - InstallDir and every module's config - and the unguarded form left a clean
+            # install with no InstallDir, so advertise-tools found no gui-agent.exe and qrexec never registered.
+            if (-not (Test-Path -LiteralPath $qwtStateKey)) { New-Item -Path $qwtStateKey -Force -EA SilentlyContinue | Out-Null }
             Set-ItemProperty -LiteralPath $qwtStateKey -Name PvDiskEmulatedBootExpected -Value $diskWhy
         } else {
             reg add "HKLM\SYSTEM\CurrentControlSet\Services\XEN\Unplug" /v DISKS /t REG_DWORD /d 1 /f | Out-Null
