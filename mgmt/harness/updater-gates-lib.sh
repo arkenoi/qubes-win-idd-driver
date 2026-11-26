@@ -18,15 +18,13 @@
 # subject is a German image where an English-prose predicate matches nothing:
 #   U1 the deploy vouched its source, COMPILED the relay, vouched the placed exe
 #   U2 the placed exe carries the shipped binary's UTF-16 `parent=` marker
-#   U3 the relay listens on 8082 and declares parent=<pid>  (a pid-port is the failure shape)
-#   U4 the pass served it with a relay IT started (adopted nothing)
+#   U3 the template's permanent relay listens on 8082 (parent=permanent; a pid-port is the failure shape)
+#   U4 the pass served it through the permanent relay, identified by its record (adopted nothing)
 #   U5 a COUNT reached dom0 (scan line + NotifyUpdates exit 0)
 #   U6 no pass died on "not accepting connections on 127.0.0.1:8082"
 #   U7 the subject IS the reporter's recorded environment
 #
-# Everything here reads FILES, so the same code grades a live run and a captured evidence dir. That
-# is what lets tools/tests/updater-component-selftest.sh drive all seven gates offline against the
-# REAL pre-fix and post-fix captures of 2026-10-22.
+# Everything here reads FILES, so the same code grades a live run and a captured evidence dir.
 
 UG_PASS=0; UG_FAIL=0; UG_LINES=""
 
@@ -95,17 +93,17 @@ updater_gates_grade(){
   local u3=1 lastlisten pidports
   lastlisten=$(grep -aE ' listen 127\.0\.0\.1:[0-9]+ ' "$rlog" 2>/dev/null | tail -1)
   if printf '%s' "$lastlisten" | grep -qaE ' listen 127\.0\.0\.1:8082 ' \
-     && printf '%s' "$lastlisten" | grep -qaE ' parent=[0-9]+'; then u3=0; fi
+     && printf '%s' "$lastlisten" | grep -qaE ' parent=permanent '; then u3=0; fi
   pidports=$(grep -aoE ' listen 127\.0\.0\.1:[0-9]+' "$rlog" 2>/dev/null \
              | grep -avE ':8082$' | grep -aoE '[0-9]+$' | sort -u | tr '\n' ',' | sed 's/,$//')
-  ug_gate U3 "the relay listens on 8082 and declares parent=<pid>" "$u3" \
+  ug_gate U3 "the template's permanent relay listens on 8082 (parent=permanent)" "$u3" \
     "last listen: ${lastlisten:-none}${pidports:+ ; non-8082 ports seen this run: $pidports}"
 
-  # U4 - served by a relay THIS pass started; never adopted (ADR-updater 12.4)
+  # U4 - served by the template's permanent relay, identified by its record; never adopted (ADR-updater 12.4 point 3)
   local u4=1
-  ug_hasre "$alog" 'proxy up: 127\.0\.0\.1:8082 is served by relay pid [0-9]+, started by this pass' && u4=0
-  ug_gate U4 "the pass served 8082 with a relay it started itself (adopted nothing)" "$u4" \
-    "agent.log has no 'proxy up: ... started by this pass' line"
+  ug_hasre "$alog" "proxy up: 127\\.0\\.0\\.1:8082 is served by the template's permanent relay pid [0-9]+, identified by its record" && u4=0
+  ug_gate U4 "the pass served 8082 through the permanent relay identified by its record (adopted nothing)" "$u4" \
+    "agent.log has no 'proxy up: ... permanent relay ... identified by its record' line"
 
   # U5 - a COUNT reached dom0. This is the operator's bar for the word verified: an e2e pass.
   local u5=0 scanline repline

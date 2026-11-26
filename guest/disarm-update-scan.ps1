@@ -8,10 +8,10 @@
 #
 # The disarm itself is a P3 precondition: a boot+2min scan raises the proxy and churns qrexec, which
 # is a named wedge trigger under rendering load. Disabling the task does NOT stop a pass that is
-# already running, so a RUNNING pass is ended through its TASK - the owner of its relay, which exits
-# with it (--parent-pid). The relay itself is never stopped by name (owner 2026-10-07: that was any
-# process so named, a Run-task pass's included); what listens on 8082 afterwards is read by PORT
-# and reported, never touched.
+# already running, so a RUNNING pass is ended through its TASK. The relay is not the pass's: on a
+# template it is permanent (ADR-updater 12.4 point 3) and idle without demand, and it is never stopped
+# by name (owner 2026-10-07: that was any process so named); what listens on 8082 afterwards is read
+# by PORT and reported, never touched.
 $ErrorActionPreference = 'Continue'
 $t = Get-ScheduledTask -TaskName QubesWindowsUpdateScan -EA SilentlyContinue
 if (-not $t) { Write-Output 'SCAN_TASK ABSENT'; Write-Output 'DISARMED True'; exit 0 }

@@ -93,6 +93,7 @@ $vouch = @{
     '--parent-pid'          = 'the relay must PARSE --parent-pid, or the launcher''s flag value becomes its listen port'
     'i == 1 && int.TryParse' = 'a bare integer may be the port ONLY in the first positional slot; without that rule an unknown flag''s VALUE silently becomes the listen port (measured 2026-10-19: --parent-pid 3312 bound port 3312)'
     'parent='               = 'the listen line must declare parent=, which is the only receipt that the shipped binary is running'
+    '"--permanent"'         = 'the relay must PARSE --permanent, which the QubesUpdatesRelay task passes; without it the template relay refuses the flag and never listens'
 }
 $srcText = Get-Content -LiteralPath $src -Raw
 foreach ($k in $vouch.Keys) {
@@ -444,13 +445,22 @@ if (-not $haveUpdMutex) {
 # Every failure below throws. Without this the installer process (which runs us with `&`) would keep
 # the mutex until it exits - skipping every scan and stalling dom0-driven passes for that long.
 trap { if ($haveUpdMutex -and $updMutex) { try { $updMutex.ReleaseMutex() } catch { } }; break }
+# THE PERMANENT RELAY IS ENDED THROUGH ITS TASK (ADR-updater 12.4 point 6): on a template it runs from boot and holds the exe open,
+# so an upgrade ends it the way it was started - schtasks /end on QubesUpdatesRelay, never by name or by port - and the wait below
+# then sees the port free. The task is registered and started again after the new exe is in place (step 7b).
+$relayTask = Get-UpdTaskState 'QubesUpdatesRelay'
+if ($relayTask.state -eq 'Running') {
+    $prev = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+    try { $o = & schtasks /end /tn QubesUpdatesRelay 2>&1 } finally { $ErrorActionPreference = $prev }
+    Log ("the permanent relay's task QubesUpdatesRelay was running - ended through its task so this deploy can replace the exe (schtasks /end rc=$LASTEXITCODE : " + ($o -join ' ') + ")")
+} else { Log ("the permanent relay's task QubesUpdatesRelay is '" + $relayTask.state + "' - nothing to end") }
 # ---- WU-INSTALLER-RELAY-WAIT-BEGIN   (tools/tests/wu-installer-relay-test.ps1 extracts this region by these markers)
 # THE RELAY IS NOT KILLED (docs/ADR-updater.md 12.4, 2026-10-03). Until that day this read
 #     Get-Process -Name 'qubes-updates-relay' | Stop-Process -Force
 # - every process with that name, whoever started it. The reason it existed: on an UPGRADE the previous relay can be RUNNING and
 # holds the exe open, so the compiled exe cannot be moved into place (measured on the 4.3.6->4.3.7 upgrade e2e, 2026-08-25). Now:
-# this script holds the updater mutex (above), so no PASS is running, and a pass's relay exits by its own --parent-pid watchdog
-# within seconds of its pass's exit (ParentCheckMs, 5 s). So wait, bounded to four watchdog periods (40 x 500 ms), for
+# the permanent relay was ended through its task (above), and a relay a probe started for itself exits by its --parent-pid
+# watchdog within seconds of that probe's exit (ParentCheckMs, 5 s). So wait, bounded to four watchdog periods (40 x 500 ms), for
 # 127.0.0.1:8082's LISTEN owner to go away - found by the PORT, identified by its PID, never by a name. A listener still there
 # afterwards is not ours to stop: the compile is skipped, the previous exe is kept, and the pid is named. Without a previous exe
 # there is nothing to keep, and a deploy must not report a relay it cannot vouch for: it refuses (Jev 2026-10-03, throw 0.80).
@@ -486,9 +496,9 @@ if ($relayOwner -ne 0) {   # GUARD:relaynokill
         # matches the matcher. The pid comes from the PORT (Get-NetTCPConnection -LocalPort 8082) and
         # is acted on ONLY when its executable path is THIS deploy's own relay exe. Anything else
         # holding 8082 is not ours and still refuses, below, unchanged.
-        # AND IT CANNOT BE A LIVE PASS'S RELAY: this deploy holds the updater mutex, so no pass is
-        # running, and a pass's relay exits by its own --parent-pid watchdog within ~5 s. A listener
-        # still here after the 20 s wait, with the mutex held, is an orphan by construction.
+        # AND IT CANNOT BE THE PERMANENT RELAY OR A LIVE PASS'S: the permanent relay was ended through
+        # its task above, and this deploy holds the updater mutex, so no pass is running. A listener
+        # still here after the 20 s wait is an orphan by construction.
         # Jev on this fork: stop_the_identified_orphan 0.81, refusing_forever 0.21, rename_around 0.16.
         if ($ownerPath -and $exe -and ($ownerPath -ieq $exe)) {
             Log ("the listener on 127.0.0.1:8082 is OUR OWN relay exe (pid {0} at {1}) and no pass is running - ending that pid so this deploy can replace it" -f $relayOwner, $ownerPath)
@@ -506,7 +516,7 @@ if ($relayOwner -ne 0) {   # GUARD:relaynokill
             }
         }
         # ---- RELAY-ORPHAN-STOP-END
-        $reason = "QWTRELAYBUSY: pid $relayOwner ($who) is still listening on 127.0.0.1:8082 after 20 s while this deploy holds the updater mutex - it is not a running pass's relay (that exits with its pass) and it is NOT killed (nothing is killed by name, ADR-updater 12.4)"
+        $reason = "QWTRELAYBUSY: pid $relayOwner ($who) is still listening on 127.0.0.1:8082 after 20 s while this deploy holds the updater mutex and after the permanent relay's task was ended - it is NOT killed (nothing is killed by name, ADR-updater 12.4)"
     }
 }
 # THE REFUSAL IS A SEPARATE DECISION FROM THE WAIT, and it has to re-read the state. When the orphan
@@ -911,6 +921,37 @@ $fd = Join-Path $env:TEMP 'qubes-wu-dl.xml'
 $o = & schtasks /create /tn QubesWindowsUpdateDownload /xml "$fd" /f 2>&1
 Log ("REGISTER QubesWindowsUpdateDownload rc=$LASTEXITCODE : " + ($o -join ' '))
 if ($LASTEXITCODE -ne 0) { throw "schtasks register (download task) failed (rc=$LASTEXITCODE)" }
+
+# 7b. THE TEMPLATE'S PERMANENT RELAY (ADR-updater 12.4 point 3, §18): a boot task, SYSTEM, no time limit, one instance. It is
+#     registered on every class; the relay reads the class itself and exits on anything but a TemplateVM (12.4 point 4), so an
+#     AppVM or StandaloneVM booting this root starts nothing that listens. Started once here, so the new exe's first launch - the
+#     one Smart App Control checks - happens during the install and not in a user's first winget call.
+$relayXml = @"
+<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo><Description>QWT-NG: the template's updates relay on 127.0.0.1:8082 (exits on any class but TemplateVM)</Description></RegistrationInfo>
+  <Triggers><BootTrigger><Enabled>true</Enabled></BootTrigger></Triggers>
+  <Principals><Principal id="Author"><UserId>S-1-5-18</UserId><RunLevel>HighestAvailable</RunLevel></Principal></Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <AllowHardTerminate>true</AllowHardTerminate>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+  </Settings>
+  <Actions Context="Author"><Exec><Command>$exe</Command><Arguments>--listen 8082 --target @default --permanent</Arguments></Exec></Actions>
+</Task>
+"@
+$frl = Join-Path $env:TEMP 'qubes-wu-relay.xml'
+[IO.File]::WriteAllText($frl, $relayXml, [Text.Encoding]::Unicode)
+$o = & schtasks /create /tn QubesUpdatesRelay /xml "$frl" /f 2>&1
+Log ("REGISTER QubesUpdatesRelay rc=$LASTEXITCODE : " + ($o -join ' '))
+if ($LASTEXITCODE -ne 0) { throw "schtasks register (relay task) failed (rc=$LASTEXITCODE)" }
+$prev = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+try { $o = & schtasks /run /tn QubesUpdatesRelay 2>&1 } finally { $ErrorActionPreference = $prev }
+Log ("RUN QubesUpdatesRelay rc=$LASTEXITCODE : " + ($o -join ' '))
+if ($LASTEXITCODE -ne 0) { throw "schtasks /run QubesUpdatesRelay failed (rc=$LASTEXITCODE)" }
 # Relay/proxy/task mutations end here - hand the updater back its mutex (steps 8-9 touch neither).
 if ($haveUpdMutex) { try { $updMutex.ReleaseMutex() } catch { }; $haveUpdMutex = $false }
 

@@ -309,15 +309,27 @@ function Get-RelayPortOwner {
     foreach ($e in $ev) { if ("$($e.CategoryInfo.Category)" -ne 'ObjectNotFound') { return -1 } }
     return 0
 }
-# The anomaly line for a relay that outlived the bound: its pid, name and parent, all read BY PID. The parent tells whether it was the
-# dead pass's relay (then its own watchdog should have ended it) or something else's; either way it is not this handler's to stop.
+# The template's permanent relay, when $owner (the port's LISTEN owner) is it: the record relay.cs WritePermanentRecord writes,
+# checked by pid AND start time. Mirrors qubes-windows-update.ps1 Get-PermanentRelay, which this handler cannot load; keep the two
+# in step.
+function Get-PermanentRelay([int]$owner) {
+    if ($owner -le 0) { return $false }
+    $v = Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Qubes\UpdatesProxy' -EA SilentlyContinue
+    if (-not $v -or "$($v.Relay)" -notmatch '^(\d+)@(\d+)$' -or [int]$Matches[1] -ne $owner) { return $false }
+    $ticks = $Matches[2]
+    $p = Get-Process -Id $owner -EA SilentlyContinue
+    if (-not $p) { return $false }
+    try { return ("$($p.StartTime.ToUniversalTime().Ticks)" -eq $ticks) } catch { return $false }
+}
+# The anomaly line for a listener on 8082 that is not the recorded permanent relay: its pid, name and parent, all read BY PID. It
+# is not this handler's to stop.
 function Format-RelaySurvivor([int]$owner) {
     $parent = 'unknown'; $name = 'unknown'
     try {
         $wp = Get-CimInstance Win32_Process -Filter "ProcessId = $owner" -EA SilentlyContinue
         if ($wp) { $parent = "$($wp.ParentProcessId)"; $name = "$($wp.Name)" }
     } catch { }
-    return ('relay pid ' + $owner + ' (' + $name + ', parent pid ' + $parent + ') is STILL listening on 127.0.0.1:8082 after 20 s - NOT killed (nothing is killed by name, ADR-updater 12.4), the proxy is still up - ANOMALY: find out what started it')
+    return ('relay pid ' + $owner + ' (' + $name + ', parent pid ' + $parent + ') listens on 127.0.0.1:8082 and is NOT the recorded permanent relay - NOT killed (nothing is killed by name, ADR-updater 12.4) - ANOMALY: find out what started it')
 }
 function Remove-DeadPassLeftovers {
     # NEVER UNDER A LIVE PASS (WU-HOLDER): the proxy settings and the relay then belong to it. Measured 2026-10-02: this teardown
@@ -326,24 +338,19 @@ function Remove-DeadPassLeftovers {
         $Err.WriteLine('leftovers NOT touched: ' + (Format-HolderNow) + ' owns the updater right now, and the proxy and the relay are its own')
         return
     }
-    # The proxy CONFIGURATION stays (ADR-updater §18, owner 2026-11-18): on a template it is kept between passes, and the
-    # relay's process gate, not time, keeps other processes out. The one leftover that matters is the relay.
+    # The proxy CONFIGURATION stays (ADR-updater §18, owner 2026-11-18), and so does the RELAY: on a template it is permanent,
+    # started by its own task, and a dead pass leaves no relay of its own behind (ADR-updater 12.4 points 3 and 5).
     $done = @(); $failed = @()
     # THE RELAY IS NOT KILLED - not by name, not at all (ADR-updater 12.4). Until 2026-10-03 this killed every process named
-    # qubes-updates-relay, a LIVE scan's among them (measured 2026-10-02). The dead pass started its relay with --parent-pid, and the
-    # relay's own watchdog ends it within seconds of that pass's exit (ParentCheckMs, 5 s). The observable is 127.0.0.1:8082's LISTEN
-    # owner going away, found by the port and identified by its pid; the wait is bounded to four watchdog periods (40 x 500 ms), and a
-    # relay still there afterwards is reported with its pid and parent as an anomaly - it is not this handler's to stop.
-    $relayFirst = Get-RelayPortOwner
-    $relayOwner = $relayFirst
-    $waits = 0
-    while ($relayOwner -gt 0 -and $waits -lt 40) { Start-Sleep -Milliseconds 500; $waits++; $relayOwner = Get-RelayPortOwner }   # GUARD:relaywatchdogwait
-    if ($relayFirst -eq 0) { $done += 'no relay listening on 127.0.0.1:8082' }
-    elseif ($relayFirst -lt 0 -or $relayOwner -lt 0) { $failed += 'cannot read who listens on 127.0.0.1:8082 (Get-NetTCPConnection failed) - whether a relay is still serving is UNKNOWN' }
-    elseif ($relayOwner -eq 0) { $done += ('relay pid ' + $relayFirst + ' exited on its own (its parent watchdog) after ' + ($waits * 500) + ' ms - not killed') }
-    else { $failed += (Format-RelaySurvivor $relayOwner) }   # GUARD:relaynokill
+    # qubes-updates-relay, a LIVE scan's among them (measured 2026-10-02). The recorded permanent relay on 127.0.0.1:8082 is the
+    # designed state; a free port or any other listener is reported as an anomaly - neither is this handler's to change.
+    $relayOwner = Get-RelayPortOwner
+    if ($relayOwner -lt 0) { $failed += 'cannot read who listens on 127.0.0.1:8082 (Get-NetTCPConnection failed) - whether the relay serves is UNKNOWN' }
+    elseif ($relayOwner -eq 0) { $failed += 'nothing listens on 127.0.0.1:8082 - the template relay (task QubesUpdatesRelay) is not running; the next pass starts its task' }
+    elseif (Get-PermanentRelay $relayOwner) { $done += ('the permanent relay pid ' + $relayOwner + ' serves 127.0.0.1:8082 (its record) - left running') }
+    else { $failed += (Format-RelaySurvivor $relayOwner) }
     # never end in a bare number (see Msg): the summary closes with a word
-    if ($failed.Count) { $Err.WriteLine('leftovers: ' + (($done + $failed) -join '; ') + ' - CHECK the qube, a relay may still be serving') }
+    if ($failed.Count) { $Err.WriteLine('leftovers: ' + (($done + $failed) -join '; ') + ' - CHECK the qube') }
     else { $Err.WriteLine('leftovers: ' + ($done -join '; ') + ' - the proxy configuration stays (ADR-updater 18)') }
 }
 while ((Get-Date) -lt $deadline) {

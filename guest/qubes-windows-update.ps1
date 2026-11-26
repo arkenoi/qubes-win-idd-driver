@@ -26,6 +26,8 @@
 param(
   [ValidateSet('scan','resolve','download','install','full','wuinstall')][string]$Action = 'scan',
   [string]$Proxy      = 'http://127.0.0.1:8082',
+  # Accepted from the callers that still pass it (the scan task's action, the wu-* probes) and not used: the pass starts no relay,
+  # it serves through the template's permanent relay (ADR-updater 12.4 point 3).
   [string]$RelayExe   = 'C:\Program Files\Qubes Tools\bin\qubes-updates-relay.exe',
   [string]$WorkDir    = 'C:\ProgramData\Qubes\wu',
   [string]$StatusFile = 'C:\ProgramData\Qubes\update-status.json',
@@ -682,8 +684,8 @@ function Get-OfferRouteKey($u) {
 if ($script:St.recovered) { Log ("PREVPASS " + $script:St.recovered) }
 function SetV($p,$n,$v,$t){ if(-not(Test-Path $p)){New-Item -Path $p -Force|Out-Null}; New-ItemProperty -Path $p -Name $n -Value $v -PropertyType $t -Force|Out-Null }
 
-# The proxy CONFIGURATION stays on the template between passes (ADR-updater §18, owner 2026-11-18); the relay runs during a
-# pass. The 147 dom0 policy hits in one afternoon once measured with the WinHTTP proxy left set came from before the relay's
+# On a template the proxy CONFIGURATION and the RELAY are both permanent (ADR-updater §18, 12.4 point 3): the relay is started
+# at boot by its own task, QubesUpdatesRelay, and this pass only serves through it. The 147 dom0 policy hits in one afternoon once measured with the WinHTTP proxy left set came from before the relay's
 # process gate: a denied caller is now reset at accept, before it is counted as demand, so it never opens a qrexec channel.
 # The gate admits by identity (relay.cs PeerIsUpdate), not by name - measured 2026-11-18 (run26, t79/t80).
 # ---- WU-RELAY-BEGIN   (region markers)
@@ -729,16 +731,15 @@ function Test-RelayListening {
     Start-Sleep -Milliseconds 250
   }
 }
-# WHAT THE RELAY ITSELF SAID, for the two failure paths below. The relay writes the file Start-Relay
-# named for it ($script:RelayLogPath, passed as --log-file), including "parent watchdog armed: pid N"
-# and then "listen 127.0.0.1:<port> target=..." immediately before its listener.Start() - so its own
-# log says how far it got. Neither failure path read it, and the harness did not collect it, so the
+# WHAT THE RELAY ITSELF SAID, for the failure paths below. The permanent relay writes the file its record names
+# ($script:RelayLogPath, from RelayLog), including its class-gate lines and then "listen 127.0.0.1:<port> target=..."
+# immediately before its listener.Start() - so its own log says how far it got. Neither failure path read it, and the harness did not collect it, so the
 # one artefact that explains the failure was discarded every time. Jev: diagnosis_gap 0.81.
 function Get-RelayDiagnosis {
   $alive = 'liveness unreadable'
   try {
-    $p = $script:OwnRelay
-    if ($p) { $alive = $(if ($p.HasExited) { "exited on its own (code {0})" -f $p.ExitCode } else { 'still running' }) }
+    if ($script:RelayPid) { $alive = $(if (Get-Process -Id $script:RelayPid -EA SilentlyContinue) { 'still running' } else { 'gone' }) }
+    else { $alive = 'not identified' }
   } catch { }
   $tail = ''
   try {
@@ -747,7 +748,7 @@ function Get-RelayDiagnosis {
     else { $tail = "no relay log at $lp - the relay never got as far as writing one" }
   } catch { $tail = "relay log unreadable: $($_.Exception.Message)" }
   return ("relay pid {0} {1} after {2} connect attempt(s); its own log: {3}" -f `
-            $script:OwnRelayPid, $alive, $script:RelayListenAttempts, $tail)
+            $script:RelayPid, $alive, $script:RelayListenAttempts, $tail)
 }
 # Who LISTENS on 127.0.0.1:8082 right now: the owning pid, 0 when nobody does, -1 when the table cannot be read (UNKNOWN IS NOT
 # ZERO). The owner is found by the PORT and identified by its PID - never by a process name (docs/ADR-updater.md 12.4). When the
@@ -761,60 +762,29 @@ function Get-RelayPortOwner {
   foreach ($e in $ev) { if ("$($e.CategoryInfo.Category)" -ne 'ObjectNotFound') { return -1 } }
   return 0
 }
-# The refusal, with the owner NAMED. Passes are serialized by the updater mutex, so nothing else of ours can be serving 8082 while
-# this pass runs: another owner is an anomaly to investigate, never a relay to use. This pass hands its traffic to nothing it did
-# not start, and it does not kill what it did not start either.
+# The refusal, with the owner NAMED. The only process this pass serves through is the template's permanent relay, identified by
+# its record: any other owner of 8082 is an anomaly to investigate, never a relay to use, and it is not killed either.
 function Format-RelayRefusal([int]$owner) {
-  if ($owner -lt 0) { return 'REFUSED: cannot read who listens on 127.0.0.1:8082 (Get-NetTCPConnection failed), so the port cannot be shown free - this pass never adopts a relay it did not start and never serves through an unknown one (ADR-updater 12.4); nothing was started' }
-  if ($owner -eq 0) { return ("REFUSED: nothing listens on 127.0.0.1:8082 right after relay pid {0} accepted a connection - that relay is gone; nothing was adopted and nothing else is started" -f $script:OwnRelayPid) }
+  if ($owner -lt 0) { return 'REFUSED: cannot read who listens on 127.0.0.1:8082 (Get-NetTCPConnection failed), so its owner cannot be identified as the permanent relay - this pass never serves through an unknown listener (ADR-updater 12.4)' }
+  if ($owner -eq 0) { return ("REFUSED: nothing listens on 127.0.0.1:8082 right after relay pid {0} accepted a connection - that relay is gone" -f $script:RelayPid) }
   $who = ''
   try { $op = Get-Process -Id $owner -ErrorAction SilentlyContinue; if ($op) { $who = " ($($op.ProcessName), started $($op.StartTime.ToString('s')))" } } catch { }
-  return "REFUSED: 127.0.0.1:8082 is already served by pid $owner$who, which this pass did not start - the pass never adopts a relay (ADR-updater 12.4), and under the updater mutex another listener on its port is an ANOMALY: find out what pid $owner is before the next pass; it was NOT killed"
+  return "REFUSED: 127.0.0.1:8082 is served by pid $owner$who, which is not the template's recorded permanent relay (HKLM\SOFTWARE\Qubes\UpdatesProxy Relay) - the pass never adopts a listener (ADR-updater 12.4 point 3), and another listener on its port is an ANOMALY: find out what pid $owner is before the next pass; it was NOT killed"
 }
-# Start-Process joins -ArgumentList with bare spaces - Windows PowerShell 5.1 quotes nothing - and the log directory is
-# "<SystemDrive>\Qubes Logs" by default: unquoted, "Logs" reaches the relay as a stray argument and it refuses to start.
-# Quoted by the rules its argument parser applies, a trailing backslash doubled so it cannot escape the closing quote.
-function ConvertTo-RelayArg([string]$s) {
-  if ($s -and $s -notmatch '\s') { return $s }
-  return '"' + ($s -replace '(\\+)$', '$1$1') + '"'
-}
-function Start-Relay {
-  if (-not (Test-Path -LiteralPath $RelayExe)) { throw "relay not found at $RelayExe" }
-  $env:QUBES_UPDATES_MAXCONN='256'
-  # THE RELAY'S LOG IS NAMED HERE, once per pass, in the one log directory (docs/ADR-logging.md, Decision 2026-11-01), and
-  # this pass reads it back (Get-RelayGiveUps, Get-RelayDiagnosis): one variable on both sides, so the reader cannot look at
-  # another day's file than the one the relay writes - it writes this one for its whole life, and a respawn writes it too.
-  # --log is the directory the relay's handlers write their own per-day log into.
-  $relayLogDir = Get-QwtLogDir
-  if (-not $script:RelayLogPath) { $script:RelayLogPath = Join-Path $relayLogDir ('qubes-updates-relay-' + (Get-Date -Format 'yyyyMMdd') + '.log') }
-  # OWNED BY HANDLE (ADR-updater 12.4): -PassThru hands back the Process object of the one relay THIS pass started; that object,
-  # its pid and its start time are the only identity this pass ever stops (Stop-OwnRelay). --parent-pid: the relay exits on its
-  # own when THIS process is gone (measured 2026-09-17: a pass ended hard by the scheduler never reached the Remove-Proxy below,
-  # and the relay served for hours).
-  $p = Start-Process -FilePath $RelayExe -ArgumentList '--listen','8082','--target','@default','--log',(ConvertTo-RelayArg $relayLogDir),'--log-file',(ConvertTo-RelayArg $script:RelayLogPath),'--parent-pid',"$PID" -WindowStyle Hidden -PassThru   # GUARD:relayhandle
-  $script:OwnRelay = $p
-  $script:OwnRelayPid = 0
-  $script:OwnRelayStart = ''
-  if ($p) {
-    $script:OwnRelayPid = [int]$p.Id
-    try { $script:OwnRelayStart = $p.StartTime.ToString('s') } catch { }
-  }
-  Log ("relay started: pid {0}, start {1}, parent {2} - owned by handle; this pass stops this one and no other" -f $script:OwnRelayPid, $(if ($script:OwnRelayStart) { $script:OwnRelayStart } else { 'unreadable' }), $PID)
-  Start-Sleep -Seconds 2
-}
-# Stops exactly the relay THIS pass started, by the handle Start-Relay kept - never by name, never by port. A handle cannot be
-# fooled by pid reuse. Every outcome is logged; a stop that does not complete is an anomaly, not a retry.
-function Stop-OwnRelay {
-  $p = $script:OwnRelay
-  if (-not $p) { Log 'relay: this pass holds no relay handle - nothing of ours to stop (a relay this pass did not start is never touched)'; return }
-  $script:OwnRelay = $null
-  $id = $script:OwnRelayPid
-  try {
-    if ($p.HasExited) { Log ("relay pid {0} had already exited (exit code {1}) - nothing to stop" -f $id, $p.ExitCode); return }
-    $p.Kill()
-    if ($p.WaitForExit(10000)) { Log ("relay pid {0} stopped by this pass (exit code {1})" -f $id, $p.ExitCode) }
-    else { Log ("ANOMALY: relay pid {0} did not exit within 10 s of being killed by this pass" -f $id) }
-  } catch { Log ("ANOMALY: relay pid {0} NOT stopped: {1}" -f $id, $_.Exception.Message) }
+# The template's permanent relay, when it is the process listening on 127.0.0.1:8082: its record (relay.cs WritePermanentRecord,
+# Relay = "<pid>@<start time, UTC ticks>", RelayLog = its log) checked against the port's owner by pid AND start time, so a reused
+# pid is not it. Returns @{ Pid; Log } or $null; $script:RelayPortOwner is the owner read (Get-RelayPortOwner's values).
+function Get-PermanentRelay {
+  $script:RelayPortOwner = Get-RelayPortOwner
+  if ($script:RelayPortOwner -le 0) { return $null }
+  $v = Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Qubes\UpdatesProxy' -EA SilentlyContinue
+  if (-not $v -or "$($v.Relay)" -notmatch '^(\d+)@(\d+)$') { return $null }
+  if ([int]$Matches[1] -ne $script:RelayPortOwner) { return $null }
+  $ticks = $Matches[2]
+  $p = Get-Process -Id $script:RelayPortOwner -EA SilentlyContinue
+  if (-not $p) { return $null }
+  try { if ("$($p.StartTime.ToUniversalTime().Ticks)" -ne $ticks) { return $null } } catch { return $null }
+  return @{ Pid = $script:RelayPortOwner; Log = "$($v.RelayLog)" }
 }
 # The relay serves a powershell only when it is a registered update pass (ADR-updater §18 point 2; relay.cs IsRegisteredUpdater):
 # REG_MULTI_SZ UpdaterPids under HKLM\SOFTWARE\Qubes\UpdatesProxy, one "<pid>@<start time, UTC ticks>" per running pass.
@@ -835,8 +805,8 @@ function Update-UpdaterRegistration([switch]$Add, [switch]$Remove) {
 # The updates proxy CONFIGURATION alone - no relay, no registration. Ensure-Proxy writes it before starting the relay, and a
 # scheduled scan deferred by Test-ProxyPolicyMissedSignIn writes it so the next sign-in has it. The first four values are
 # install-updater-agent.ps1 step 9b's; ensure-autologon part 7 and QwtngNetSetup remove all six on every class but a template.
-# Defender's cloud hosts bypass it (ADR-updater section 18 point 6): between passes nothing listens on 8082, and Smart App
-# Control's lookup for a never-run binary waited ~8 s on that port before the binary could start (65-75 ms bypassed).
+# Defender's cloud hosts bypass it (ADR-updater section 18 point 6): with nothing listening on 8082, Smart App Control's lookup
+# for a never-run binary waited ~8 s on that port before the binary could start (65-75 ms bypassed); the relay refuses it anyway.
 function Set-ProxyConfiguration {
   $bypass = '<local>;wdcp.microsoft.com;wdcpalt.microsoft.com'
   & netsh winhttp set proxy '127.0.0.1:8082' $bypass | Out-Null
@@ -871,39 +841,42 @@ function Test-ProxyPolicyMissedSignIn {
 }
 
 function Ensure-Proxy {
-  # NEVER ADOPT (ADR-updater 12.4). Until 2026-10-03 this started a relay only if no process NAMED qubes-updates-relay existed and
-  # otherwise served through whatever answered on 8082 - measured that day: the boot scan adopted a relay another process had
-  # started, and its Remove-Proxy then killed it mid-transfer. Now the port's owner is read first, and a port that is not free is
-  # a refusal naming the owner, before any proxy setting is touched.
-  $owner = Get-RelayPortOwner
-  if ($owner -ne 0) { throw (Format-RelayRefusal $owner) }   # GUARD:relayrefuse
-  Set-ProxyConfiguration
-  Update-UpdaterRegistration -Add
-  Start-Relay
-  # Serviceability probe: a relay that exists but is not accepting would fail the pass 0x80072EFD. Stop and respawn ONLY the relay
-  # this pass started, by its handle; the port is re-read before the respawn, because a listener that appeared meanwhile is not
-  # ours either.
-  if (-not (Test-RelayListening)) {
-    # SAY WHY BEFORE KILLING IT: Stop-OwnRelay overwrites the only liveness evidence there is, because
-    # its own kill supplies the exit code. Read the relay's account first.
-    Log ("relay pid {0} is not accepting connections on 127.0.0.1:8082 within the readiness bound - {1}" -f $script:OwnRelayPid, (Get-RelayDiagnosis))
-    Log ("relay pid {0}: stopping THAT relay (by its handle) and starting another" -f $script:OwnRelayPid)
-    Stop-OwnRelay   # GUARD:relayrespawnown
-    Start-Sleep -Seconds 1
-    $owner = Get-RelayPortOwner
-    if ($owner -ne 0) { throw (Format-RelayRefusal $owner) }
-    Start-Relay
-    if (-not (Test-RelayListening)) {
-      $why = Get-RelayDiagnosis
-      Log ("relay pid {0} did not serve the port after a respawn either - {1}" -f $script:OwnRelayPid, $why)
-      throw ("relay pid {0} still not accepting connections on 127.0.0.1:8082 after respawn - {1}" -f $script:OwnRelayPid, $why)
+  # THE PASS SERVES THROUGH THE TEMPLATE'S PERMANENT RELAY AND NOTHING ELSE (ADR-updater 12.4 point 3): it starts no relay of its
+  # own and stops none. The relay is identified by its record, never by name - until 2026-10-03 the pass served through whatever
+  # answered on 8082 and adopted a relay another process had started. The port's owner is identified before any proxy setting is
+  # touched, and any other owner is a refusal naming it.
+  $r = Get-PermanentRelay
+  if (-not $r) {
+    if ($script:RelayPortOwner -ne 0) { throw (Format-RelayRefusal $script:RelayPortOwner) }
+    # Nothing listens. A RUNNING task is a relay still in its class gate (qubesdb) and gets the bound below; anything else is an
+    # ANOMALY - the relay died, or its task never ran - and the task is started once.
+    $ts = 'unreadable'
+    try { $ts = "$((Get-ScheduledTask -TaskName QubesUpdatesRelay -ErrorAction Stop).State)" }
+    catch { if ("$($_.CategoryInfo.Category)" -eq 'ObjectNotFound' -or "$($_.Exception.Message)" -match 'No MSFT_ScheduledTask') { $ts = 'absent' } }
+    if ($ts -eq 'absent') { throw 'REFUSED: the template relay task QubesUpdatesRelay is not registered (install-updater-agent.ps1 registers it) - nothing serves 127.0.0.1:8082' }
+    if ($ts -eq 'Running') { Log 'relay task QubesUpdatesRelay is running and 127.0.0.1:8082 is not served yet - waiting for the relay' }
+    else {
+      Log ("ANOMALY: nothing listens on 127.0.0.1:8082 and the template relay task QubesUpdatesRelay is '{0}' - starting the task" -f $ts) 'WARN'
+      # 2>&1 under 'Stop' makes schtasks' stderr terminating (install-updater-agent.ps1 Set-UpdTaskState); the exit code decides.
+      $prev = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+      try { $out = & schtasks /run /tn QubesUpdatesRelay 2>&1 } finally { $ErrorActionPreference = $prev }
+      if ($LASTEXITCODE -ne 0) { throw ("schtasks /run /tn QubesUpdatesRelay exited {0}: {1}" -f $LASTEXITCODE, (($out | Out-String).Trim())) }
+    }
+    $deadline = [DateTime]::UtcNow.AddSeconds(30)
+    while (-not ($r = Get-PermanentRelay) -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 500 }
+    if (-not $r) {
+      if ($script:RelayPortOwner -ne 0) { throw (Format-RelayRefusal $script:RelayPortOwner) }
+      # The file the relay names for today (relay.cs, the one log-directory rule), for the diagnosis.
+      $script:RelayLogPath = Join-Path (Get-QwtLogDir) ('qubes-updates-relay-' + (Get-Date -Format 'yyyyMMdd') + '.log')
+      throw ("the template relay did not serve 127.0.0.1:8082 within 30 s of its task - {0}" -f (Get-RelayDiagnosis))
     }
   }
-  # THE LISTENER MUST BE OURS. Accepting a connection proves that something serves the port, not that it is the relay this pass
-  # started: a listener that won the port between the check above and our start would be adopted by the connect test alone.
-  $owner = Get-RelayPortOwner
-  if ($owner -ne $script:OwnRelayPid) { Stop-OwnRelay; throw (Format-RelayRefusal $owner) }   # GUARD:relayidentity
-  Log ("proxy up: 127.0.0.1:8082 is served by relay pid {0}, started by this pass" -f $script:OwnRelayPid)
+  $script:RelayPid = $r.Pid
+  $script:RelayLogPath = $r.Log
+  Set-ProxyConfiguration
+  Update-UpdaterRegistration -Add
+  if (-not (Test-RelayListening)) { throw ("the template relay pid {0} does not accept connections on 127.0.0.1:8082 - {1}" -f $script:RelayPid, (Get-RelayDiagnosis)) }
+  Log ("proxy up: 127.0.0.1:8082 is served by the template's permanent relay pid {0}, identified by its record; this pass did not start it and does not stop it" -f $script:RelayPid)
 }
 # ---- WU-RELAY-END
 
@@ -987,12 +960,7 @@ function Sync-Revocation {
   Log "Sync-Revocation: $got/3 CTLs refreshed through the relay, chain cache flushed"
 }
 
-# TEMPORAL GATE - still required, and not superseded by the relay's positional one.
-# The relay now refuses any caller that is not the update process, which closes the leak this
-# comment block describes. That check lives in our code and depends on our own process-identity
-# logic being right; this teardown does not. Keeping both means a mistake in either one is
-# bounded by the other: a wrong allowlist is still limited to the minutes a pass runs, and a
-# pass left open still serves nobody but the update. Do not remove this because the other exists.
+# NO TEMPORAL GATE (ADR-updater §18: the process gate is the only gate). The pass's end unregisters the pass and nothing else.
 # ---- WU-RELAY-TEARDOWN-BEGIN   (region markers)
 function Remove-Proxy {
   # THE CONFIGURATION STAYS (ADR-updater §18, owner 2026-11-18). Windows Update takes its proxy from the per-machine policy
@@ -1000,13 +968,11 @@ function Remove-Proxy {
   # resetting ProxyEnable/ProxyServer while the policy stayed left every template pointing at NO proxy at the next sign-in.
   # Other processes are kept out by the relay's process gate, not by time; a qube made from this root clears it at boot
   # (ensure-autologon.ps1 part 7).
-  # ONLY THE RELAY THIS PASS STARTED, by its handle (ADR-updater 12.4). Until 2026-10-03 this line killed every process NAMED
-  # qubes-updates-relay - measured that day: a relay another process had started, TerminateProcess'ed mid-transfer with no log
-  # line and no crash record. A relay this pass did not start is not its to stop; that relay's own --parent-pid watchdog ends it
-  # when ITS pass is gone.
-  Stop-OwnRelay   # GUARD:relayownstop
+  # THE RELAY STAYS TOO: it is the template's permanent relay (ADR-updater 12.4 point 3), and no pass stops it. Until 2026-10-03
+  # this line killed every process NAMED qubes-updates-relay - a relay another process had started, TerminateProcess'ed
+  # mid-transfer with no log line and no crash record.
   Update-UpdaterRegistration -Remove
-  Log 'relay stopped; the proxy configuration stays (ADR-updater 18)'
+  Log 'pass unregistered from the relay; the permanent relay and the proxy configuration stay (ADR-updater 12.4 point 3, 18)'
 }
 # ---- WU-RELAY-TEARDOWN-END
 
@@ -1318,7 +1284,7 @@ function Install-ViaWU {
   # offers WU-NOKB has to hand over here (ADR-updater section 2, the point-3 mechanism).
   param([string[]]$OnlyKbs = @(), [bool]$TunePolicies = $true, [string[]]$OnlyUids = @())
   # Delivery Optimization: no peering (99 = simple), and no background throttling. A qube's only
-  # path out is the updates proxy, which is up ONLY during this pass, so there is nothing to be
+  # path out is the updates proxy, which serves update processes and winget only, so there is nothing to be
   # polite to - the usual reason WU downloads slowly in the background does not apply here.
   #
   # These are MACHINE-WIDE POLICY writes and they persist. That was an acceptable price when
@@ -3260,7 +3226,7 @@ try {
   # So: watch the relay's own log across the scan. If it gave up on any fetch (complete=False)
   # AND the scan found nothing, the result is UNKNOWN, not zero - retry once, then refuse to
   # report a number nobody can stand behind.
-  # The relay writes the file Start-Relay named for it ($script:RelayLogPath, passed as --log-file), and
+  # The relay writes the file its record names ($script:RelayLogPath, from RelayLog; Ensure-Proxy), and
   # this reads that same variable. The path was once hardcoded to the default WorkDir while the relay
   # wrote under the WorkDir it was started with, so any run with a non-default -WorkDir read a file
   # that never grew, counted zero give-ups, and disarmed the guard silently.

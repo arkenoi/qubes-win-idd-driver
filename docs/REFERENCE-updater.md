@@ -875,10 +875,10 @@ HRESULT), so each is reported CONFIRMED, EXCLUDED, or POSSIBLE — and POSSIBLE 
 guessed. A path the product takes always leaves its own line, so the ABSENCE of every other path's
 line is itself evidence; that is what identifies dead code as dead rather than as a failure.
 
-**Verified, not asserted.** `tools/tests/updater-component-selftest.sh` (33 assertions, offline, in
-the estate) drives all seven gates against the REAL captures of 2026-10-22: the post-fix pair must
-PASS, the **pre-fix pair must FAIL**, each gate must fail ALONE when only its own evidence is
-removed, and missing evidence must read INSTRUMENT rather than pass.
+**Verified, not asserted.** The gates were driven offline against the REAL captures of 2026-10-22 (the
+post-fix pair passed, the pre-fix pair failed, each gate failed alone without its own evidence). That
+selftest was deleted 2026-11-26: those captures are of the pass-owned relay, and U3/U4 now require the
+template's permanent relay (ADR-updater 12.4 point 3), so the gates are graded on live runs only.
 `tools/compare-acceptance-gates.sh` extracts the functional comparison of the two gates from the
 scripts themselves, so it cannot drift from them.
 

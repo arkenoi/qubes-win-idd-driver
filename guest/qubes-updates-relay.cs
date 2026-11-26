@@ -93,8 +93,9 @@ static class Relay
     // DEMAND LATCH + CHURN COUNTERS (2026-08-20). Per-channel churn is the suspected trigger of the
     // grant-revoke spin that intermittently wedges the guest, so the filler now warms the pool only
     // while there is DEMAND: an allowed, non-abandoned inbound within PoolIdleSeconds(). The latch
-    // starts at "now" - this relay is only started for an update pass, so startup counts as demand and
-    // the first-request prewarm (the filler start in RunListen) survives. NoteDemand() is called in
+    // starts at "now" for a relay a caller starts for its own use (--parent-pid), so its first request finds
+    // the pool warm. The template's permanent relay (--permanent) starts it at 0: it starts at boot, and
+    // startup is not demand there, or every template boot would warm the pool for nobody. NoteDemand() is called in
     // exactly two places, both strictly AFTER read-first and the allowlist, so abandoned sockets and
     // denied telemetry can never keep the pool warm.
     static long _lastDemandTicks = DateTime.UtcNow.Ticks;
@@ -171,8 +172,9 @@ static class Relay
             // NOTE, deliberately: go.microsoft.com is a general REDIRECTOR, so this is the widest
             // entry in the list - it can point the caller at many Microsoft properties, not one file
             // server. Added on the owner's explicit instruction (2026-08-21). The exposure stays
-            // bounded by the positional peer allowlist (only the update process may use the proxy
-            // at all, by identity - ADR-updater §18) and by the relay running only while a pass does.
+            // bounded by the peer allowlist alone (only an update process may use the proxy at all, by
+            // identity - ADR-updater §18 point 2: the process gate is the only gate; the relay is permanent
+            // on a template, so there is no time bound).
             "go.microsoft.com",             // ONLY to resolve the Defender fwlink redirect
         };
     }
@@ -214,8 +216,12 @@ static class Relay
     {
         int mc;
         if (int.TryParse(Environment.GetEnvironmentVariable("QUBES_UPDATES_MAXCONN"), out mc) && mc > 0) return mc;
-        return 32;
+        // The permanent relay is started by its task, with no environment of the pass's: 256 is what the pass set
+        // (QUBES_UPDATES_MAXCONN) for its own relay before the relay became permanent.
+        return _permanent ? 256 : 32;
     }
+    // --permanent: the template's relay, started by its boot task QubesUpdatesRelay (ADR-updater 12.4 point 3).
+    static bool _permanent;
 
     static int Main(string[] args)
     {
@@ -233,7 +239,7 @@ static class Relay
                 return RunListen(args);
             if (args.Length >= 1 && args[0] == "--selftest")
                 return SelfTest();
-            Console.Error.WriteLine("usage: qubes-updates-relay --listen [port] [--target VM] [--user U] [--log DIR] [--log-file PATH] [--parent-pid PID]");
+            Console.Error.WriteLine("usage: qubes-updates-relay --listen [port] [--target VM] [--user U] [--log DIR] [--log-file PATH] [--parent-pid PID | --permanent]");
             Console.Error.WriteLine("       qubes-updates-relay --selftest                      (response-framing contract)");
             Console.Error.WriteLine("       qubes-updates-relay --relay <controlPort> <token>   (internal; spawned via qrexec)");
             return 2;
@@ -414,10 +420,9 @@ static class Relay
     // qubes.UpdatesProxy policy hits in one afternoon, still dripping hours after the last scan.
     //
     // THE PROCESS GATE IS THE GATE (ADR-updater §18, owner 2026-11-18: «we want to keep the process gate ... so no time
-    // window», «and that it is not accessible by non-update process (test it)»). The proxy CONFIGURATION now stays on the
-    // template between passes; this RELAY still runs only while a pass does (the parent watchdog below), so the time
-    // bound the owner kept on 2026-08-15 survives for the relay process alone. A relay that serves between passes (manual
-    // updates, §18 point 3) removes that last bound, which is why the gate decides by IDENTITY - LocalSystem token, image
+    // window», «and that it is not accessible by non-update process (test it)»). On a template both the proxy CONFIGURATION
+    // and this RELAY are permanent (--permanent, started by its boot task; ADR-updater 12.4 point 3), so no time bound is
+    // left at all, which is why the gate decides by IDENTITY - LocalSystem token, image
     // under the Windows/Defender folders, the pass registered by pid and start time - and not by name: measured on
     // win11de26-t79 (as shipped: a renamed curl and the signed-in user's powershell were served) and t80 (this code:
     // both refused, the registered pass and a System32 image served).
@@ -687,7 +692,7 @@ static class Relay
                 why += " - image " + (path ?? "(unreadable)") + " is outside the Windows and Defender folders";
                 return false;
             }
-            // powershell: only the update pass itself, which registers its pid and start time before it starts
+            // powershell: only the update pass itself, which registers its pid and start time before it uses
             // the relay. Any other LocalSystem powershell is not part of the update.
             if (IsRegisteredUpdater(pid, p.StartTime)) return true;
             why += " - not a registered update pass";
@@ -847,7 +852,7 @@ static class Relay
         return true;
     }
 
-    // The update pass registers itself here before it starts the relay: REG_MULTI_SZ UpdaterPids under
+    // The update pass registers itself here before it uses the relay: REG_MULTI_SZ UpdaterPids under
     // HKLM\SOFTWARE\Qubes\UpdatesProxy, one "<pid>@<start time, UTC ticks>" per running pass. Only an administrator can
     // write the key; the start time defeats pid reuse after a pass that died without removing its entry.
     static bool IsRegisteredUpdater(int pid, DateTime start)
@@ -856,6 +861,85 @@ static class Relay
         foreach (string e in PolicyList("UpdaterPids"))
             if (string.Equals((e ?? "").Trim(), want, StringComparison.Ordinal)) return true;
         return false;
+    }
+
+    // QUBESDB, read as the update pass reads it (qubes-windows-update.ps1 Get-QubesDbValue / Get-QubesVmClass): the client
+    // DLL in System32, Cdecl, Ansi, a NULL vmname as IntPtr.Zero. The value is heap memory qubesdb-client owns; it is not
+    // freed (no qdb_free is called), a few bytes per read, and this relay reads only until it knows its class.
+    [DllImport("qubesdb-client.dll", CallingConvention = CallingConvention.Cdecl)]
+    static extern IntPtr qdb_open(IntPtr vmname);
+    [DllImport("qubesdb-client.dll", CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Ansi)]
+    static extern IntPtr qdb_read(IntPtr h, string path, out uint valueLen);
+    [DllImport("qubesdb-client.dll", CallingConvention = CallingConvention.Cdecl)]
+    static extern void qdb_close(IntPtr h);
+
+    // One key, or null when qubesdb does not answer or the key is absent.
+    static string QdbValue(string path)
+    {
+        IntPtr h = IntPtr.Zero;
+        try
+        {
+            h = qdb_open(IntPtr.Zero);
+            if (h == IntPtr.Zero) return null;
+            uint len;
+            IntPtr p = qdb_read(h, path, out len);
+            if (p == IntPtr.Zero) return null;
+            return Marshal.PtrToStringAnsi(p, (int)len);
+        }
+        catch (Exception) { return null; }
+        finally { if (h != IntPtr.Zero) qdb_close(h); }
+    }
+
+    // The qube's class, or null while qubesdb cannot answer. /type is the exact class name and the only key that separates a
+    // StandaloneVM from an AppVM; /qubes-vm-type collapses both to AppVM, and /qubes-vm-updateable then splits them.
+    static string ReadQubesVmClass()
+    {
+        string t = QdbValue("/type");
+        if (!string.IsNullOrEmpty(t)) return t;
+        string vt = QdbValue("/qubes-vm-type");
+        if (string.IsNullOrEmpty(vt)) return null;
+        if (vt == "TemplateVM") return "TemplateVM";
+        return QdbValue("/qubes-vm-updateable") == "True" ? "StandaloneVM" : "AppVM";
+    }
+
+    // THE ONE LOG DIRECTORY (docs/ADR-logging.md): the registry LogDir, else "<SystemDrive>\Qubes Logs" - the rule of
+    // log.ps1 Get-QwtLogDir and notifhost's qtb_shared.h QwtLogDir, which this C# cannot call.
+    static string QwtLogDir()
+    {
+        try
+        {
+            using (Microsoft.Win32.RegistryKey k = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(
+                       @"Software\Invisible Things Lab\Qubes Tools"))
+            {
+                string d = k == null ? null : k.GetValue("LogDir") as string;
+                if (!string.IsNullOrEmpty(d)) return d;
+            }
+        }
+        catch (Exception) { }
+        return Path.Combine((Environment.GetEnvironmentVariable("SystemDrive") ?? "C:") + "\\", "Qubes Logs");
+    }
+
+    // The permanent relay's record under HKLM\SOFTWARE\Qubes\UpdatesProxy, written once it listens: Relay = "<pid>@<start
+    // time, UTC ticks>" (the shape of UpdaterPids) and RelayLog = its log file. Only an administrator can write the key.
+    static bool WritePermanentRecord(string logFile)
+    {
+        try
+        {
+            Process me = Process.GetCurrentProcess();
+            string rec = me.Id + "@" + me.StartTime.ToUniversalTime().Ticks;
+            using (Microsoft.Win32.RegistryKey k = Microsoft.Win32.Registry.LocalMachine.CreateSubKey(@"SOFTWARE\Qubes\UpdatesProxy"))
+            {
+                k.SetValue("Relay", rec, Microsoft.Win32.RegistryValueKind.String);
+                k.SetValue("RelayLog", logFile ?? "", Microsoft.Win32.RegistryValueKind.String);
+            }
+            Log("permanent relay recorded: Relay=" + rec + " RelayLog=" + logFile);
+            return true;
+        }
+        catch (Exception e)
+        {
+            Log('E', "permanent relay NOT recorded (" + e.Message + ") - no pass could identify it, so it does not serve; exiting");
+            return false;
+        }
     }
 
     // SCM directly, not WMI and not System.ServiceProcess: this file is compiled on the guest by
@@ -1001,16 +1085,13 @@ static class Relay
         return _svcMap.HostedBy(pid, DateTime.UtcNow);
     }
 
-    // ---- parent watchdog: the relay must not outlive the pass that started it -------------------
-    // Measured 2026-09-17 on the German 25H2 template: the Task Scheduler ended the updater's
-    // PowerShell instance hard 90 s into a pass (LastTaskResult 0x41306), so its
-    // `finally { Remove-Proxy }` never ran and this relay kept serving 127.0.0.1:8082 for hours -
-    // the relay's time bound (it runs only while a pass does; ADR-updater §18 keeps the proxy
-    // CONFIGURATION, not the relay) was then held by nothing. The updater passes its own $PID as
-    // --parent-pid; when that process is gone the relay EXITS. No draining, no grace: the proxy
-    // must go DOWN. A pid can be recycled inside the check interval, so the parent's start time
-    // is captured at arming and a different start time under the same pid counts as gone.
-    // Without the argument nothing changes.
+    // ---- parent watchdog: a relay a caller started for its own use does not outlive that caller ----
+    // The template's permanent relay (--permanent) has no parent and never arms this. A caller that starts a relay for
+    // itself (a probe, --parent-pid <its pid>) gets one that EXITS when that process is gone - no draining, no grace. This
+    // was the update pass's relay until the relay became permanent (ADR-updater 12.4 point 3); measured 2026-09-17, a
+    // pass the Task Scheduler ended hard left its relay serving for hours. A pid can be recycled inside the check
+    // interval, so the parent's start time is captured at arming and a different start time under the same pid counts as
+    // gone. Without the argument nothing changes.
     const int ParentCheckMs = 5000;
     internal sealed class ParentWatch
     {
@@ -1101,6 +1182,7 @@ static class Relay
             else if (args[i] == "--log" && i + 1 < args.Length) logDir = args[++i];
             else if (args[i] == "--log-file" && i + 1 < args.Length) logFile = args[++i];
             else if (args[i] == "--parent-pid" && i + 1 < args.Length) { if (!int.TryParse(args[++i], out parentPid)) parentPid = 0; }
+            else if (args[i] == "--permanent") _permanent = true;
             // A BARE INTEGER IS THE PORT ONLY IN THE FIRST POSITIONAL SLOT, AND ANYTHING ELSE IS A
             // REFUSAL. The old catch-all was `if (int.TryParse(args[i], out p)) port = p;` for ANY
             // unmatched token, which turned every unknown flag into a silent port change: the flag
@@ -1124,7 +1206,15 @@ static class Relay
                 return 2;
             }
         }
+        if (_permanent && parentPid > 0)
+        {
+            Console.Error.WriteLine("qubes-updates-relay: --permanent and --parent-pid together - the permanent relay belongs to no process (ADR-updater 12.4 point 3); refusing");
+            return 2;
+        }
         string self = Process.GetCurrentProcess().MainModule.FileName;
+        // The permanent relay names its own file, by the one log-directory rule, and records that path for the pass to read.
+        if (_permanent && string.IsNullOrEmpty(logFile))
+            logFile = Path.Combine(QwtLogDir(), "qubes-updates-relay-" + DateTime.Now.ToString("yyyyMMdd") + ".log");
         // The library opens this relay's log: --log-file as the updater named it, else qubes-updates-relay-<yyyyMMdd>.log in
         // --log, else in the library's own directory (the registry LogDir).
         if (!string.IsNullOrEmpty(logFile)) QwtLog.LogStart(logFile);
@@ -1132,11 +1222,33 @@ static class Relay
         else QwtLog.LogInitDefault("qubes-updates-relay");
         // The handlers write into --log, else into the directory of --log-file, else (neither given) into the library's own.
         _handlerLogDir = !string.IsNullOrEmpty(logDir) ? logDir : (!string.IsNullOrEmpty(logFile) ? Path.GetDirectoryName(logFile) : null);
+        // THE CLASS GATE (ADR-updater 12.4 point 4, §18 point 7; owner 2026-11-26: «preventing relay from starting anywhere
+        // but templateVM is mandatory»). Every start path passes here - the boot task, a caller's --parent-pid, a hand start -
+        // so no starter's own check is relied on. A class qubesdb cannot answer yet (the daemon syncs from dom0 at boot) is
+        // waited out without listening; any class but TemplateVM exits before a socket exists.
+        string vmClass = ReadQubesVmClass();
+        if (vmClass == null)
+        {
+            Stopwatch waited = Stopwatch.StartNew();
+            Log("qubesdb does not answer yet - not listening until it names this qube's class (the relay runs only on a TemplateVM)");
+            while ((vmClass = ReadQubesVmClass()) == null) Thread.Sleep(2000);
+            Log("qubesdb answered after " + waited.ElapsedMilliseconds + " ms: class " + vmClass);
+        }
+        if (vmClass != "TemplateVM")
+        {
+            Log("class " + vmClass + " is not a TemplateVM - the relay runs only on a template (ADR-updater 12.4 point 4); exiting without listening");
+            return 0;
+        }
+        if (_permanent) Interlocked.Exchange(ref _lastDemandTicks, 0);
         Log("listen 127.0.0.1:" + port + " target=" + target + " user=" + user + " self=" + self
-                     + (parentPid > 0 ? " parent=" + parentPid : " parent=none (no watchdog)"));
+                     + (_permanent ? " parent=permanent (the template's relay, started by its task)"
+                                   : parentPid > 0 ? " parent=" + parentPid : " parent=none (no watchdog)"));
 
         TcpListener listener = new TcpListener(IPAddress.Loopback, port);
         listener.Start();
+        // The pass identifies the permanent relay by this record and nothing else: pid and start time read back from the port's
+        // owner (ADR-updater 12.4 point 3). A relay the pass cannot identify is refused, so a record that cannot be written ends it.
+        if (_permanent && !WritePermanentRecord(logFile)) return 5;
         if (parentPid > 0)
             StartParentWatchdog(parentPid, ParentCheckMs, delegate { Environment.Exit(3); });
 

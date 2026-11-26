@@ -158,7 +158,7 @@ agent_restart_run(){  # [preamble] [epilogue]
 
 # ---- control processes the harness itself starts (notepad, chromerepro). The identity is the
 # pid AND the start time, read from the handle Start-Process -PassThru returned - the same shape
-# the shipped updater uses for its relay (guest/qubes-windows-update.ps1 Start-Relay/Stop-OwnRelay).
+# guest/relay-own.ps1 uses for a relay it starts (pid + start time, the identity ADR-updater 12.4 point 1 names).
 ctl_start(){  # <exe> [args...] -> "CTL <pid> <start>" ; rc 1 when nothing of ours stayed alive
   local exe="$1"; shift
   local args="" a

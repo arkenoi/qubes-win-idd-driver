@@ -72,7 +72,6 @@ sweep-gate-selftest.sh
 sweep-life-selftest.sh
 sweep-noagent-selftest.sh
 toasthold-grade-clock-selftest.sh
-updater-component-selftest.sh
 verdict-jev-selftest.sh
 verdict-lib-selftest.sh
 wait-bound-selftest.sh

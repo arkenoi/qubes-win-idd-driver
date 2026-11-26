@@ -38,14 +38,14 @@
 #
 # Exit 0 PASS, 1 FAIL (the product), 2 INSTRUMENT (no verdict was produced - never a pass).
 #
-# EVAL_ONLY=<dir> grades a captured evidence dir and TOUCHES NO RIG AND NO NETWORK, which is how
-# tools/tests/updater-component-selftest.sh drives all seven gates against the REAL pre-fix and
-# post-fix captures of 2026-10-22 - the pre-fix pair must FAIL and each gate must fail alone.
+# EVAL_ONLY=<dir> grades a captured evidence dir and TOUCHES NO RIG AND NO NETWORK. (Its offline
+# selftest, which graded the 2026-10-22 captures of the pass-owned relay, was deleted 2026-11-26 when
+# the relay became permanent - ADR-updater 12.4 point 3; those captures carry no permanent relay.)
 set -uo pipefail
 # THE ROOT COMES FROM THIS SCRIPT'S OWN LOCATION, not from a hardcoded path. The rig harnesses
 # around it all `cd /home/user/qubes-win-idd-driver` because they only ever run on this qube - but
-# this one is ALSO driven offline by tools/tests/updater-component-selftest.sh, which runs in CI
-# where the repo is checked out somewhere else entirely. Measured 2026-10-22 at 9295417d: the cd
+# this one can ALSO be driven offline (EVAL_ONLY), e.g. in CI, where the repo is checked out
+# somewhere else entirely. Measured 2026-10-22 at 9295417d: the cd
 # failed, the script exited 2 before reading a single gate, and the suite reported 7 passed / 5
 # failed in CI while passing 45/0 here - the legs expecting INSTRUMENT were satisfied by the exit
 # and the ones expecting a verdict were not. A test that only passes on one machine is not a test.
