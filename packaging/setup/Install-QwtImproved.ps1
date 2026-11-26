@@ -1669,7 +1669,7 @@ function Register-QwtDeathReporter {
         $ourServices = @('QubesDB daemon', 'Qubes RPC agent', 'Qubes GUI agent watchdog', 'Qubes PV NIC address applier')
         $ourTasks = @('\Qubes-WgcBroker', '\Qubes-NotifBridge', '\QubesPvNic', '\QubesPvNicRearm', '\QubesNetworkReapply',
                       '\QubesQuietDesktopGuard', '\QubesAutologonGuard', '\QubesWindowsUpdateScan', '\QubesWindowsUpdateRun',
-                      '\QubesWindowsUpdateDownload', '\QwtImprovedSetup')   # GUARD:selftrigger
+                      '\QubesWindowsUpdateDownload', '\QwtImprovedSetup', '\QubesUpdatesRelay')
         # Neither the reporter NOR its catch-up is in that list: a reporter that fails must not trigger itself, and the
         # catch-up's own 201/203 would do exactly that through the other task (2026-10-07).
         # TASK SCHEDULER REJECTS A SELECT WHOSE OR-LIST IS TOO LONG: "ERROR: The specified query is invalid." Measured 2026-10-04 on

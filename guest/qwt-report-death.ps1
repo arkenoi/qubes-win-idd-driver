@@ -248,7 +248,7 @@ $script:QwtDeathHelperTasks = @{ '\Qubes-WgcBroker' = 'wgcbroker.exe'; '\Qubes-N
 # tasks whose action is a script of ours (a non-zero 201 or a 203 is a death of its own)
 $script:QwtDeathScriptTasks = @('\QubesPvNic', '\QubesPvNicRearm', '\QubesNetworkReapply', '\QubesQuietDesktopGuard',
                                 '\QubesAutologonGuard', '\QubesWindowsUpdateScan', '\QubesWindowsUpdateRun',
-                                '\QubesWindowsUpdateDownload', '\QwtImprovedSetup')
+                                '\QubesWindowsUpdateDownload', '\QwtImprovedSetup', '\QubesUpdatesRelay')
 # each script task's MACHINE ID (the route component, in the same style as the executables'), its HUMAN NAME, and what its
 # failure means (line 1) - from the tasks' own registrations (their <Description>), cut to the consequence (owner
 # 2026-10-10). What the lines used to carry: QubesPvNic's log is <LogDir>\pvnic-boot.ps1-<yyyyMMdd>.log and names the step, and a
@@ -266,6 +266,7 @@ $script:QwtDeathTaskNames = @{
     '\QubesWindowsUpdateRun'      = @{ id = 'update-run';      human = 'Windows Update install task';   impact = 'The dom0 update run fails.'; action = 'full' }
     '\QubesWindowsUpdateDownload' = @{ id = 'update-download'; human = 'Windows Update download task';  impact = 'The dom0 update run fails.'; action = 'download' }
     '\QwtImprovedSetup'           = @{ id = 'qwt-setup';       human = 'Qubes Tools setup task';        impact = 'The install may be unfinished.' }
+    '\QubesUpdatesRelay'          = @{ id = 'updates-relay';   human = 'template updates relay';        impact = 'winget and Windows Update on this template have no proxy until the next update pass starts the relay.' }
 }
 # THE UPDATE PASS'S OWN REASON (findings/issues.md WUSCANTASKFAILSANDLOGSNOTHING; GWeck's post 175, docs/GWECK-STATUS.md 28(f)).
 # An update pass that ends on an error it caught exits 1 - Task Scheduler's 0x80070001, which names no cause - after writing the
@@ -701,6 +702,14 @@ $script:QwtDeathExeBenignResults = @{
 $script:QwtDeathTaskBenignResults = @{
     '\QubesAutologonGuard' = @{
         '3' = 'autologon could not be VERIFIED - ensure-autologon.ps1 could not query the LSA secret, which is no finding either way (its exit code 3 is deliberately not 2); the installer records it and a real failure to arm is exit 2'
+    }
+    # The relay is permanent on a template (ADR-updater 12.4 point 3) and its task has NO execution time limit (PT0S), so no
+    # 329 timeout kill exists for it: an instance Task Scheduler ENDED was ended on request - the installer's schtasks /end
+    # before it replaces the exe, or an operator's - and 2147943691 is what that reap leaves (measured win11-acc 2026-10-30,
+    # the 329 note above). A shutdown is the 111 rule; exit 0 off a template is the class gate by design. A crash is the
+    # exe's own Application Error 1000, and every other non-zero result is still a death.
+    '\QubesUpdatesRelay' = @{
+        '2147943691' = 'the relay was ENDED by Task Scheduler on request (schtasks /end) - its task has no execution time limit, so nothing else ends it; a stop that was asked for, not a death'
     }
 }
 
