@@ -51,21 +51,28 @@ PRECHECK = {
 E_LINE = re.compile(r"^\W*\[\d{8}\.\d{6}\.\d{3}-[0-9:]+-E\]")
 OPEN_RE = re.compile(r"\b(GAP|FIX OWED|fix not started|NOT FIXED|OPEN)\b")
 CLOSED_RE = re.compile(r"\b(FIX-LANDED|CLOSED|RETIRED|RETRACTED)\b")
+OWNER_RE = re.compile(r"\b[Oo]wner\b|owner-ordered|«")
+# WHAT BLOCKS IS THE OWNER'S RULE, quoted (2026-11-26): «only unaddressed owner orders block. defects don't (unless those
+# are newly introduced or recurring defects caused by your previous action)».
 RUBRIC = {"launch_ready": {
     "type": "choice",
     "question": "On these computed facts, may this full acceptance campaign start now?",
     "instructions": {
         "judge": "Every line is computed by code from the plan, the diff, the scope map, the package's own work dir and "
-                 "the findings files. Judge whether starting now could waste the campaign: a changed product path not "
-                 "proven on this package, or a listed open record naming an order or a defect in a changed file that no "
-                 "listed commit addresses.",
-        "context": "A campaign costs about four hours of rig time and locks the owner's screen. A record that a listed "
-                   "commit plainly addresses is not a blocker; a record no commit addresses is."},
+                 "the findings files. Apply the owner's rule, verbatim: «only unaddressed owner orders block. defects "
+                 "don't (unless those are newly introduced or recurring defects caused by your previous action)». An open "
+                 "record blocks only when it carries an owner order that no listed commit carries out and the order does "
+                 "not itself put the work after this campaign or cut, or when it is a defect that is new in this range "
+                 "or that recurs because of a listed commit. A changed product path not covered on this package blocks.",
+        "context": "A campaign costs about four hours of rig time and locks the owner's screen. `quotes-owner` and "
+                   "`new-in-range` are computed: the first from the record's text, the second by whether the record's key "
+                   "is absent from the same findings file at the range's base."},
     "criteria": {
-        "ready_to_launch": "every changed product path is covered on this package, and no listed open record is an "
-                           "unaddressed order or defect this package should already contain",
-        "blocked": "a listed open record names an order or a defect in a changed file that no listed commit addresses, "
-                   "or a coverage line shows the changed code failing",
+        "ready_to_launch": "every changed product path is covered on this package, and no listed record is an unaddressed "
+                           "owner order or a defect new in the range or recurring because of a listed commit",
+        "blocked": "a listed record is an owner order no listed commit carries out and not deferred past this campaign, "
+                   "or a defect new in the range or recurring because of a listed commit, or a coverage line shows the "
+                   "changed code failing",
         "insufficient_evidence": "the facts do not carry enough to decide"},
     "confidence_floor": FLOOR}}
 
@@ -146,8 +153,9 @@ def coverage_line(path, suites, work, run):
     return "NOT COVERED: none of %s runs before the matrix and none has a standalone precheck in PRECHECK" % suites, False
 
 
-def open_records(changed):
-    """Top-level findings bullets naming a changed product file, with an open marker and no closing marker."""
+def open_records(changed, base):
+    """Top-level findings bullets naming a changed product file, with an open marker and no closing marker; each says
+    whether it quotes the owner and whether its key is absent from that findings file at `base`."""
     _, ls, _ = git("ls-files")
     base_n = {}
     for f in ls.split():
@@ -159,15 +167,58 @@ def open_records(changed):
     for name in sorted(os.listdir(fdir)):
         if not name.endswith(".md") or name == "issues-closed.md":      # the closed register holds nothing open
             continue
+        _, then, _ = git("show", "%s:findings/%s" % (base, name))
         for i, line in enumerate(open(os.path.join(fdir, name), errors="replace"), 1):
             if not line.startswith("- ") or not OPEN_RE.search(line) or CLOSED_RE.search(line):
                 continue
             named = [k for k in keys if k in line]
             if named:
                 t = line.rstrip()
-                hits.append("findings/%s:%d [names %s]: %s%s" % (name, i, ", ".join(named), t[:400],
-                                                                 " [+%d chars]" % (len(t) - 400) if len(t) > 400 else ""))
+                m = re.match(r"- (?:\*\*)?([A-Z0-9]{8,})\b", t)                 # a register id, else the opening words
+                key = m.group(1) if m else t[2:80]
+                hits.append("findings/%s:%d [names %s] [quotes-owner %s] [new-in-range %s]: %s%s" % (
+                    name, i, ", ".join(named), "yes" if OWNER_RE.search(t) else "no", "no" if key in then else "yes",
+                    t[:400], " [+%d chars]" % (len(t) - 400) if len(t) > 400 else ""))
     return hits
+
+
+FIXSHA_RE = re.compile(r"\b(?:FIX-LANDED|FIX|[Ff]ixed in)\s+(?:(agent|winutils)\s+)?([0-9a-f]{7,40})\b")
+
+
+def included_fixes(build, gs, m):
+    """Owner 2026-11-26: «existing fixes MUST be included, not deferred». Decidable, so it blocks in code: a product commit
+    on main after the package's build, or a fix a findings record cites by commit that the build (or its submodule
+    pointer) does not contain. A cited sha this checkout cannot resolve is listed, not blocked."""
+    lines, misses = [], []
+    _, out, _ = git("diff", "--name-only", "%s..main" % build)
+    ahead = [f for f in out.split() if gs.match(f, m)[0] != []]
+    if ahead:
+        _, log, _ = git("log", "--format=%h %s", "%s..main" % build, "--", *ahead)
+        misses += ["main carries product commit %s after the package's build %s" % (l, build[:8]) for l in log.splitlines()]
+    pointer = {s: git("rev-parse", "%s:%s" % (build, s))[1].strip() for s in ("agent", "winutils")}
+    cited = {}
+    fdir = os.path.join(REPO, "findings")
+    for name in sorted(os.listdir(fdir)):
+        if name.endswith(".md"):
+            for i, line in enumerate(open(os.path.join(fdir, name), errors="replace"), 1):
+                for sub, sha in FIXSHA_RE.findall(line):
+                    cited.setdefault((sub, sha), "findings/%s:%d" % (name, i))
+    held = 0
+    for (sub, sha), where in sorted(cited.items()):
+        # A record often cites a submodule commit bare (findings/install.md:44: "fixed in 71fa0a4", an agent commit), so a
+        # bare sha is held when the build OR either submodule pointer contains it.
+        homes = [(os.path.join(REPO, sub), pointer[sub], sub + " pointer")] if sub else \
+                [(REPO, build, "build")] + [(os.path.join(REPO, s), pointer[s], s + " pointer") for s in ("agent", "winutils")]
+        label = ("%s %s" % (sub, sha)) if sub else sha
+        known = [h for h in homes if git("cat-file", "-e", sha + "^{commit}", cwd=h[0])[0] == 0]
+        if not known:
+            lines.append("  unresolvable here: fix %s cited at %s" % (label, where))
+        elif any(git("merge-base", "--is-ancestor", sha, h[1], cwd=h[0])[0] == 0 for h in known):
+            held += 1
+        else:
+            misses.append("fix %s cited at %s is not in the package (%s)" % (label, where, ", ".join("%s %s" % (h[2], h[1][:8]) for h in known)))
+    lines.insert(0, "  %d fix commit(s) cited in findings/*.md are in the package; %d product commit(s) on main are not" % (held, len(ahead and log.splitlines())))
+    return lines, misses
 
 
 def build_facts(plan_path):
@@ -192,7 +243,9 @@ def build_facts(plan_path):
     if plan.get("ready") is not True:
         blocks.insert(0, "the plan says ready=%s blocked=%s" % (plan.get("ready"), json.dumps(plan.get("blocked"))))
     _, log, _ = git("log", "--format=%h %s", rng, "--", *[p for p in product if p in files] or ["."])
-    recs = open_records([p for p in product if p not in links])     # a gitlink names no file; its changed files do
+    recs = open_records([p for p in product if p not in links], rng.split("..")[0])   # a gitlink names no file
+    fix_lines, fix_misses = included_fixes(plan.get("build") or rng.split("..")[-1], gs, m)
+    blocks += fix_misses
     lines = ["LAUNCH-READINESS FACTS - every line computed by tools/launch-readiness.py; none is written by hand",
              "PLAN: %s sha256=%s range=%s package_run=%s ready=%s blocked=%s" % (
                  os.path.relpath(plan_path, REPO), hashlib.sha256(raw).hexdigest(), rng, run, plan.get("ready"),
@@ -203,6 +256,11 @@ def build_facts(plan_path):
     lines += ["PRODUCT COMMITS IN THE RANGE:"] + (["  " + l for l in log.splitlines()] or ["  none"])
     lines += ["OPEN RECORDS NAMING A CHANGED PRODUCT FILE (%d; findings/*.md top-level bullets with /%s/ and no /%s/):" % (
         len(recs), OPEN_RE.pattern, CLOSED_RE.pattern)] + (["  " + r for r in recs] or ["  none"])
+    _, tags, _ = git("tag", "--sort=-creatordate", "--format=%(refname:short) %(creatordate:short)", "--list", "v*")
+    lines += ["RELEASES CUT, newest first (an order put \"after this cut\" falls due at the next one):"] + \
+             ["  " + t for t in tags.splitlines()[:3]]
+    lines += ["EXISTING FIXES (owner: «existing fixes MUST be included, not deferred»; a miss blocks in code):"] + fix_lines
+    lines += ["  MISSING: " + x for x in fix_misses]
     lines += ["NOT COMPUTED: whether a changed LINE is reached by a suite, only that a suite mapped to its file ran; "
               "any branch no rig subject can reach."]
     return "\n".join(lines) + "\n", blocks, run
