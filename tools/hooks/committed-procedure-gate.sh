@@ -12,7 +12,8 @@ WIRE="${JEV_WIRE_LOG:-$ROOT/scratchpad/jev-wire.jsonl}"
 # on this rig, four hours of exclusive time and the operator's screen - was launched through
 # release-acceptance.sh inside a wrapper script, and this gate never fired, so the heaviest action
 # available went without the committed-procedure Jev call that its own inner step requires. One
-# level of indirection defeated it. Driven by tools/tests/committed-procedure-gate-selftest.sh.
+# level of indirection defeated it. Its suite was DELETED 2026-11-26 when the verdict and readiness checks broke it
+# (owner rule: a selftest that fails and needs a quick fix is dropped); change this gate by piping a tool_input at it.
 HEAVY='prime-run\.sh|reprovision-usb\.sh|matrix\.sh|seal-qwt-golden|build-media\.sh|clone-to-template'
 HEAVY="$HEAVY|release-acceptance\.sh|campaign-run\.sh|gate-remainder\.sh"
 # repro-run.sh added 2026-10-28 WITH the wrapper, not after it. It loops prime-run.sh, so it is
@@ -94,7 +95,7 @@ fi
 # mentioned "quick-upgrade" - and since a well-formed permit is REQUIRED to state the rejected
 # short-cycle alternative, which is quick-upgrade, that clause was satisfied by EVERY valid permit.
 # So the command binding was inert: a permit obtained for prime-run authorised a full 8-cell
-# campaign, measured 2026-10-16 by tools/tests/committed-procedure-gate-selftest.sh. The mention of
+# campaign, measured 2026-10-16 by a suite since deleted (2026-11-26). The mention of
 # the alternative is evidence it was considered; it is not a substitute for naming the command.
 #
 # AND THE PERMIT MUST BE RECENT. WINDOW_MIN was declared on line 6 and then never read again: the
@@ -127,6 +128,16 @@ for line in open(wire, errors="replace"):
         continue
     if ("committed_procedure" in line or "use_committed" in line or "procedure_delta" in line) \
        and frag in line:
+        # THE VERDICT IS READ. Until 2026-11-26 a line carrying the marker counted whatever Jev answered - a
+        # `short_cycle_would_do` or `invented_procedure` reply was a permit too. It counts now only when an answer
+        # chose the committed procedure at or above the floor.
+        try:
+            ans = json.loads(json.loads(line).get("response") or "{}").get("answers") or {}
+        except Exception:
+            ans = {}
+        if not any(a.get("choice") in ("committed_procedure", "use_committed") and float(a.get("confidence") or 0) >= 0.70
+                   for a in ans.values() if isinstance(a, dict)):
+            continue
         kind = "permit"
     elif "recreate_goldens" in line or "PROCEDURE-recreate-goldens" in line:
         kind = "recreate-goldens permit"
@@ -195,5 +206,21 @@ If no golden exists, ask Jev with state containing recreate_goldens and the comm
 $mention
 EOM
   exit 2
+fi
+
+# A CAMPAIGN ALSO NEEDS ITS READINESS RECEIPT (owner 2026-11-26: «wire mandatory jev gate with unfalsifiable facts»).
+# The permit above answers "is this the committed command"; it never asked whether the campaign could be wasted, and
+# its state was the agent's prose - two of 2026-11-26's three campaigns were. tools/launch-readiness.py computes the
+# facts, asks Jev a fixed question on them and binds its receipt to their hash; verify recomputes them here.
+if echo "$cmd" | grep -qE 'release-acceptance\.sh|gate-remainder\.sh|campaign-full\.sh|campaign-run\.sh'; then
+  run=$(echo "$cmd" | grep -oE '(--run[ =]+|PKG=)[0-9]{6,}' | grep -oE '[0-9]{6,}' | sort -u)
+  if [ "$(printf '%s\n' "$run" | grep -c .)" != 1 ]; then
+    echo "BLOCKED by committed-procedure-gate.sh: a campaign command must name exactly one release-package run (--run <id> or PKG=<id>) so its readiness receipt can be checked; found: ${run:-none}" >&2
+    exit 2
+  fi
+  if ! why=$(python3 "$ROOT/tools/launch-readiness.py" verify --run "$run" 2>&1); then
+    printf 'BLOCKED by committed-procedure-gate.sh (launch readiness):\n%s\n' "$why" >&2
+    exit 2
+  fi
 fi
 exit 0
