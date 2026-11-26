@@ -986,8 +986,12 @@ Log "prepared updater workdir $workdir (kept even when dom0 asks to remove it - 
 #    is precisely the window in which a live Windows AU would find connectivity and start
 #    installing behind dom0's back. The wuauserv/USO services stay ENABLED: the on-demand path
 #    needs them; only the automatic behaviour is disabled.
+#    The key is created only when it is missing: New-Item -Force on an existing registry key recreates it EMPTY, and that
+#    erased every other value in it on each upgrade - a StandaloneVM's AUOptions/NoAutoRebootWithLoggedOnUsers (section
+#    17) and the pass's UseWUServer (section 1) - until the next pass wrote them again (measured 2026-11-27: the same call
+#    in a probe erased NoAutoUpdate and ExcludeWUDriversInQualityUpdate on win11de-up).
 $au = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU'
-New-Item -Path $au -Force | Out-Null
+if (-not (Test-Path -LiteralPath $au)) { New-Item -Path $au -Force | Out-Null }
 Set-ItemProperty -Path $au -Name NoAutoUpdate -Value 1 -Type DWord
 Log 'set NoAutoUpdate=1 (dom0 owns updates; guest never installs on its own)'
 

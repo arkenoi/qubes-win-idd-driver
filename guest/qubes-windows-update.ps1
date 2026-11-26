@@ -3131,9 +3131,48 @@ function Set-UsoTasks([bool]$Enabled) {
   if ($gone.Count) { Log ("USOTASKS $($gone.Count) task(s) listed at the start of this pass are no longer in $path`: " + ($gone -join ', ')) }
   if ($unset.Count) { Log ("USOTASKS $($unset.Count) task(s) are still not $verb after this pass set them: " + ($unset -join '; ')) 'ERROR' }
 }
+# WINDOWS' OWN SCANS HAVE NOWHERE TO GO WHERE DOM0 DRIVES UPDATES (ADR-updater 1). Windows re-enables the orchestrator tasks
+# Set-UsoTasks disables within minutes (findings/issues.md USOTASKSREENABLEDBYWINDOWS, measured 2026-11-27), so their scans
+# still ran and went out through the relay. The policy below names a managed server where nothing listens: Windows' own
+# scan fails 0x80240438 in 16 s with no traffic, while this pass, which names Windows Update itself (ServerSelection
+# ssWindowsUpdate), searches as before - measured on win11de-up 2026-11-27, both orders of overlap. wuauserv reads the
+# policy when it starts, so a change is followed by its restart. A server that is not ours is a managed guest (ADR-updater
+# 17 point 3): it is left as it is and said. Only our own value is ever removed.
+$script:WuDeadServer = 'http://127.0.0.1:1'
+function Set-WuDeadServer([bool]$On) {
+  $wuKey = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate'
+  $wu = Get-ItemProperty -LiteralPath $wuKey -EA SilentlyContinue
+  $au = Get-ItemProperty -LiteralPath $wuAuKey -EA SilentlyContinue
+  $ours = ($wu.WUServer -eq $script:WuDeadServer)
+  if ($wu.WUServer -and -not $ours) {
+    Log "WUDEADSERVER left as it is: this guest names its own managed update server (WUServer=$($wu.WUServer) UseWUServer=$($au.UseWUServer)), so Windows' own scans go there" 'ERROR'
+    return
+  }
+  if ($On) {
+    if ($ours -and $wu.WUStatusServer -eq $script:WuDeadServer -and $au.UseWUServer -eq 1) { return }
+    try {
+      & { $ErrorActionPreference = 'Stop'
+          SetV $wuKey 'WUServer' $script:WuDeadServer 'String'; SetV $wuKey 'WUStatusServer' $script:WuDeadServer 'String'
+          SetV $wuAuKey 'UseWUServer' 1 'DWord' }
+    } catch { Log "WUDEADSERVER could not be written: $($_.Exception.Message) - Windows' own scans still reach Windows Update" 'ERROR'; return }
+  } else {
+    if (-not $ours -and $au.UseWUServer -ne 1) { return }
+    Remove-ItemProperty -LiteralPath $wuKey -Name WUServer, WUStatusServer -EA SilentlyContinue
+    Remove-ItemProperty -LiteralPath $wuAuKey -Name UseWUServer -EA SilentlyContinue
+  }
+  $svc = Get-Service wuauserv -EA SilentlyContinue
+  $restart = 'not running, reads it at its next start'
+  if ($svc -and $svc.Status -eq 'Running') {
+    try { Restart-Service wuauserv -Force -EA Stop; $restart = 'restarted to read it' }
+    catch { Log "WUDEADSERVER wuauserv could not be restarted ($($_.Exception.Message)); it reads the policy at its next start" 'ERROR'; $restart = 'not restarted' }
+  }
+  if ($On) { Log "WUDEADSERVER set: Windows' own scans name $($script:WuDeadServer) and fail at once; this pass names Windows Update itself. wuauserv $restart" }
+  else { Log "WUDEADSERVER removed: this guest updates itself and Windows' own scans reach Windows Update again. wuauserv $restart" }
+}
 $selfUpdating = ($vmClassLive -eq 'StandaloneVM') -and (Test-DirectInternet)
 if ($selfUpdating) {
   Set-UsoTasks $true
+  Set-WuDeadServer $false
   try {
     & { $ErrorActionPreference = 'Stop'; SetV $wuAuKey 'AUOptions' 4 'DWord'; SetV $wuAuKey 'NoAutoRebootWithLoggedOnUsers' 1 'DWord' }
     Log 'StandaloneVM with direct internet - it updates ITSELF via Windows Update, and a restart waits for the signed-in user (AUOptions=4, NoAutoRebootWithLoggedOnUsers=1). The qubes proxy updater is template-only: disabled. Undoing NoAutoUpdate=1.'
@@ -3148,6 +3187,7 @@ if ($selfUpdating) {
   # from it - against dom0 owning every install. On those classes it is the installer's value (install-updater-agent step 9)
   # and is restored here. An offline StandaloneVM is left as it is: it updates itself when it has a route.
   Set-UsoTasks $false
+  Set-WuDeadServer $true
   if ((Get-ItemProperty -LiteralPath $wuAuKey -Name NoAutoUpdate -EA SilentlyContinue).NoAutoUpdate -ne 1) {
     try {
       & { $ErrorActionPreference = 'Stop'; SetV $wuAuKey 'NoAutoUpdate' 1 'DWord' }
@@ -4142,6 +4182,13 @@ try {
   # autologon unarmed = the sign-in lockout (qrexec rc=117, unmanageable qube). Idempotent + guarded.
   Protect-Autologon
   Remove-Proxy   # ALWAYS restore the routeless baseline - see the Ensure-Proxy comment
+  # THE ORCHESTRATOR TASKS ARE SET OFF AGAIN AS THE PASS ENDS, on the classes the start of the pass set them off on. Owner
+  # 2026-11-27: «keep disabling USO at the beginning and at the end of every our update task. just to minimize the possible
+  # residue». Windows turns them back on within minutes (USOTASKSREENABLEDBYWINDOWS); a pass that ran long leaves them as it
+  # found them at its start. WUDEADSERVER is what makes a task Windows re-enabled harmless; this narrows the window.
+  if (-not $selfUpdating -and $vmClassLive -ne 'StandaloneVM') {
+    try { Set-UsoTasks $false } catch { Log "USOTASKS could not be set off as the pass ends: $($_.Exception.Message)" 'ERROR' }
+  }
   if ($script:HaveMutex) { try { $script:Mutex.ReleaseMutex() } catch {} }
 }
 # Exit-code contract: a pass that errored must NOT exit 0. A dom0 wrapper or a scheduled task's
