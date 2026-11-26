@@ -1212,12 +1212,20 @@ static class Relay
             return 2;
         }
         string self = Process.GetCurrentProcess().MainModule.FileName;
-        // The permanent relay names its own file, by the one log-directory rule, and records that path for the pass to read.
+        // The permanent relay opens its log through LogInit on the one log directory, and records the path LogInit names
+        // (<dir>\qubes-updates-relay-<yyyyMMdd>.log, winutils log.c) for the pass to read. LogInit, NOT LogStart on that
+        // same path: only LogInit writes the QWTBIRTH line, and the log sweep reads a module file without one as a module
+        // whose silence cannot be judged - measured on quick-upgrade win11de-up 2026-11-27, SWEEP-GATE-RESULT INCONCLUSIVE
+        // nobirth=qubes-updates-relay-20261127.log.
         if (_permanent && string.IsNullOrEmpty(logFile))
-            logFile = Path.Combine(QwtLogDir(), "qubes-updates-relay-" + DateTime.Now.ToString("yyyyMMdd") + ".log");
-        // The library opens this relay's log: --log-file as the updater named it, else qubes-updates-relay-<yyyyMMdd>.log in
+        {
+            string permDir = QwtLogDir();
+            logFile = Path.Combine(permDir, "qubes-updates-relay-" + DateTime.Now.ToString("yyyyMMdd") + ".log");
+            QwtLog.LogInit(permDir, "qubes-updates-relay");
+        }
+        // Otherwise the library opens this relay's log: --log-file as given, else qubes-updates-relay-<yyyyMMdd>.log in
         // --log, else in the library's own directory (the registry LogDir).
-        if (!string.IsNullOrEmpty(logFile)) QwtLog.LogStart(logFile);
+        else if (!string.IsNullOrEmpty(logFile)) QwtLog.LogStart(logFile);
         else if (!string.IsNullOrEmpty(logDir)) QwtLog.LogInit(logDir, "qubes-updates-relay");
         else QwtLog.LogInitDefault("qubes-updates-relay");
         // The handlers write into --log, else into the directory of --log-file, else (neither given) into the library's own.
