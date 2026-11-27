@@ -200,45 +200,63 @@ case "${1:-}" in
            # Extra args after the script are FORWARDED to it. They used to be dropped
            # silently, so a caller passing e.g. -NoIddExpected got the default behaviour
            # and no warning (found 2026-08-07 while wiring the health gate's non-IDD mode).
-           INCOMING="$(qtest_incoming)"
+           # TWO CALLS ON THE ORDINARY PATH: the copy, then ONE qubes.VMShell that finds the delivered file
+           # by its SHA-256 and runs it. It was six - the incoming folder's lookup (two calls), a delete,
+           # the copy, a size check, the run - and every call maps and unmaps one of dom0's rings. On the
+           # first boot after an upgrade quick-upgrade's dom0-sends capture made those five short calls
+           # close 89-310 ms apart, 3 s after the harness saw the session (2026-11-27, four short cycles),
+           # inside the window where four of five freezes came at the end of a dom0 call (ADR-boot).
+           # Combine vchan load (owner 2026-11-17).
+           # THE FILE MUST ARRIVE BEFORE WE RUN IT (win11r-lt 2026-10-15/16: `sent 0/11 KB`, then a
+           # -File that did not exist, and the log-volume bind failed). The guest matches CONTENT, not a
+           # size: the file receiver never overwrites, so an older copy of the same name refuses the new
+           # one. The guest deletes such a copy and says STALE, and the copy is made exactly once more -
+           # one named cause, never a retry in hope. No match after that, or no file at all: exit 4.
            f="$1"; shift; base="$(basename "$f")"
-           # THE FILE MUST ARRIVE BEFORE WE RUN IT. This used to delete (ignoring failure), copy
-           # (ignoring the exit status) and then run the script with no check that it was there.
-           # MEASURED on win11r-lt twice, 2026-10-15 21:21 and 2026-10-16 22:37: the transcript
-           # reads `sent 0/11 KB` and then `The argument '...logvol-bind.ps1' to the -File parameter
-           # does not exist`. The log-volume bind failed both times, so QWT's logs stayed on C: and
-           # the DIAG image - the store the HOST can read with mtools when the guest is wedged -
-           # held 155 bytes. The harness then says, correctly, "no qrexec for 41s and the log volume
-           # could not be read either: THAT is the gap, not the silence."
-           # So: assert the byte count the guest actually has, retry, and fail LOUDLY rather than
-           # run a script that is not there and report its absence as the guest's fault.
-           want=$(stat -c%s "$f" 2>/dev/null || echo 0)
-           delivered=0
-           for attempt in 1 2 3; do
-               vmshell "cmd /c del /q /f \"$INCOMING\\$base\" 2>nul" >/dev/null 2>&1 || true
-               qvm-copy-to-vm "$VM" "$f" >/dev/null 2>&1 || true
-               got=$(vmshell "cmd /c if exist \"$INCOMING\\$base\" (for %A in (\"$INCOMING\\$base\") do @echo QSIZE=%~zA) else @echo QSIZE=0" 2>/dev/null \
-                     | tr -d '\r\0' | sed -n 's/^QSIZE=\([0-9][0-9]*\)$/\1/p' | tail -1)
-               [ -n "$got" ] && [ "$got" = "$want" ] && { delivered=1; break; }
-               echo "qtest pushrun: $base arrived as ${got:-0} of $want byte(s) on attempt $attempt - retrying" >&2
-               sleep 5
-           done
-           if [ "$delivered" != 1 ]; then
-               echo "qtest pushrun: FAILED to deliver $base ($want bytes) to $VM after 3 attempts - refusing to run a script that is not there" >&2
-               exit 4
-           fi
-           # Each forwarded argument stays ONE argument to the script: the guest's cmd and PowerShell split
-           # the command line on whitespace, so an argument carrying any is double-quoted there. A double
-           # quote inside an argument cannot be carried through that line and is refused.
+           case "$base" in
+               *[\'\[\]\*\?]*) echo "qtest pushrun: the name '$base' holds a character the guest's wildcard match cannot carry - refusing" >&2; exit 4 ;;
+           esac
+           want=$(sha256sum "$f" 2>/dev/null | cut -c1-64)
+           [ "${#want}" = 64 ] || { echo "qtest pushrun: cannot read $f - refusing" >&2; exit 4; }
+           # Each forwarded argument stays ONE argument (a PowerShell string literal, splatted to the
+           # child). A double quote cannot be carried through the child's command line and is refused.
            fwd=""
            for a in "$@"; do
                case "$a" in
                    *\"*) echo "qtest pushrun: argument [$a] holds a double quote, which the guest command line cannot carry - refusing" >&2; exit 4 ;;
-                   *[[:space:]]*) fwd="$fwd \"$a\"" ;;
-                   *) fwd="$fwd $a" ;;
                esac
+               fwd="$fwd,'${a//\'/\'\'}'"
            done
-           vmshell "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"$INCOMING\\$base\"$fwd" ;;
+           stub=$(cat <<'PS'
+$m = $null; $stale = @()
+foreach ($p in @(Get-ChildItem -Path 'C:\Users\*\Documents\QubesIncoming\@HOST@\@BASE@' -File -EA SilentlyContinue)) {
+  $h = (Get-FileHash -LiteralPath $p.FullName -Algorithm SHA256 -EA SilentlyContinue).Hash
+  if (-not $m -and $h -eq '@SHA@') { $m = $p.FullName } elseif ($h -ne '@SHA@') { $stale += $p.FullName }
+}
+if (-not $m) {
+  foreach ($x in $stale) { Remove-Item -LiteralPath $x -Force -EA SilentlyContinue }
+  if ($stale.Count) { 'QTPUSHRUN-STALE ' + ($stale -join ';') } else { 'QTPUSHRUN-ABSENT' }
+  exit 4
+}
+$a = @(@ARGS@)
+& powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $m @a
+exit $LASTEXITCODE
+PS
+)
+           stub=${stub//@HOST@/"$(hostname)"}; stub=${stub//@BASE@/"$base"}; stub=${stub//@SHA@/"$want"}; stub=${stub//@ARGS@/"${fwd#,}"}
+           enc=$(printf '%s' "$stub" | iconv -f UTF-8 -t UTF-16LE | base64 -w0)
+           tmp=$(mktemp "${TMPDIR:-/tmp}/qtest-pushrun.XXXXXX")
+           for pass in 1 2; do
+               qvm-copy-to-vm "$VM" "$f" >/dev/null 2>&1 || true
+               vmshell "powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $enc" | tee "$tmp"; rc=${PIPESTATUS[0]}
+               grep -qa '^QTPUSHRUN-STALE' "$tmp" && [ "$pass" = 1 ] || break
+               echo "qtest pushrun: an older $base with other content was in the way (the receiver never overwrites); the guest deleted it - copying once more" >&2
+           done
+           if grep -qa -E '^QTPUSHRUN-(STALE|ABSENT)' "$tmp"; then
+               echo "qtest pushrun: FAILED to deliver $base (sha256 ${want:0:12}) to $VM: $(grep -a -m1 -E '^QTPUSHRUN-' "$tmp" | tr -d '\r' | cut -c1-200) - refusing to run a script that is not there" >&2
+               rm -f "$tmp"; exit 4
+           fi
+           rm -f "$tmp"; exit "$rc" ;;
   synctime) # Push this qube's clock into the guest (accurate to ~0.3 s).
            # WHY this exists: the guest's virtual RTC is re-derived from dom0's LOCAL wall
            # clock at every domain start and guest RTC writes are DISCARDED when the domain
