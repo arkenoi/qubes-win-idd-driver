@@ -129,7 +129,9 @@ log search and I did not explain it.
 
 You ordered the findings fixed, with one instruction: "when implementing the qrexec fixes, keep in mind
 circumventing the quemu bug we are aware of". The rules the fixes follow are in `docs/ADR-qrexec.md`.
-The code is `winutils` 41ab843 and `core-agent` 47145b3.
+The code is `winutils` 41ab843 and `core-agent` 47145b3. It left main the same day (superproject 647f1cec), so the
+4.3.44 release, and 4.3.45 and 4.3.46 after it, ship none of it; what this section measured is build-4.3.44.1299,
+the one build that carried it. What has been fixed since is marked at the finding (§3.2: #10, #12, #34).
 
 **How.** For each source file one reader wrote the edits and a second tried to break them. Code checked
 that every edit's anchor and every objection's quote exist in the file. The judge then scored each fix
@@ -467,12 +469,20 @@ an ASSUMPTION from Microsoft's page and was not measured.
 Jev: real NO VERDICT (possible_as_shown 0.45, re-ask 0.37; `claim_misreads_source` got 0.22 and 0.26) |
 impact user_visible 0.91 | reference diverges_from_reference 0.71 (re-ask). The judge did not confirm
 this one, and it is my own candidate.
+**Fixed** by winutils fbe86fd (2026-11-25, pinned since superproject 6dab98b4): `ERROR_NO_DATA` counts as
+connected on both pipes (`ADR-qrexec` §3, decision 3). The `ERROR_NO_DATA` step has since been measured, with a
+one-shot probe on its own pipes (`ADR-qrexec` §3, Evidence). #34 itself was not reproduced.
 
 **#10. A caller that dies between its two opens parks the accept thread for ever.**
 `ConnectNamedPipe(readPipe, NULL)` at `:892` has no timeout and no stop signal; the inherited comment at
 `:887` says `FIXME: this blocks forever if the client never connects here`. Evidence: READ.
 Jev: real NO VERDICT (0.65, re-ask 0.57) | impact user_visible 0.92 | reference
 diverges_from_reference 0.76.
+**Fixed** by winutils fbe86fd (2026-11-25): each client's handshake runs on its own thread, and the client's exit
+releases the wait on its inbound pipe (`ADR-qrexec` §3, decision 6). ca1a045, the same day, serves a client that
+opened its inbound pipe and then exited, and logs one line per dropped client. Seen to fail with 4.3.46's
+windows-utils and to pass with fbe86fd, same subject and sequence (`ADR-qrexec` §3, Evidence (6)). ca1a045 has no
+guest record of its own yet.
 
 **#12. A caller that disappears before the server writes the second pipe's name ends the accept
 thread.** `WriteFile` at `:877` or `:882` fails, `QpsMainLoop` returns (`:879`, `:884`), the thread ends
@@ -481,6 +491,9 @@ The same exit exists at `:858-861`. Evidence: READ; that the write fails is an A
 pipe file system.
 Jev: real NO VERDICT (0.51, re-ask 0.56) | impact user_visible 0.85 | reference
 diverges_from_reference 0.77 (re-ask).
+**Fixed** by winutils fbe86fd (2026-11-25): a step that fails ends that client's handshake thread alone, and the
+accept loop goes on (`ADR-qrexec` §3, decision 2); a pipe, memory or thread the loop cannot create still ends it.
+Measured on a guest only with 41ab843, the build that left main (§1.6); not measured with fbe86fd.
 
 **#22. The caller program retries the second pipe for ever on "not found".** `QpsConnect` loops on
 `ERROR_FILE_NOT_FOUND` with a 10 ms sleep and no bound (`pipe-server.c:1141-1155`), so a caller that
