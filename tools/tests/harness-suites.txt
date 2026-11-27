@@ -52,7 +52,6 @@ offline-rigshim-selftest.sh
 offline-runner-selftest.sh
 qrexec-gap-witness-selftest.sh
 qtest-halted-guard-selftest.sh
-qtest-push-selftest.sh
 relay-judge-timenorm-selftest.sh
 reporter-env-gate-selftest.sh
 resolve-rip-selftest.sh

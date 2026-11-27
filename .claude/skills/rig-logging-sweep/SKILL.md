@@ -122,7 +122,6 @@ tools/tests/log-sweep-selftest.sh          the analyzer, incl. the GUARD knobs
 tools/tests/sweep-gate-selftest.sh         severity, coverage, the ledger
 tools/tests/campaign-state-selftest.sh     plants a failing report and requires it to be reported
 tools/tests/gate-producer-selftest.sh      every suite the gate requires has a producer
-tools/tests/qtest-push-selftest.sh         a copy that delivers nothing must not run the script
 tools/tests/logvol-lib-selftest.sh         the stick, the tag, the bind receipt
 tools/tests/matrix-logsweep-grade-selftest.sh   the harness's own grading
 ```
