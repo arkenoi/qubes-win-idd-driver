@@ -895,7 +895,7 @@ if (Test-Path $okStamp) {
 }
 
 # BOUND THE ONE LOG DIRECTORY, found by the one rule (Get-QwtLogDir: the registry LogDir, else
-# <SystemDrive>\Qubes Logs). On a Qubes guest that is the PRIVATE volume's Q:\Qubes Logs, which
+# Q:\Qubes Logs, else <SystemDrive>\Qubes Logs). On a Qubes guest that is the PRIVATE volume's Q:\Qubes Logs, which
 # PERSISTS, on templates and AppVMs alike; the 4.3.6 build kept pruning only C:\ProgramData\QubesLogs,
 # a directory QWT no longer writes to, while the real one grew without bound. This log and the
 # netsetup service's are in it now, so the C:\ProgramData\QubesLogs prune and the size cap on

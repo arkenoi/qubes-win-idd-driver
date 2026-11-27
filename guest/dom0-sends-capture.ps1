@@ -1,16 +1,19 @@
 # What this guest SENT to dom0, per boot. Read-only: it greps our own senders' log lines, which each
 # record the route they sent and when. No toast is raised by this script.
 $ErrorActionPreference = 'SilentlyContinue'
-# READ IN THIS ORDER: the registry LogDir (where every module writes - docs/ADR-logging.md), <SystemDrive>\Qubes Logs
-# (log.c's directory when LogDir is unset or unreadable - a guest cloned from a parked golden writes there), then the
-# two folders this read was born with. It read only those two, and a harness that binds the log volume moves LogDir
+# READ IN THIS ORDER: the registry LogDir (where every module writes - docs/ADR-logging.md), then Q:\Qubes Logs and
+# <SystemDrive>\Qubes Logs (the one rule's two fallbacks, in its order - log.c writes there when LogDir is unset or its
+# directory cannot be made), then C:\Program Files\Qubes Tools\log. This read was born with only Q:\Qubes Logs and that
+# last folder, and a harness that binds the log volume moves LogDir
 # onto it: measured 2026-11-12 on win11de-os20 (quick-upgrade, 4.3.41), both post-install pulls returned the same
 # five PRE-bind lines from Q:\Qubes Logs while the 4.3.41 agent wrote its daily file on the volume.
+# It reads EVERY candidate folder, so it needs the registry value, not the rule's answer - and it never asks log.ps1's
+# Get-QwtLogDir, whose fallback CREATES the directory it names: this script writes nothing.
 $ld = (Get-ItemProperty 'HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools' -ErrorAction SilentlyContinue).LogDir
 # No path is rewritten: a TrimEnd('\') would turn a drive-root LogDir into "Z:", the CURRENT directory of Z:, not
 # its root. Select-Object -Unique keeps the first of each and the order above (Sort-Object would reorder it). Two
 # spellings of one folder only list its files twice - the $seen key below reports each line once.
-$dirs = @(@($ld, (Join-Path $env:SystemDrive 'Qubes Logs'), 'Q:\Qubes Logs', 'C:\Program Files\Qubes Tools\log') |
+$dirs = @(@($ld, 'Q:\Qubes Logs', (Join-Path $env:SystemDrive 'Qubes Logs'), 'C:\Program Files\Qubes Tools\log') |
           Where-Object { $_ } | ForEach-Object { [string]$_ } | Select-Object -Unique)
 $files = foreach ($d in $dirs) { Get-ChildItem -LiteralPath $d -Filter '*.log' -ErrorAction SilentlyContinue }
 # The bind COPIES the old folder onto the volume, so one file can be read from two folders: each (file, line, text)
