@@ -570,9 +570,17 @@ logvol_unbind_guest(){ # <vm> - put LogDir and LogSafeFlush back (registry mode)
   [ -n "$line" ] || { _lv_say "[ERROR] no LOGVOL-BIND line came back from $vm"; return 1; }
   echo "$line"
   case "$line" in
-    "LOGVOL-BIND restored "*) return 0 ;;
+    "LOGVOL-BIND restored "*) ;;
     *) _lv_say "[ERROR] the binder did not restore: $(_lv_guest "$line")"; return 1 ;;
   esac
+  # "restored" is printed whether or not a saved value existed (logvol-bind.ps1 -Restore), so read back what LogDir
+  # IS: a value still naming the stick means nothing was put back.
+  local cur
+  cur=$(printf '%s' "$line" | sed -n "s#.*logdir=\\([A-Za-z0-9+/=]*\\).*#\\1#p" | base64 -d 2>/dev/null)
+  case "$cur" in
+    *qwt-logs*) _lv_say "[ERROR] the binder reported restored and LogDir on $vm STILL reads '$cur' - nothing was saved to put back"; return 1 ;;
+  esac
+  return 0
 }
 
 # ---------------------------------------------------------------------- the evidence path, PROVEN

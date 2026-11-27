@@ -381,8 +381,8 @@ logvol_restore_now(){ # $1=label - returns 1 when the guest may still name the s
       : > "$M/$1-logvol-unrestored.marker"; return 1 ;;
   esac
   # DO NOT TRUST THE WORD 'restored'. -Restore skips its writes when the saved values are absent and
-  # still prints 'restored' and exits 0, so logvol_unbind_guest returns 0 over a registry that still
-  # names the stick. The receipt's logdir= is read AFTER the write; decode it and judge that.
+  # still prints 'restored' and exits 0. logvol_unbind_guest now returns 1 for that, but this caller
+  # reads the line, not the status: the receipt's logdir= is read AFTER the write; decode it and judge that.
   cur=$(printf '%s' "$line" | sed -n "s#.*logdir=\\([A-Za-z0-9+/=]*\\).*#\\1#p" | base64 -d 2>/dev/null)
   case "$cur" in
     *qwt-logs*)
