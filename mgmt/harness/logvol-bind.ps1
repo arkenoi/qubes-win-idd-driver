@@ -19,8 +19,9 @@
 # junction mode (opt-in, UNMEASURED): an NTFS junction at "<LogDir>.logvol" -> the volume path, and two
 #   PendingFileRenameOperations queued for smss to swap it into <LogDir> at the next boot, before any
 #   service opens a log. LogSafeFlush=1 is set in this mode too. The registry LogDir is NOT changed.
-# -Restore: registry mode puts LogDir and LogSafeFlush back from their saved copies; junction mode
-#   queues the reverse renames. Nothing is deleted from the volume, ever.
+# -Restore: registry mode puts LogDir and LogSafeFlush back from their saved copies and removes every
+#   per-module LogDir that names the volume; junction mode queues the reverse renames. Nothing is
+#   deleted from the volume, ever.
 #
 # OUTPUT: exactly one line starting with 'LOGVOL-BIND ' (a marker that never appears in the command
 # qtest echoes back - the a0-lib self-match lesson):
@@ -32,7 +33,6 @@ param(
     [string]$Id = '',
     [ValidateSet('registry', 'junction')][string]$Mode = 'registry',
     [switch]$Restore,
-    [switch]$Clear,
     [switch]$NoCopy
 )
 $ErrorActionPreference = 'Stop'
@@ -150,58 +150,6 @@ function Get-RegValue([string]$name) {
 
 if (-not (Test-Path -Path $RegKey)) { Fail 'no_qubes_tools_key' }
 
-# -Clear: REMOVE the LogDir value entirely, so the product falls to its OWN default.
-#
-# THE MEASURED REASON THIS EXISTS. An AppVM inherits its registry from the template, whose root is
-# the churn subject's 'installed' park, so it boots believing LogDir=Z:\qwt-logs\<churn>. The
-# receipts of run 39476792836 say `found=D: letter=pinned` on all six appvm boots: at boot Windows
-# letters the volume D:, and the bind pins it to Z: AFTERWARDS. So when the agent family starts, the
-# inherited value names a letter that does not exist yet, log.c:256 CreateDirectory fails,
-# :258-264 calls LogStart(NULL) and jumps to the fallback at :289 - stderr only, NO FILE ANYWHERE.
-# Both appvm cells of that run produced zero agent-family logs on all three boots.
-#
-# No registry path naming a LETTER can be valid at an AppVM's agent start, and a volume GUID path
-# (probed working on a guest 2026-10-21) cannot help either, because the INHERITED value would name
-# the churn volume's GUID. The one path that is valid is the product's own default:
-# log.c:236-253 with log.h:59 build "<system drive>\Qubes Logs" and CREATE it when LogInit is given
-# nothing - no letter, no inheritance. It is reached only when CfgReadString FAILS, i.e. when there
-# is NO value. Hence: remove it, do not rewrite it.
-#
-# RESTORING instead was tried and disproved: the restored value is Q:\Qubes Logs, on the PRIVATE
-# volume, which checkpoint.sh clones into the template and an AppVM's private is seeded from - and
-# it is NOT empty at park time (WIN10-clean's receipt: copied=21 modules=15), so the AppVM would
-# inherit a log directory pre-filled with another guest's logs. C:\Qubes Logs is unused on these
-# guests: the string appears in none of that run's eight captures.
-if ($Clear) {
-    $cur = Get-RegValue 'LogDir'
-    $mods = Get-RegValue 'LogDirModulesPreLogvol'
-    $removed = @()
-    # the per-module keys FIRST: CfgReadString reads the module key before the root, so a value
-    # left there would still win and the root removal would look like it had worked.
-    foreach ($m in @((Get-ChildItem -Path $RegKey -ErrorAction SilentlyContinue) | ForEach-Object { $_.PSChildName })) {
-        $mk = Join-Path $RegKey $m
-        if ($null -ne (Get-ItemProperty -Path $mk -Name 'LogDir' -ErrorAction SilentlyContinue)) {
-            Remove-ItemProperty -Path $mk -Name 'LogDir' -ErrorAction SilentlyContinue
-            $removed += $m
-        }
-    }
-    Remove-ItemProperty -Path $RegKey -Name 'LogDir' -ErrorAction SilentlyContinue
-    Remove-ItemProperty -Path $RegKey -Name 'LogDirPreLogvol' -ErrorAction SilentlyContinue
-    Remove-ItemProperty -Path $RegKey -Name 'LogDirModulesPreLogvol' -ErrorAction SilentlyContinue
-    # ASSERT THE ABSENCE, do not report the attempt. A Remove-ItemProperty that silently did nothing
-    # would otherwise be reported as success - the defect class this whole area has been full of.
-    $still = @()
-    if ($null -ne (Get-ItemProperty -Path $RegKey -Name 'LogDir' -ErrorAction SilentlyContinue)) { $still += '(root)' }
-    foreach ($m in @((Get-ChildItem -Path $RegKey -ErrorAction SilentlyContinue) | ForEach-Object { $_.PSChildName })) {
-        if ($null -ne (Get-ItemProperty -Path (Join-Path $RegKey $m) -Name 'LogDir' -ErrorAction SilentlyContinue)) { $still += $m }
-    }
-    if ($still.Count -gt 0) {
-        Fail ('logdir_still_set_after_clear keys=' + ($still -join ','))
-    }
-    Write-Output ('LOGVOL-BIND cleared was=' + (B64 ([string]$cur)) + ' modules=' + (($removed -join ',')) + ' remaining=0')
-    exit 0
-}
-
 if ($Restore) {
     $saved = Get-RegValue 'LogDirPreLogvol'
     $savedFlush = Get-RegValue 'LogSafeFlushPreLogvol'
@@ -226,6 +174,20 @@ if ($Restore) {
         }
         Remove-ItemProperty -Path $RegKey -Name 'LogDirModulesPreLogvol' -ErrorAction SilentlyContinue
     }
+    # AND ANY MODULE KEY STILL NAMING THE VOLUME. Only this script writes a per-module LogDir (the
+    # installer writes the root alone), and a module reads its own key BEFORE the root, so one left
+    # behind - a bind whose saved module list was narrower - would send that module to a letter an
+    # AppVM does not have. Removed, then asserted gone.
+    $stuck = @()
+    foreach ($m in @((Get-ChildItem -Path $RegKey -ErrorAction SilentlyContinue) | ForEach-Object { $_.PSChildName })) {
+        $mk = Join-Path $RegKey $m
+        $v = [string](Get-ItemProperty -Path $mk -Name 'LogDir' -ErrorAction SilentlyContinue).LogDir
+        if ($v -notlike '*\qwt-logs\*') { continue }
+        Remove-ItemProperty -Path $mk -Name 'LogDir' -ErrorAction SilentlyContinue
+        if ($null -ne (Get-ItemProperty -Path $mk -Name 'LogDir' -ErrorAction SilentlyContinue)) { $stuck += $m; continue }
+        if (@((Get-Item -Path $mk -ErrorAction SilentlyContinue).Property).Count -eq 0) { Remove-Item -Path $mk -Force -ErrorAction SilentlyContinue }
+    }
+    if ($stuck.Count -gt 0) { Fail ('module_logdir_still_names_the_volume keys=' + ($stuck -join ',')) }
     if ($null -ne $savedFlush) {
         if ([int]$savedFlush -lt 0) { Remove-ItemProperty -Path $RegKey -Name 'LogSafeFlush' -ErrorAction SilentlyContinue }
         else { Set-ItemProperty -Path $RegKey -Name 'LogSafeFlush' -Value ([int]$savedFlush) -Type DWord }

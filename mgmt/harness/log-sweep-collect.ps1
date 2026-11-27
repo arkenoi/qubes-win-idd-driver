@@ -148,8 +148,8 @@ function Get-LswLogDirCandidates {
     # EVERY DIRECTORY A windows-utils MODULE COULD HAVE RESOLVED - not only the one the registry
     # names at COLLECTION TIME. Get-LswLogDir returns the FIRST hit, and that single `return` is
     # the whole blindness: a module resolves its LogDir ONCE, at its own LogInit, and the harness
-    # moves that value underneath it (logvol_bind_guest sets it, logvol_clear_guest removes it,
-    # logvol_restore_now puts it back) - so by the time this collector runs, the registry can name
+    # moves that value underneath it (logvol_bind_guest sets it, logvol_restore_now and the park
+    # put it back) - so by the time this collector runs, the registry can name
     # a directory that no module in the capture ever wrote to, and the ones they DID write to are
     # invisible. MEASURED twice on run 39880114972:
     #   * win11-upgrade: the restore reverted LogDir to Q:\Qubes Logs 18 s before collection, the
@@ -169,7 +169,7 @@ function Get-LswLogDirCandidates {
         # restore, which makes it a first-class witness of a capture's earlier boots.
         $raw.Add([string]$r.LogDirPreLogvol)
     }
-    # a bind may set LogDir PER MODULE (and -Clear removes those too), so each module key is a
+    # a bind may set LogDir PER MODULE (and -Restore removes those too), so each module key is a
     # directory some module resolved.
     foreach ($k in (Get-ChildItem $root -ErrorAction SilentlyContinue)) {
         $raw.Add([string](Get-ItemProperty -Path $k.PSPath -Name LogDir -ErrorAction SilentlyContinue).LogDir)
