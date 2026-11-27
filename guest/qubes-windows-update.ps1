@@ -3232,7 +3232,7 @@ function Set-WuDeadServer([bool]$On) {
     catch { Log "WUDEADSERVER wuauserv could not be restarted ($($_.Exception.Message)); it reads the policy at its next start" 'ERROR'; $restart = 'not restarted' }
   }
   if ($On) { Log "WUDEADSERVER set: Windows' own scans name $($script:WuDeadServer) and fail at once; this pass names Windows Update itself. wuauserv $restart" }
-  else { Log "WUDEADSERVER removed: this guest updates itself and Windows' own scans reach Windows Update again. wuauserv $restart" }
+  else { Log "WUDEADSERVER removed: Windows' own scans reach Windows Update again. wuauserv $restart" }
 }
 $selfUpdating = ($vmClassLive -eq 'StandaloneVM') -and (Test-DirectInternet)
 if ($selfUpdating) {
