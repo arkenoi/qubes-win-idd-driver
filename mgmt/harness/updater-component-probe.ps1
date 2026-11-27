@@ -176,7 +176,12 @@ function New-Lines([string]$p, [long]$pre) {
     # mixing them cuts at the wrong place on any non-ASCII line - and this is a German guest. Read
     # the file as bytes, decode ONLY the range this pass appended. No ternary: the guest is
     # PowerShell 5.1 and `a ? b : c` is 7-only syntax that ps-parse-check (pwsh 7) would pass.
-    $all = [IO.File]::ReadAllBytes($p)
+    # SHARED READ: the template's permanent relay holds its log open for writing for as long as the qube runs, and
+    # ReadAllBytes (FileShare.Read) is refused on such a file - measured build-4.3.47.1515, a sharing violation in
+    # place of relay.log.
+    $fs = New-Object IO.FileStream($p, [IO.FileMode]::Open, [IO.FileAccess]::Read, ([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
+    try { $all = New-Object byte[] $fs.Length; $got = 0; while ($got -lt $all.Length) { $k = $fs.Read($all, $got, $all.Length - $got); if ($k -le 0) { break }; $got += $k } }
+    finally { $fs.Dispose() }
     if ($all.Length -le $pre) { return @() }
     $n = $all.Length - $pre
     $new = New-Object byte[] $n
@@ -201,3 +206,15 @@ Write-Output '#ENDAGENTLOG#'
 Write-Output '#RELAYLOG#'
 Pass-Lines 'qubes-updates-relay-*.log' $rOld $rPre
 Write-Output '#ENDRELAYLOG#'
+
+# THE PERMANENT RELAY LISTENS FROM BOOT, before this pass's window opens, so its listen line is never among the lines the
+# pass appended. U3 reads the last listen line of the whole current relay log, and who owns 127.0.0.1:8082 now.
+Write-Output '#RELAYLISTEN#'
+$lastListen = $null
+foreach ($p in @(Log-Files 'qubes-updates-relay-*.log' $rOld)) {
+    foreach ($l in @(New-Lines $p 0)) { if ($l -match ' listen 127\.0\.0\.1:\d+ ') { $lastListen = $l } }
+}
+if ($lastListen) { Write-Output ("last_listen=" + $lastListen.Trim()) } else { Write-Output 'last_listen=' }
+$own = @(Get-NetTCPConnection -LocalAddress 127.0.0.1 -LocalPort 8082 -State Listen -EA SilentlyContinue | ForEach-Object { $_.OwningProcess } | Sort-Object -Unique)
+Write-Output ("port_owner=" + ($own -join ','))
+Write-Output '#ENDRELAYLISTEN#'

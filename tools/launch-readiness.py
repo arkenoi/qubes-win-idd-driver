@@ -47,6 +47,14 @@ PRECHECK = {
         "pass": r"VERDICT: PASS\b",
         "elog": "precheck/updater-component.d/agent.log",
     },
+    "notify-errors-guest-test": {   # the driver's own invocation, with the paths under precheck/:
+        # VM=win11-nfy PKG=<work>/dl/qwt-improved-setup OS_FAMILY=win11r LOG=<work>/precheck/notify-errors-guest-test.log \
+        #   ./mgmt/harness/notify-errors-guest-test.sh 2>&1 | tee <work>/precheck/notify-errors-guest-test.out
+        # It reads no product log of its own, so there is no pass log to scan: its verdict is its summary line alone.
+        "out": "precheck/notify-errors-guest-test.out",
+        "pass": r"=== notify-errors guest test: [1-9][0-9]* passed, 0 failed ===",
+        "elog": None,
+    },
 }
 E_LINE = re.compile(r"^\W*\[\d{8}\.\d{6}\.\d{3}-[0-9:]+-E\]")
 OPEN_RE = re.compile(r"\b(GAP|FIX OWED|fix not started|NOT FIXED|OPEN)\b")
@@ -134,7 +142,8 @@ def coverage_line(path, suites, work, run):
         p = PRECHECK.get(s)
         if not p:
             continue
-        out, elog = os.path.join(work, p["out"]), os.path.join(work, p["elog"])
+        out = os.path.join(work, p["out"])
+        elog = os.path.join(work, p["elog"]) if p["elog"] else None
         if not os.path.exists(out):
             return "NOT COVERED: precheck %s has no output at %s" % (s, out), False
         text = open(out, errors="replace").read()
@@ -143,6 +152,9 @@ def coverage_line(path, suites, work, run):
             return "NOT COVERED: precheck %s output %s does not name this package (%s)" % (s, out, pkg), False
         if not re.search(p["pass"], text):
             return "FAILED: precheck %s output %s has no line matching /%s/" % (s, out, p["pass"]), False
+        if elog is None:
+            return "covered by precheck %s on this package: %s matches /%s/ (it reads no product log; none scanned)" % (
+                s, out, p["pass"]), True
         if not os.path.exists(elog):
             return "NOT COVERED: precheck %s has no pass log at %s" % (s, elog), False
         el = [l.strip()[:200] for l in open(elog, errors="replace") if E_LINE.match(l)]

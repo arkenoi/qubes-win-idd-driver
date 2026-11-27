@@ -90,14 +90,19 @@ updater_gates_grade(){
 
   # U3 - 8082 AND a parent field. The measured failure bound the pass's own pid (2540, 5956, 6688,
   # 8228, 8892) - owner: "it is the same as 'relay is not listening' for us."
-  local u3=1 lastlisten pidports
-  lastlisten=$(grep -aE ' listen 127\.0\.0\.1:[0-9]+ ' "$rlog" 2>/dev/null | tail -1)
+  # The permanent relay listens from BOOT, before the pass window relay.log holds, so its listen line is read from the
+  # whole current relay log (relay-listen.txt), and it must be the process that owns 8082 now.
+  local u3=1 lastlisten pidports lpid powner
+  lastlisten=$(sed -n 's/^last_listen=//p' "$d/relay-listen.txt" 2>/dev/null | tail -1)
+  powner=$(sed -n 's/^port_owner=//p' "$d/relay-listen.txt" 2>/dev/null | tail -1)
+  lpid=$(printf '%s' "$lastlisten" | grep -aoE '^\[[0-9]{8}\.[0-9]{6}\.[0-9]{3}-[0-9]+' | grep -aoE '[0-9]+$')
   if printf '%s' "$lastlisten" | grep -qaE ' listen 127\.0\.0\.1:8082 ' \
-     && printf '%s' "$lastlisten" | grep -qaE ' parent=permanent '; then u3=0; fi
+     && printf '%s' "$lastlisten" | grep -qaE ' parent=permanent ' \
+     && [ -n "$lpid" ] && [ "$lpid" = "$powner" ]; then u3=0; fi
   pidports=$(grep -aoE ' listen 127\.0\.0\.1:[0-9]+' "$rlog" 2>/dev/null \
              | grep -avE ':8082$' | grep -aoE '[0-9]+$' | sort -u | tr '\n' ',' | sed 's/,$//')
   ug_gate U3 "the template's permanent relay listens on 8082 (parent=permanent)" "$u3" \
-    "last listen: ${lastlisten:-none}${pidports:+ ; non-8082 ports seen this run: $pidports}"
+    "last listen: ${lastlisten:-none} ; its pid ${lpid:-?}, 8082 owned by ${powner:-nobody}${pidports:+ ; non-8082 ports seen this run: $pidports}"
 
   # U4 - served by the template's permanent relay, identified by its record; never adopted (ADR-updater 12.4 point 3)
   local u4=1
@@ -233,6 +238,7 @@ updater_gates_collect(){
   awk '/^#INSTALLLOG#/{f=1;next}/^#ENDINSTALLLOG#/{f=0}f' "$d/probe.out" | tr -d '\r' > "$d/install.log"
   awk '/^#AGENTLOG#/{f=1;next}/^#ENDAGENTLOG#/{f=0}f'     "$d/probe.out" | tr -d '\r' > "$d/agent.log"
   awk '/^#RELAYLOG#/{f=1;next}/^#ENDRELAYLOG#/{f=0}f'     "$d/probe.out" | tr -d '\r' > "$d/relay.log"
+  awk '/^#RELAYLISTEN#/{f=1;next}/^#ENDRELAYLISTEN#/{f=0}f' "$d/probe.out" | tr -d '\r' > "$d/relay-listen.txt"
   awk '/^#EXE#/{f=1;next}/^#ENDEXE#/{f=0}f'               "$d/probe.out" | tr -d '\r' > "$d/exe.txt"
   awk '/^#SCAN#/{f=1;next}/^#ENDSCAN#/{f=0}f'             "$d/probe.out" | tr -d '\r' > "$d/scan.txt"
   awk '/^#SIZES#/{f=1;next}/^#ENDSIZES#/{f=0}f'           "$d/probe.out" | tr -d '\r' > "$d/sizes.txt"
@@ -329,15 +335,19 @@ updater_gates_diagnose(){
   # ---- U3: the port -----------------------------------------------------------------------------
   if ug_fired U3; then
     UG_DIAG="${UG_DIAG}  U3 the relay is not serving 8082:"$'\n'
-    local lastlisten port selfpath
-    lastlisten=$(grep -aE ' listen 127\.0\.0\.1:[0-9]+ ' "$rlog" 2>/dev/null | tail -1)
+    local lastlisten port selfpath lpid powner
+    lastlisten=$(sed -n 's/^last_listen=//p' "$d/relay-listen.txt" 2>/dev/null | tail -1)
+    powner=$(sed -n 's/^port_owner=//p' "$d/relay-listen.txt" 2>/dev/null | tail -1)
+    lpid=$(printf '%s' "$lastlisten" | grep -aoE '^\[[0-9]{8}\.[0-9]{6}\.[0-9]{3}-[0-9]+' | grep -aoE '[0-9]+$')
     port=$(printf '%s' "$lastlisten" | grep -aoE 'listen 127\.0\.0\.1:[0-9]+' | grep -aoE '[0-9]+$')
     selfpath=$(printf '%s' "$lastlisten" | grep -aoE 'self=[^ ]+' | sed 's/^self=//')
     if [ -n "$port" ] && [ "$port" != 8082 ] && ! printf '%s' "$lastlisten" | grep -qa 'parent='; then
       ug_cand CONFIRMED "the running relay PREDATES its launcher's flags: a flag VALUE became the listen port" \
         "it bound $port with no parent= field, and the relay task's launch (--permanent) logs parent=permanent. This is the measured shape of an older binary (2540, 5956, 6688, 8228, 8892)."
     elif [ -z "$lastlisten" ]; then
-      ug_cand CONFIRMED "no relay ever logged a listen line this pass" "relay.log has no 'listen 127.0.0.1:<port>' entry"
+      ug_cand CONFIRMED "no relay logged a listen line in the current relay log" "relay-listen.txt: last_listen is empty (port_owner=${powner:-none})"
+    elif [ "$port" = 8082 ] && [ "$lpid" != "$powner" ]; then
+      ug_cand CONFIRMED "the relay that logged the last listen is not the process serving 8082" "listen pid ${lpid:-?}, 8082 owned by ${powner:-nobody}"
     else
       ug_cand POSSIBLE "the relay bound an unexpected port" "last listen: $lastlisten"
     fi
