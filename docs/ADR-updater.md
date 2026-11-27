@@ -77,7 +77,7 @@ flowchart TD
 | 15 | Outside data never becomes a command | ACCEPTED | 2026-10-07 |
 | 16 | The updater is graded in two phases: deterministic gates first, the dom0-driven sequence second | ACCEPTED (owner) | 2026-10-22 |
 | 17 | Windows never restarts a guest on its own; a restart waits for the user, and a policy that overrides this is detected and warned about | ACCEPTED (owner, Jev 0.89); built, decision 1's measurement owed | 2026-11-13 |
-| 18 | On a template the updates proxy stays up, gated by process, not by time; in an AppVM it is gone; command-line winget is served by identity, to any host | ACCEPTED (owner); points 1, 2, 4, 6 built; 7 written, its guest test owed; 3 not built | 2026-11-21 |
+| 18 | On a template the updates proxy stays up, gated by process, not by time; in an AppVM it is gone; command-line winget is served by identity, to any host | ACCEPTED (owner); points 1-7 built | 2026-11-21 |
 
 Status words and the section format are defined in `docs/ADR-README.md`. Each section below states the essentials.
 `docs/REFERENCE-updater.md` keeps every section in full under the same number: the complete wording, context,
@@ -618,8 +618,8 @@ at its logon screen has no signed-in user, so the setting does not hold there. A
 
 ## 18. On a template the updates proxy stays up, gated by process, not by time; in an AppVM it is gone
 
-**Status:** ACCEPTED (owner, 2026-11-18; points 6 and 7 owner, 2026-11-21). Points 1, 2, 4, 6 and 7 are built. Point 3 needs a
-relay that serves between passes, which is not built; until it is, nothing listens on 127.0.0.1:8082 between passes.
+**Status:** ACCEPTED (owner, 2026-11-18; points 6 and 7 owner, 2026-11-21). Points 1-7 are built. On a TemplateVM the relay
+is permanent and serves 127.0.0.1:8082 between passes (§12.4 point 3); outside a TemplateVM it exits without listening.
 
 **Context.** Row 47 (`0x8024402C`): Windows Update takes its proxy from the per-machine policy present at sign-in
 or from the signed-in user, never from what a pass writes mid-session (§12.5 row 1). A proxy that exists only while
@@ -652,7 +652,7 @@ process more tidy, but that would be it."*
    only it skips the host allowlist; Windows Update, Delivery Optimization and BITS keep that allowlist, since any user
    can drive them. Built in `PeerIsWinget` and `IsWingetImagePath` (the relay). Point 2's test on a template guest: a
    renamed curl, curl under `Invoke-CommandInDesktopPackage` and a user's powershell are refused, and winget's own
-   search is served, which needs the package-identity call to answer. Until point 3's standing relay exists, winget is served only while a pass runs.
+   search is served, which needs the package-identity call to answer.
    Two machine policies are part of the template's proxy configuration (point 1) and go with it (point 4). WinINet's
    server-certificate revocation check is off (`CertificateRevocation` 0 under the Internet Settings policy key): with no
    network adapter Windows fetches no revocation data, and a package's integrity is the manifest SHA-256 winget verifies.
