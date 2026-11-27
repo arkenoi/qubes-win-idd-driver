@@ -139,20 +139,14 @@ wu_family(){
     relay-handler-*.log|relay-handler.log)                  echo relay-handler.log ;;
     vmupdate-shim.ps1-*.log|vmupdate-shim.log)              echo vmupdate-shim.log ;;
   esac; }
-# THE ONE LOG DIRECTORY, by log.c's rule: the registry LogDir, else <SystemDrive>\Qubes Logs - read through
-# guest_file's own transport. QWTSYSDRIVE proves the guest answered: without it an absent LogDir value and a guest
-# that said nothing would read the same, and the default would stand in for an answer.
-guest_logdir(){ local i out sd ld
-  for i in 1 2 3 4 5 6; do
-    out=$(timeout -k 5 180 tools/qtest run 'cmd /c reg query "HKLM\SOFTWARE\Invisible Things Lab\Qubes Tools" /v LogDir & echo QWTSYSDRIVE=%SystemDrive%' 2>/dev/null | tr -d '\r')
-    sd=$(printf '%s\n' "$out" | sed -n 's/^QWTSYSDRIVE=\([A-Za-z]:\)[[:space:]]*$/\1/p' | tail -1)
-    if [ -n "$sd" ]; then
-      ld=$(printf '%s\n' "$out" | sed -n 's/^[[:space:]]*LogDir[[:space:]][[:space:]]*REG_[A-Z_]*SZ[[:space:]][[:space:]]*\(.*[^[:space:]]\)[[:space:]]*$/\1/p' | tail -1)
-      printf '%s\n' "${ld:-$sd\\Qubes Logs}"; return 0
-    fi
-    sleep 5
-  done
-  return 1; }
+# THE ONE LOG DIRECTORY (docs/ADR-logging.md 1), asked of the installed log.ps1 over the same VMShell transport as
+# guest_file. QWTLOGDIR=<drive path> proves the guest answered: a guest that said nothing never reads as a directory.
+# Asked ONCE: a guest that does not answer is a failure the caller reports, never retried in hope.
+guest_logdir(){ local out ld
+  out=$(timeout -k 5 180 tools/qtest ps "\$d = & { . 'C:\\Program Files\\Qubes Tools\\bin\\log.ps1'; Get-QwtLogDir }; 'QWTLOGDIR=' + \$d" 2>/dev/null | tr -d '\r')
+  ld=$(printf '%s\n' "$out" | sed -n 's/^QWTLOGDIR=\([A-Za-z]:\\.*[^[:space:]]\)[[:space:]]*$/\1/p' | tail -1)
+  [ -n "$ld" ] || return 1
+  printf '%s\n' "$ld"; }
 # Every file of every family on the guest now, one path per line, the same transport again. A wildcard item yields
 # only the files that exist; an old path is checked with `if exist`. QWTLISTEND proves the listing RAN: an empty
 # answer is a guest that did not answer, never "no files" - a before-snapshot taken from nothing would hand the judge

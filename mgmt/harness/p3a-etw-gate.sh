@@ -73,7 +73,8 @@
 #
 # ---------------------------------------------------------------------------------------------
 # TODO(RIG) REGISTER — Opus: reconcile each against live output, then delete the tag or fix:
-#  #1 etw-proxy.log default dir when LogDir is unset (code: %SystemDrive%\Qubes Logs — verify).
+#  #1 etw-proxy.log default dir when LogDir is unset (code: Q:\Qubes Logs, else %SystemDrive%\Qubes Logs -
+#     docs/ADR-logging.md 1, asked of windows-utils by qtb_shared.h QwtLogDir — verify).
 #  #2 tasklist /fo csv "User Name" rendering for the session-0 proxy (expected <HOST>\qubes-etwproxy).
 #  #3 icacls rendering of the state-dir DENY ACE (grep is deliberately loose: name + 'deny').
 #  #4 RESOLVED 2026-09-06: on this EnableLUA=0 image the interactive user is a full-token admin
@@ -591,7 +592,8 @@ if [ "$nofw" = FWRULE-ABSENT ]; then
 fi
 
 # T1i scoped ACLs: proxy account on ITS OWN log only; DENY on the bridge state dir. PLOG first.
-plogdir=$(enc_run '$d=(Get-ItemProperty "HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools" -EA SilentlyContinue).LogDir; if (-not $d) { $d = "$env:SystemDrive\Qubes Logs" }; "PLOGDIR=$d"' | grep -aoE 'PLOGDIR=[^ ].*' | tail -1)
+# The ONE log directory (docs/ADR-logging.md 1), asked of the installed log.ps1 - never a copy of the rule here.
+plogdir=$(enc_run '$d = & { . "C:\Program Files\Qubes Tools\bin\log.ps1"; Get-QwtLogDir }; "PLOGDIR=$d"' | grep -aoE 'PLOGDIR=[^ ].*' | tail -1)
 plogdir="${plogdir#PLOGDIR=}"
 # Every decisive phase reads this log; an unresolved path would misattribute their failures.
 [ -n "$plogdir" ] && printf '%s' "$plogdir" | grep -qa ':' \

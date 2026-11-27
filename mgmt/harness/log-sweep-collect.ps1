@@ -136,11 +136,12 @@ function Get-LswLogDir {
     # one is fixed by making the LogDir valid before the agent starts, not here.
     $r = Get-ItemProperty 'HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools' -ErrorAction SilentlyContinue
     if ($r -and $r.LogDir) { return [string]$r.LogDir }
-    # Join-Path turns 'C:' into 'C:\Qubes Logs', which is exactly what log.c builds from
-    # GetSystemDirectory truncated at index 3 plus LOG_DEFAULT_DIR.
+    # THE PRODUCT'S ORDER (docs/ADR-logging.md 1): the private volume, then the system drive. A reader
+    # of its own, not a call into the product's log.ps1: this collector must work on a guest whose
+    # product is broken. Join-Path turns 'C:' into 'C:\Qubes Logs', log.c's last step.
+    if (Test-Path -LiteralPath 'Q:\Qubes Logs') { return 'Q:\Qubes Logs' }
     $productDefault = Join-Path $env:SystemDrive 'Qubes Logs'
     if (Test-Path -LiteralPath $productDefault) { return $productDefault }
-    if (Test-Path -LiteralPath 'Q:\Qubes Logs') { return 'Q:\Qubes Logs' }
     return 'C:\Program Files\Qubes Tools\log'
 }
 

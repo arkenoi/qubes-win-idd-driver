@@ -57,9 +57,7 @@ blog_resolve(){
   # A MARKER, because a VMShell stream carries cmd's banner: the path is located by its prefix
   # rather than by being the only thing on the stream. -EncodedCommand for the same reason
   # blog_len uses it - no banner self-match, no cmd backslash mangling.
-  ps='$d = $null
-try { $d = (Get-ItemProperty "HKLM:\Software\Invisible Things Lab\Qubes Tools" -Name LogDir -EA Stop).LogDir } catch { }
-if (-not $d) { $d = (Join-Path $env:SystemDrive "Qubes Logs") }
+  ps='$d = & { . "C:\Program Files\Qubes Tools\bin\log.ps1"; Get-QwtLogDir }   # the one rule (docs/ADR-logging.md 1), asked of the installed log.ps1
 Write-Output ("BLOGPATH=" + (Join-Path $d "bridge.log"))'
   b64=$(printf '%s' "$ps" | iconv -f UTF-8 -t UTF-16LE | base64 -w0)
   for i in 1 2 3; do

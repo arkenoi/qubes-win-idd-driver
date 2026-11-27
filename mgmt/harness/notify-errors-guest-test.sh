@@ -333,9 +333,7 @@ if [ "$queued" = 1 ]; then
     else no "the deferred message is STILL queued after a proven reboot (${d2:-<unreadable>} left) - it was persisted and never delivered, so the loss became a stall instead of a drop"; fi
     # CORROBORATION ONLY: BLog opens bridge.log FILE_SHARE_READ and drops a line when two writers
     # collide (a0-lib.sh fwd_count records the measured casualties), so a missing line proves nothing.
-    dl=$(ps_probe DL '$d=$null
-try { $d = (Get-ItemProperty "HKLM:\Software\Invisible Things Lab\Qubes Tools" -Name LogDir -EA Stop).LogDir } catch { }
-if (-not $d) { $d = (Join-Path $env:SystemDrive "Qubes Logs") }
+    dl=$(ps_probe DL '$d = & { . "C:\Program Files\Qubes Tools\bin\log.ps1"; Get-QwtLogDir }   # the one rule (docs/ADR-logging.md 1), asked of the installed log.ps1
 $p = Join-Path $d "bridge.log"
 $n = 0
 if (Test-Path -LiteralPath $p) { $n = @(Select-String -LiteralPath $p -Pattern "defer-drain" -SimpleMatch -EA SilentlyContinue).Count }

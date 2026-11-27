@@ -29,9 +29,7 @@ $ErrorActionPreference = 'Continue'
 $sysKey = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
 $state  = Join-Path $env:ProgramData 'qubes-toast-bridge'
 $work   = Join-Path $env:ProgramData 'qwt-uac-on'
-$logDir = $null
-try { $logDir = (Get-ItemProperty 'HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools' -Name LogDir -ErrorAction Stop).LogDir } catch { }
-if (-not $logDir) { $logDir = Join-Path $env:SystemDrive 'Qubes Logs' }
+$logDir = & { . 'C:\Program Files\Qubes Tools\bin\log.ps1'; Get-QwtLogDir }   # the one rule (docs/ADR-logging.md 1), asked of the installed log.ps1
 $blog = Join-Path $logDir 'bridge.log'
 # notifhost.exe beside the RUNNING agent, which is where the agent itself starts it from (main.c, GetModuleFileName)
 $agentExe = @(Get-Process -Name 'gui-agent' -ErrorAction SilentlyContinue | ForEach-Object { $_.Path } | Where-Object { $_ })

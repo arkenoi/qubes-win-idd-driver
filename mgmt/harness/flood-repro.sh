@@ -105,9 +105,7 @@ L 'boot' $(if ($boot) { $boot.ToString('HH:mm:ss') } else { 'unreadable' })
 # bridge.log is in the COMMON log directory (qtb_shared.h BLog -> QwtLogDir, 7e349bac), not the
 # bridge's state directory. The constant this replaces meant Get-Content read nothing and every
 # count below came out 0 - a silent zero, which is the worst answer a probe can give.
-$bdir = $null
-try { $bdir = (Get-ItemProperty 'HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools' -Name LogDir -EA Stop).LogDir } catch { }
-if (-not $bdir) { $bdir = (Join-Path $env:SystemDrive 'Qubes Logs') }
+$bdir = & { . 'C:\Program Files\Qubes Tools\bin\log.ps1'; Get-QwtLogDir }   # the one rule (docs/ADR-logging.md 1), asked of the installed log.ps1
 $b = Join-Path $bdir 'bridge.log'
 L 'bridge_log' $b
 if (-not (Test-Path -LiteralPath $b)) { L 'bridge_log_missing' $b }

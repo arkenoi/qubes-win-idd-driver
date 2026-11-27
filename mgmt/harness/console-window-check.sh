@@ -59,9 +59,7 @@ vm_lock "$VM" 2>/dev/null || { echo "INSTRUMENT: $VM is held by another job - no
 # having read the log. So that record is the anchor: take the newest few logs by NAME (one file per
 # module per day, so there are not many), find the LAST Init in each, and read only what follows it.
 # No clock arithmetic anywhere, and the LogDir is resolved rather than hardcoded.
-PS='$d = $null
-try { $d = (Get-ItemProperty "HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools" -Name LogDir -EA Stop).LogDir } catch { }
-if (-not $d) { $d = (Join-Path $env:SystemDrive "Qubes Logs") }
+PS='$d = & { . "C:\Program Files\Qubes Tools\bin\log.ps1"; Get-QwtLogDir }   # the one rule (docs/ADR-logging.md 1), asked of the installed log.ps1
 $f = @(Get-ChildItem -LiteralPath $d -Filter "gui-agent-*.log" -ErrorAction SilentlyContinue |
        Sort-Object Name -Descending | Select-Object -First 1)
 Write-Output ("CWC-LOGS=" + $f.Count)

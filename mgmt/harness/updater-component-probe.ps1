@@ -17,11 +17,9 @@ $ilog  = 'C:\qwt-improved-install.log'
 # THE PASS'S LOGS ARE PER-DAY FILES IN THE ONE LOG DIRECTORY since 2026-11-01 (docs/ADR-logging.md): the updater's
 # qubes-windows-update.ps1-<yyyyMMdd>.log and the relay's qubes-updates-relay-<yyyyMMdd>.log, each named on the day its
 # process starts - so one pass can write a file that did not exist when the window opened. The directory is log.c's
-# rule: the registry LogDir, else <SystemDrive>\Qubes Logs. The old cumulative files are read SECOND: an updater from
+# rule: the registry LogDir, else Q:\Qubes Logs, else <SystemDrive>\Qubes Logs. The old cumulative files are read SECOND: an updater from
 # before the move still writes them, and on an upgraded guest they stay, frozen.
-$logDir = $null
-try { $logDir = (Get-ItemProperty 'HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools' -Name LogDir -ErrorAction Stop).LogDir } catch { }
-if (-not $logDir) { $logDir = Join-Path $env:SystemDrive 'Qubes Logs' }
+$logDir = & { . 'C:\Program Files\Qubes Tools\bin\log.ps1'; Get-QwtLogDir }   # the one rule (docs/ADR-logging.md 1), asked of the installed log.ps1
 $work  = 'C:\ProgramData\Qubes\wu'
 $aOld  = Join-Path $work 'agent.log'
 $rOld  = Join-Path $work 'qubes-updates-relay.log'

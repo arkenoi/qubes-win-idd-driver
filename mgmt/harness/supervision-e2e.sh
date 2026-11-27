@@ -195,10 +195,8 @@ L 'netvm' ((& "$bin\qubesdb-read.exe" '/netvm' 2>&1 | Out-String).Trim())
 # the boot run's own judgement of the PREVIOUS session - the end-to-end signal, written where a task can finish. Since
 # 2026-11-01 the boot run logs to <LogDir>\pvnic-boot.ps1-<yyyyMMdd>.log (docs/ADR-logging.md): the newest such line
 # across those files in name (= date) order; C:\ProgramData\QubesPvNic.log, where an older payload wrote it, only when
-# they hold none. The directory is log.c's rule: the registry LogDir, else <SystemDrive>\Qubes Logs.
-$ld = $null
-try { $ld = (Get-ItemProperty 'HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools' -Name LogDir -EA Stop).LogDir } catch { }
-if (-not $ld) { $ld = Join-Path $env:SystemDrive 'Qubes Logs' }
+# they hold none. The directory is log.c's rule: the registry LogDir, else Q:\Qubes Logs, else <SystemDrive>\Qubes Logs.
+$ld = & { . 'C:\Program Files\Qubes Tools\bin\log.ps1'; Get-QwtLogDir }   # the one rule (docs/ADR-logging.md 1), asked of the installed log.ps1
 $bj = @(Get-ChildItem -LiteralPath $ld -Filter 'pvnic-boot.ps1-*.log' -File -EA SilentlyContinue | Sort-Object Name |
         ForEach-Object { Get-Content -LiteralPath $_.FullName -EA SilentlyContinue } |
         Where-Object { $_ -match 'shutdown re-arm:' } | Select-Object -Last 1)
@@ -482,9 +480,7 @@ $dir = 'C:\ProgramData\Qubes'
 # sat beside qwt-deaths.log in the log directory, where a reporter from before the move still keeps it - read second.
 $wm = "$dir\qwt-death-watermark.json"
 if (-not (Test-Path $wm)) {
-    $ld = $null
-    try { $ld = (Get-ItemProperty 'HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools' -Name LogDir -EA Stop).LogDir } catch { }
-    if (-not $ld) { $ld = Join-Path $env:SystemDrive 'Qubes Logs' }
+    $ld = & { . 'C:\Program Files\Qubes Tools\bin\log.ps1'; Get-QwtLogDir }   # the one rule (docs/ADR-logging.md 1), asked of the installed log.ps1
     if (Test-Path (Join-Path $ld 'qwt-death-watermark.json')) { $wm = Join-Path $ld 'qwt-death-watermark.json' }
 }
 L 'watermark_path' $wm
