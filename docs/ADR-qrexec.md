@@ -105,11 +105,18 @@ entered the ring ahead of the hello (#6).
 **Decision.** The accept thread is created suspended. The agent resumes it when the daemon has connected and
 the hello is in the ring. Until then the pipe does not exist, and a caller's connect fails with "not found".
 A resume that fails is logged as an error and leaves it that way: calls from dom0 are still served.
+The agent starts advertise-tools, whose qrexec-client-vm opens this pipe, only after the pipe's first instance
+exists: the accept loop sets an event when it has created it (winutils QpsMainLoopEx), and the agent waits for
+that event, the accept thread's end or a stop, with no time limit, before the launch.
 
 **Why.** The Linux agent listens only after its handshake.
 
 **Cost.** A program that calls before dom0's daemon has connected gets an error where it got exit code 0 and
 no call (§7.7). The window is the same one in which the agent service has not started yet, a little longer.
+Between the resume and the pipe's first instance, the agent's main loop waits there, and calls from dom0 wait
+with it. The accept loop creates the pipe as its first step; only a thread start-up or a CreateNamedPipe that
+never returns, which the code cannot see, would make that wait last. qrexec-agent.exe needs the
+windows-utils.dll of the same build.
 
 **Evidence.** On one guest, three boots of the build: the agent logged "hello sent to the daemon: the trigger
 pipe opens for calls made inside the qube" once per boot, and the first call made inside the qube came 0.5 s
