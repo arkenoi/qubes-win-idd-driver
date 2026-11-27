@@ -1349,7 +1349,7 @@ function Install-ViaWU {
     # measured bursts every ~3.5 s with idle gaps, while each connection sustained ~840 KB/s.
     try { $downloader.Priority = 3 } catch { Log '  (downloader does not accept Priority)' }
     Log "WU: downloading $($coll.Count) update(s) through the proxy"
-    $dres = $downloader.Download()
+    $dres = Invoke-WuQueued 'the Windows Update download' { $downloader.Download() }
     Log "WU: download ResultCode=$($dres.ResultCode) HResult=$($dres.HResult)"
 
     # Install only what actually downloaded; asking WU to install a missing payload just fails.
@@ -1360,7 +1360,7 @@ function Install-ViaWU {
     $script:St.phase='install'; Save
     $installer = $session.CreateUpdateInstaller(); $installer.Updates = $ready
     Log "WU: installing $($ready.Count) update(s)"
-    $ires = $installer.Install()
+    $ires = Invoke-WuQueued 'the Windows Update install' { $installer.Install() }
     Log "WU: install ResultCode=$($ires.ResultCode) RebootRequired=$($ires.RebootRequired)"
     if ($ires.RebootRequired) { $script:St.reboot_needed = $true }
 
@@ -2053,6 +2053,47 @@ function Get-CbsPackageStates {
   }
 }
 # ---- WU-CBS-READ-END
+# THIS PASS QUEUES BEHIND WINDOWS' OWN UPDATE WORK, then tries once more, before a refusal becomes a failure the user is told
+# (owner 2026-11-27: «make sure WE wait until uso task finishes and we retry before delivering update failure to user»).
+# The agent itself queues SEARCHES - measured on win11de-up 2026-11-27, our scan and Windows' overlapped in both orders and
+# both completed - so the waits sit before an agent download or install and after a refusal. A refusal is named by its
+# HRESULT, never by its localized text: 0x80240009 WU_E_OPERATIONINPROGRESS, 0x80240016 WU_E_INSTALL_NOT_ALLOWED,
+# 0x8024001B WU_E_SELFUPDATE_IN_PROGRESS.
+$script:WuBusyPattern = '8024(0009|0016|001B)'
+$script:WuIdleWaitSec = 1200   # the dom0 call waits up to 2 h for a pass (wu-update.ps1); 20 min covers a Settings-started install
+$script:WuBusyRetried = $null  # seconds the last retry waited, for the reason dom0 is given when the retry is refused too
+# Three exits, each logged: free (the agent's installer is not busy and, with -Uso, the orchestrator's worker has exited); a
+# restart is needed before any install, which waiting cannot clear; the deadline - then the call goes ahead and its own
+# result decides. An installer state that cannot be read is said and not waited on.
+function Wait-WuIdle([string]$why, [switch]$Uso) {
+  $t0 = Get-Date; $said = $false
+  while ($true) {
+    $busy = $null; $rbi = $false
+    try { $i = (New-Object -ComObject Microsoft.Update.Session).CreateUpdateInstaller(); $busy = [bool]$i.IsBusy; $rbi = [bool]$i.RebootRequiredBeforeInstallation }
+    catch { Log "WUWAIT $why`: the installer's state could not be read ($(("$($_.Exception.Message)" -replace "`r|`n", ' ').Trim())) - not waiting" 'WARN'; return 0 }
+    $uso = if ($Uso) { @(Get-Process -Name MoUsoCoreWorker, usoclient, wuauclt -EA SilentlyContinue) } else { @() }
+    $secs = [int]((Get-Date) - $t0).TotalSeconds
+    if (-not $busy -and $uso.Count -eq 0) { if ($said) { Log "WUWAIT $why`: Windows Update is free after $secs s" }; return $secs }
+    if ($rbi) { Log "WUWAIT $why`: Windows needs a restart before any install, which waiting cannot clear: $(Get-WuBusyState)" 'WARN'; return $secs }
+    if ($secs -ge $script:WuIdleWaitSec) { Log "WUWAIT $why`: still held after $secs s, going ahead: $(Get-WuBusyState)" 'WARN'; return $secs }
+    if (-not $said) { Log "WUWAIT $why`: Windows' own update work holds Windows Update, this pass waits for it: $(Get-WuBusyState)"; $said = $true }
+    Start-Sleep -Seconds 3
+  }
+}
+# One agent call (a download or an install), queued: wait while the installer is busy, run it, and on a busy refusal wait for
+# Windows' own update work to finish and run it once more. A second refusal throws to the pass's catch, which names it.
+function Invoke-WuQueued([string]$what, [scriptblock]$op) {
+  [void](Wait-WuIdle $what)
+  try { return (& $op) }
+  catch {
+    # A COM method's failure arrives wrapped (MethodInvocationException, 0x80131604); the agent's HRESULT is the inner one's.
+    $hr = '0x{0:X8}' -f $(if ($_.Exception.InnerException) { $_.Exception.InnerException.HResult } else { $_.Exception.HResult })
+    if ("$hr $($_.Exception.Message)" -notmatch $script:WuBusyPattern) { throw }
+    Log "WUBUSY $what refused with $hr`: another Windows Update operation holds the agent - waiting for it, then once more"
+    $script:WuBusyRetried = Wait-WuIdle $what -Uso
+    return (& $op)
+  }
+}
 
 # ---- WU-CUMULATIVE-REGISTERED-BEGIN   (tools/tests/wu-cumulative-order-test.ps1 runs this region)
 # DID WINDOWS REGISTER THE CUMULATIVE DISM ACCEPTED? DISM's rc=3010 is not the answer: measured 2026-10-03/04 on the reporter's German 25H2
@@ -2592,6 +2633,22 @@ function Install-ViaAgentCache($u){
   foreach($f in $files){ $rows += [ordered]@{ kb=$label; file=$f.file; bytes=$f.bytes; leaf=$f.leaf; rc=$(if($f.rc){ $f.rc } else { $agentRc }); ok=$ok; verified_by_effect=[bool]$eff; probe=$probe; severity=$sev; info_reason=$reason; already_current=[bool]$alreadyCurrent } }
   return [ordered]@{ kb=$label; ok=$ok; state=$state; files=@($rows); rc=$agentRc; hresult=$(if($hr){ $hr } else { $null }); verified_by_effect=[bool]$eff; probe=$probe; already_current=[bool]$alreadyCurrent; severity=$sev; reason=$reason }
 }
+# Install-ViaAgentCache, queued behind Windows' own update work (Wait-WuIdle says why). Its row carries the agent's HRESULT and,
+# when the installer threw, the exception text, so a busy refusal is read off the row; the install is then asked once more and a
+# second refusal says that it waited.
+function Install-ViaAgentCacheQueued($u){
+  $what = "the agent's install of $(if($u.kb){ $u.kb } else { $u.title })"
+  [void](Wait-WuIdle $what)
+  $row = Install-ViaAgentCache $u
+  if($row.ok -or "$($row.hresult) $($row.reason)" -notmatch $script:WuBusyPattern){ return $row }
+  Log "WUBUSY $what refused: another Windows Update operation holds the agent - waiting for it, then once more"
+  $secs = Wait-WuIdle $what -Uso
+  $row = Install-ViaAgentCache $u
+  if(-not $row.ok -and "$($row.hresult) $($row.reason)" -match $script:WuBusyPattern){
+    $row.reason = "$($row.reason) - refused again after this pass waited $secs s for Windows' own update work and tried once more"
+  }
+  return $row
+}
 
 # ---- WU-INSTALL-MSUS-BEGIN   (tools/tests/wu-cumulative-order-test.ps1 runs this function with DISM, the settle and the package list stood in)
 function Install-Msus($files){
@@ -2981,7 +3038,8 @@ function Get-QubesDbValue([string]$path) {
   # WHICH CALL OF INIT A STALLED PASS IS IN, ON THE RECORD (forum 42717 post 246: two passes saved phase 'init' and wrote no line).
   # The compile below and the qdb_open after it are the only calls of init without a bound, and his logs cannot tell them apart,
   # so each one is published as its own phase first - dom0's "update did not complete (last phase: ...)" then names it. This
-  # reader is called only by Get-QubesVmClass, and that only in init, which the caller restores after the read.
+  # reader is called only in init - by Get-QubesVmClass and for service.updates-dom0only right after it - and the caller
+  # restores the phase after both reads.
   try {
     if (-not ('QubesDb' -as [type])) {
       $script:St.phase = 'init-compile'; Save
@@ -3075,6 +3133,11 @@ function Get-WuAutoRestartCause($Au, $Wu, $Mdm) {
   return $c
 }
 $vmClassLive = Get-QubesVmClass
+# service.updates-dom0only (owner 2026-11-27: «make the loopback and uso disabling configurable with one updates-dom0only
+# setting, default off»). On: Windows' own scans are stopped where dom0 drives updates - the orchestrator tasks off at the
+# start and end of every pass, and the dead managed server (Set-WuDeadServer). Off, the default: both are left to Windows,
+# and what an earlier pass set is undone; NoAutoUpdate=1 stays either way, so Windows still installs nothing by itself.
+$dom0Only = ("$(Get-QubesDbValue '/qubes-service/updates-dom0only')".Trim() -in @('1', 'true'))
 $script:St.phase = 'init'; Save   # the reader's own sub-phases end with the read (Get-QubesDbValue)
 if (-not $vmClassLive) {
   # qubesdb is the authority and is reliably readable (qubesdb-client.dll is in SYSTEM32). If we
@@ -3095,7 +3158,8 @@ $wuAuKey = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU'
 # 2026-09-30), holding Windows Update while our pass needed it (forum post 247: «falsely claiming another update is
 # running»). Owner 2026-09-30: «updates should be off unconditionally except maybe standalonevms». Every task in that folder
 # is set on every pass, so a task Windows turns back on is turned off again by the next one. wuauserv and UsoSvc are left
-# as they are: our pass drives the Windows Update Agent itself.
+# as they are: our pass drives the Windows Update Agent itself. Since 2026-11-27 this is the qube's choice, not unconditional:
+# only service.updates-dom0only on sets the tasks off (owner: «configurable with one updates-dom0only setting, default off»).
 # THE END STATE DECIDES, NOT THE EXCEPTION. rel-45847660698 updater-component (win11de-uc, a TemplateVM): Disable-ScheduledTask
 # threw "Element nicht gefunden." for StartOobeAppsScanAfterUpdate, and this logged that Windows "still runs" it - a claim no
 # measurement made. The folder is listed again after the attempts: a task gone from it is INFO, a task still not set is the
@@ -3145,7 +3209,8 @@ function Set-WuDeadServer([bool]$On) {
   $au = Get-ItemProperty -LiteralPath $wuAuKey -EA SilentlyContinue
   $ours = ($wu.WUServer -eq $script:WuDeadServer)
   if ($wu.WUServer -and -not $ours) {
-    Log "WUDEADSERVER left as it is: this guest names its own managed update server (WUServer=$($wu.WUServer) UseWUServer=$($au.UseWUServer)), so Windows' own scans go there" 'ERROR'
+    # Said only when the dead server was asked for: with service.updates-dom0only off a managed server is none of ours.
+    if ($On) { Log "WUDEADSERVER left as it is: this guest names its own managed update server (WUServer=$($wu.WUServer) UseWUServer=$($au.UseWUServer)), so Windows' own scans go there" 'ERROR' }
     return
   }
   if ($On) {
@@ -3186,8 +3251,17 @@ if ($selfUpdating) {
   # a template made from such a standalone kept Windows' own automatic updating ON, and so did every AppVM and DispVM booted
   # from it - against dom0 owning every install. On those classes it is the installer's value (install-updater-agent step 9)
   # and is restored here. An offline StandaloneVM is left as it is: it updates itself when it has a route.
-  Set-UsoTasks $false
-  Set-WuDeadServer $true
+  # Windows' own SCANS are the qube's service.updates-dom0only choice (read in init, beside the class); off undoes only what
+  # this updater set - the tasks it listed in UsoTasksDisabled and its own dead-server values.
+  if ($dom0Only) {
+    Log "UPDATES-DOM0ONLY on: Windows' own update scans are stopped here - orchestrator tasks off, dead managed server named"
+    Set-UsoTasks $false
+    Set-WuDeadServer $true
+  } else {
+    Log "UPDATES-DOM0ONLY off (the default): Windows' own update scans are left to Windows; NoAutoUpdate=1 keeps every install dom0's, and this pass waits behind Windows' own update work"
+    Set-UsoTasks $true
+    Set-WuDeadServer $false
+  }
   if ((Get-ItemProperty -LiteralPath $wuAuKey -Name NoAutoUpdate -EA SilentlyContinue).NoAutoUpdate -ne 1) {
     try {
       & { $ErrorActionPreference = 'Stop'; SetV $wuAuKey 'NoAutoUpdate' 1 'DWord' }
@@ -3592,7 +3666,7 @@ try {
         $nokbUrls = @(@($u.direct_urls) | Where-Object { $_ })
         if($nokbUrls.Count -gt 0 -and $Action -in 'install','full'){
           Log "no KB but $($nokbUrls.Count) static content URL(s) - installing through the agent's own installer: $nokb"
-          $script:St.result += (Install-ViaAgentCache $u)
+          $script:St.result += (Install-ViaAgentCacheQueued $u)
           Save
           continue
         }
@@ -3738,7 +3812,7 @@ try {
             # ran itself, with '/q', until 2026-10-03.
             Log "$($u.kb): not in the catalog; Windows Update offers it as static content - the agent's installer installs it from content supplied through the proxy (no DO/BITS/NLA)"
             $script:St.phase='install'; Save
-            $arow = Install-ViaAgentCache $u
+            $arow = Install-ViaAgentCacheQueued $u
             $script:St.result += $arow
             Save
             Log "$($u.kb): agent-cache install ok=$($arow.ok) state=$($arow.state)"
@@ -4161,11 +4235,13 @@ try {
     # ANOTHER OPERATION HOLDS WINDOWS UPDATE, said so by name instead of as a bare HRESULT: 0x80240009 WU_E_OPERATIONINPROGRESS,
     # 0x80240016 WU_E_INSTALL_NOT_ALLOWED (another installation in progress, or a mandatory restart pending), 0x8024001B
     # WU_E_SELFUPDATE_IN_PROGRESS (Microsoft's WUA error reference). The holder is not ours - our mutex admits one pass - so the
-    # facts read now go with it. No retry: the next pass dom0 starts meets whatever state is there then.
+    # facts read now go with it. A download or install that reaches here was already queued and asked twice (Invoke-WuQueued);
+    # what reaches here otherwise was not an agent call this pass queues.
     $busyName = switch -Regex ($msg) { '80240009' { 'WU_E_OPERATIONINPROGRESS' } '80240016' { 'WU_E_INSTALL_NOT_ALLOWED' } default { 'WU_E_SELFUPDATE_IN_PROGRESS' } }
+    $busyRetry = if ($null -ne $script:WuBusyRetried) { "This pass waited $($script:WuBusyRetried) s for that operation to finish and tried once more, and was refused again" } else { 'Nothing is retried' }
     $script:St.error = ("Windows Update refused this pass with ${busyName}: another Windows Update operation holds it (Windows' own " +
       "orchestrator, Settings or Defender - not this updater, which runs one pass at a time), or Windows needs a restart first. " +
-      "At that moment: " + (Get-WuBusyState) + ". Nothing is retried; the next pass dom0 starts reads the state again")
+      "At that moment: " + (Get-WuBusyState) + ". $busyRetry; the next pass dom0 starts reads the state again")
     Save
     Log $script:St.error
   }
@@ -4186,7 +4262,8 @@ try {
   # 2026-11-27: «keep disabling USO at the beginning and at the end of every our update task. just to minimize the possible
   # residue». Windows turns them back on within minutes (USOTASKSREENABLEDBYWINDOWS); a pass that ran long leaves them as it
   # found them at its start. WUDEADSERVER is what makes a task Windows re-enabled harmless; this narrows the window.
-  if (-not $selfUpdating -and $vmClassLive -ne 'StandaloneVM') {
+  # Only where service.updates-dom0only is on: off, the tasks are Windows' own.
+  if ($dom0Only -and -not $selfUpdating -and $vmClassLive -ne 'StandaloneVM') {
     try { Set-UsoTasks $false } catch { Log "USOTASKS could not be set off as the pass ends: $($_.Exception.Message)" 'ERROR' }
   }
   if ($script:HaveMutex) { try { $script:Mutex.ReleaseMutex() } catch {} }
