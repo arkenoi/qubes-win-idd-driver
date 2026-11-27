@@ -1669,7 +1669,7 @@ function Register-QwtDeathReporter {
         $ourServices = @('QubesDB daemon', 'Qubes RPC agent', 'Qubes GUI agent watchdog', 'Qubes PV NIC address applier')
         $ourTasks = @('\Qubes-WgcBroker', '\Qubes-NotifBridge', '\QubesPvNic', '\QubesPvNicRearm', '\QubesNetworkReapply',
                       '\QubesQuietDesktopGuard', '\QubesAutologonGuard', '\QubesWindowsUpdateScan', '\QubesWindowsUpdateRun',
-                      '\QubesWindowsUpdateDownload', '\QwtImprovedSetup', '\QubesUpdatesRelay')
+                      '\QubesWindowsUpdateDownload', '\QwtImprovedSetup', '\QubesUpdatesRelay', '\QubesWindowsUpdateHint')
         # Neither the reporter NOR its catch-up is in that list: a reporter that fails must not trigger itself, and the
         # catch-up's own 201/203 would do exactly that through the other task (2026-10-07).
         # TASK SCHEDULER REJECTS A SELECT WHOSE OR-LIST IS TOO LONG: "ERROR: The specified query is invalid." Measured 2026-10-04 on
@@ -3788,7 +3788,7 @@ function Invoke-Stage2 {
     # QubesUpdatesRelay too: on a template the permanent relay (ADR-updater 12.4 point 3) runs from boot with windows-utils.dll
     # and qubesdb-client.dll loaded - both MSI-installed - so the Restart Manager would reap it the same way. The updater deploy
     # registers and starts it again; the Fail path re-enables it with the others.
-    foreach ($t in @('QubesWindowsUpdateScan', 'QubesWindowsUpdateRun', 'QubesWindowsUpdateDownload', 'QubesUpdatesRelay')) {
+    foreach ($t in @('QubesWindowsUpdateScan', 'QubesWindowsUpdateRun', 'QubesWindowsUpdateDownload', 'QubesUpdatesRelay', 'QubesWindowsUpdateHint')) {
         # ASK WHETHER THE TASK IS THERE, because without that answer the two failures below are the
         # same failure. Until 2026-11-08 `absent` was written whenever /end and /disable BOTH failed,
         # and that is two opposite facts in one word: a clean install with no task yet (benign, and

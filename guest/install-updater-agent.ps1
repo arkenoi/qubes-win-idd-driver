@@ -301,7 +301,7 @@ if ($updPrev -and $updPrev.phase -and ($UpdTerminalPhases -notcontains $updPrev.
 # they do not exist yet and every call below is a no-op.
 # QubesUpdatesRelay too: the installer disables it before msiexec with the others (UPDTASKPRESTOP), and a deploy that throws
 # before step 7b registers it again must still hand it back enabled - the trap below re-enables what this list gated.
-$UpdTasks = @('QubesWindowsUpdateScan','QubesWindowsUpdateRun','QubesWindowsUpdateDownload','QubesUpdatesRelay')
+$UpdTasks = @('QubesWindowsUpdateScan','QubesWindowsUpdateRun','QubesWindowsUpdateDownload','QubesUpdatesRelay','QubesWindowsUpdateHint')
 $updGated = @()
 function Set-UpdTaskState([string]$name, [string]$how) {
     # schtasks, not Disable-ScheduledTask: this runs on guests where the cmdlet set has been
@@ -758,6 +758,38 @@ $f = Join-Path $env:TEMP 'qubes-wu-scan.xml'
 $o = & schtasks /create /tn QubesWindowsUpdateScan /xml "$f" /f 2>&1
 Log ("REGISTER QubesWindowsUpdateScan rc=$LASTEXITCODE : " + ($o -join ' '))
 if ($LASTEXITCODE -ne 0) { throw "schtasks register failed (rc=$LASTEXITCODE)" }
+
+# 3b. THE APPVM'S UPDATE HINT (docs/ADR-updater.md section 1). QubesWindowsUpdateHint runs the agent with -Action hint each time
+#     Windows Update records a finished search (WindowsUpdateClient/Operational 26). It is registered on this root, so it exists
+#     in the template and in every AppVM and DispVM made from it; the agent leaves at once anywhere but an AppVM or a DispVM, and
+#     there it only reads what Windows' own scan found and tells dom0. No -Scheduled: the debounce is the scan task's alone.
+#     IgnoreNew: one read answers for every search that finished before it. PT5M: an offline search and one qrexec call.
+$hintQuery = '<QueryList><Query Id="0" Path="Microsoft-Windows-WindowsUpdateClient/Operational"><Select Path="Microsoft-Windows-WindowsUpdateClient/Operational">*[System[EventID=26]]</Select></Query></QueryList>'
+$hintArgs = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$agent`" -Action hint"
+$hintXml = @"
+<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo><Description>QWT-NG: in an AppVM or a DispVM, tell dom0 what Windows' own update scan found, for the template (does nothing in a template)</Description></RegistrationInfo>
+  <Triggers>
+    <EventTrigger><Enabled>true</Enabled><Subscription>$([Security.SecurityElement]::Escape($hintQuery))</Subscription></EventTrigger>
+  </Triggers>
+  <Principals><Principal id="Author"><UserId>S-1-5-18</UserId><RunLevel>HighestAvailable</RunLevel></Principal></Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <StartWhenAvailable>false</StartWhenAvailable>
+    <ExecutionTimeLimit>PT5M</ExecutionTimeLimit>
+    <AllowHardTerminate>true</AllowHardTerminate>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+  </Settings>
+  <Actions Context="Author"><Exec><Command>powershell.exe</Command><Arguments>$([Security.SecurityElement]::Escape($hintArgs))</Arguments></Exec></Actions>
+</Task>
+"@
+$fh = Join-Path $env:TEMP 'qubes-wu-hint.xml'
+[IO.File]::WriteAllText($fh, $hintXml, [Text.Encoding]::Unicode)
+$o = & schtasks /create /tn QubesWindowsUpdateHint /xml "$fh" /f 2>&1
+Log ("REGISTER QubesWindowsUpdateHint rc=$LASTEXITCODE : " + ($o -join ' '))
+if ($LASTEXITCODE -ne 0) { throw "schtasks register (hint task) failed (rc=$LASTEXITCODE)" }
 
 # 4. the dom0-DRIVEN update path, Linux-updater style (update runs only when dom0 asks):
 #    - QubesWindowsUpdateRun: on-demand SYSTEM task running `-Action full` (rpc handlers are

@@ -108,10 +108,35 @@ Where the details live:
 
 **Decision.** Guest auto-update is off (`NoAutoUpdate=1`). dom0 drives every install. The guest reports
 availability to dom0 over `qubes.NotifyUpdates`. A guest with no netvm reaches Windows Update only through
-`qubes.UpdatesProxy`, and only while a pass is running.
+`qubes.UpdatesProxy`, through the template's relay, which serves update processes and winget only (§18).
+
+`NoAutoUpdate=1` stops automatic installs only. Windows' update orchestrator still scans on its own, and those
+scans are left to Windows. A pass queues behind Windows' own update work: before an agent download or install it
+waits while Windows' installer is busy, and when the agent refuses it as busy it waits for that work to end and
+asks once more, before the refusal becomes a failure the user is told (owner 2026-11-27: «make sure WE wait until
+uso task finishes and we retry before delivering update failure to user»; «reliable coexistence is sufficient»).
+
+An AppVM or a DispVM runs no update pass. Each time Windows' own scan in it finishes, it reads that scan's result
+with an offline search, counts it as the template's report counts it, and reports the count to dom0 over
+`qubes.NotifyUpdates`, as a Linux AppVM reports for its template. It searches nothing itself and starts no proxy
+or relay; a result it cannot read is not reported, and never fails as a task (owner 2026-11-27: «we did not want
+appvms to run full update passes and fail but if we have cheap scan that runs by default thats a blessing»).
+
+How it is built: the `QubesWindowsUpdateHint` task, registered on the template's root and so present in every qube
+made from it, runs `qubes-windows-update.ps1 -Action hint` on each WindowsUpdateClient/Operational event 26 (a
+finished search). The agent leaves at once in a template or a StandaloneVM - before it saves the status, takes the
+mutex or touches its work directory - because those report for themselves. In an AppVM or a DispVM it requires an
+event 26 since the qube started, reads the result with `Online=$false`, leaves out definition updates (§2 point 6)
+and the offers the template's last pass recorded satisfied or without a route (the qube started with that record,
+and its own scan task carries it forward), and sends the count over `qubes.NotifyUpdates`.
 
 **Why.** This is the Qubes model: the admin decides when a template changes, and a template with no netvm
-cannot be left to update itself.
+cannot be left to update itself. An AppVM's report costs no search of ours: Windows' own scan has already fetched
+what it reads.
+
+**Cost.** Windows' own scans reach Windows Update outside dom0's passes. A dom0 update that meets an install
+Windows is already running waits for it, up to about 3 minutes, and tries once more. An AppVM reports only when
+Windows' own scan runs in it, on Windows' schedule.
 
 ## 2. The invariant: dom0's reported state must be true
 
@@ -478,7 +503,7 @@ behind it are in `findings/updates.md` and `findings/issues.md`.
 | the pass | `guest/qubes-windows-update.ps1` | one scan or install pass; passes are serialized by the updater mutex (a second one refuses, `QWTUPDMUTEXHELD`) |
 | the relay | `guest/qubes-updates-relay.cs` | the pass's only way out: `127.0.0.1:8082` -> `qubes.UpdatesProxy`; serves sanctioned hosts, refuses others with a final 403 (§4) |
 | the dom0 handler | `guest/wu-update.ps1` | dom0's `qubes-vm-update` entry point: kicks the pass's task, tails `update-status.json`, cleans up after a pass that was killed |
-| the scheduled tasks | `QubesWindowsUpdateScan` / `...Run` | the boot-time and periodic scan; the install pass dom0 asks for |
+| the scheduled tasks | `QubesWindowsUpdateScan` / `...Run` / `...Hint` | the boot-time and periodic scan; the install pass dom0 asks for; an AppVM's report of what Windows' own scan found (§1) |
 | the installer | `guest/install-updater-agent.ps1` | installs or upgrades the above (compiles the relay in place) |
 
 ### 12.2 Install routes

@@ -248,7 +248,7 @@ $script:QwtDeathHelperTasks = @{ '\Qubes-WgcBroker' = 'wgcbroker.exe'; '\Qubes-N
 # tasks whose action is a script of ours (a non-zero 201 or a 203 is a death of its own)
 $script:QwtDeathScriptTasks = @('\QubesPvNic', '\QubesPvNicRearm', '\QubesNetworkReapply', '\QubesQuietDesktopGuard',
                                 '\QubesAutologonGuard', '\QubesWindowsUpdateScan', '\QubesWindowsUpdateRun',
-                                '\QubesWindowsUpdateDownload', '\QwtImprovedSetup', '\QubesUpdatesRelay')
+                                '\QubesWindowsUpdateDownload', '\QwtImprovedSetup', '\QubesUpdatesRelay', '\QubesWindowsUpdateHint')
 # each script task's MACHINE ID (the route component, in the same style as the executables'), its HUMAN NAME, and what its
 # failure means (line 1) - from the tasks' own registrations (their <Description>), cut to the consequence (owner
 # 2026-10-10). What the lines used to carry: QubesPvNic's log is <LogDir>\pvnic-boot.ps1-<yyyyMMdd>.log and names the step, and a
@@ -266,6 +266,7 @@ $script:QwtDeathTaskNames = @{
     '\QubesWindowsUpdateRun'      = @{ id = 'update-run';      human = 'Windows Update install task';   impact = 'The dom0 update run fails.'; action = 'full' }
     '\QubesWindowsUpdateDownload' = @{ id = 'update-download'; human = 'Windows Update download task';  impact = 'The dom0 update run fails.'; action = 'download' }
     '\QwtImprovedSetup'           = @{ id = 'qwt-setup';       human = 'Qubes Tools setup task';        impact = 'The install may be unfinished.' }
+    '\QubesWindowsUpdateHint'     = @{ id = 'update-hint';     human = 'Windows Update hint task';      impact = 'dom0 is not told what Windows found for the template.' }
     '\QubesUpdatesRelay'          = @{ id = 'updates-relay';   human = 'template updates relay';        impact = 'winget and Windows Update on this template have no proxy until the next update pass starts the relay.' }
 }
 # THE UPDATE PASS'S OWN REASON (findings/issues.md WUSCANTASKFAILSANDLOGSNOTHING; GWeck's post 175, docs/GWECK-STATUS.md 28(f)).

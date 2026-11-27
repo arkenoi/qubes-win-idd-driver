@@ -20,11 +20,11 @@
   dom0 reporting (qubes.NotifyUpdates + a progress channel) is a thin layer on top of the status
   file - added once the dom0 policy is placed.
 
-.PARAMETER Action  scan | download | install | full
+.PARAMETER Action  scan | download | install | full | hint (an AppVM's report of what Windows' own scan found, ADR-updater 1)
 #>
 [CmdletBinding()]
 param(
-  [ValidateSet('scan','resolve','download','install','full','wuinstall')][string]$Action = 'scan',
+  [ValidateSet('scan','resolve','download','install','full','wuinstall','hint')][string]$Action = 'scan',
   [string]$Proxy      = 'http://127.0.0.1:8082',
   # Accepted from the callers that still pass it (the scan task's action, the wu-* probes) and not used: the pass starts no relay,
   # it serves through the template's permanent relay (ADR-updater 12.4 point 3).
@@ -214,6 +214,63 @@ function Log($m, $lvl){
   # has to notice.
   $script:LogDropped++
 }
+
+# ---- AN APPVM'S UPDATE HINT (docs/ADR-updater.md section 1). -Action hint is the QubesWindowsUpdateHint task's: Windows Update's
+# own "found N updates" record (WindowsUpdateClient/Operational 26) starts it in every qube made from this root, a template's
+# own searches included. A template and a StandaloneVM report for themselves, so the hint leaves at once there. In an AppVM or
+# a DispVM it runs HERE, read-only, before anything below saves the status, takes the mutex or touches the work directory: it
+# searches nothing (Online=$false reads the result Windows' scan stored - no proxy, no relay, no network of ours), counts that
+# result the way the template's report counts it - a definition update never counts (section 2 point 6), nor an offer the
+# template's last pass recorded satisfied or without a route - and tells dom0 over qubes.NotifyUpdates, as a Linux AppVM does
+# for its template. The functions that rule lives in are defined below the status object, so the few lines of it this needs
+# are repeated here (Get-WuClassifications, Get-OfferRouteKey, Report-Availability). Every outcome exits 0: a result it cannot
+# read is a line in this log, never a failed task.
+if ($Action -eq 'hint') {
+  $hintClass = $null
+  try { . (Join-Path $PSScriptRoot 'qwt-notify-error.ps1'); $hintClass = Get-QwtNotifyQubesDbValue '/type' } catch { $hintClass = $null }
+  if (-not $hintClass) { Log "hint: this qube's class could not be read from qubesdb - nothing is reported" 'WARN'; exit 0 }
+  if (@('AppVM', 'DispVM') -notcontains $hintClass) { exit 0 }
+  try {
+    $hintBoot = (Get-CimInstance Win32_OperatingSystem -EA Stop).LastBootUpTime
+    $hintScan = Get-WinEvent -FilterHashtable @{ LogName = 'Microsoft-Windows-WindowsUpdateClient/Operational'; Id = 26; StartTime = $hintBoot } -MaxEvents 1 -EA SilentlyContinue
+    if (-not $hintScan) {
+      Log "hint: $hintClass - no Windows Update scan has finished in this qube since it started ($($hintBoot.ToString('s'))); nothing is reported"
+      exit 0
+    }
+    $hintSat = @(); $hintUnr = @()
+    if ($script:PrevStatus) {
+      $hintKeys = @($script:PrevStatus.PSObject.Properties.Name)
+      if (($hintKeys -contains 'satisfied') -and ($hintKeys -contains 'satisfied_rule') -and "$($script:PrevStatus.satisfied_rule)" -eq 'installed') {
+        $hintSat = @($script:PrevStatus.satisfied | Where-Object { $_ })
+      }
+      if ($hintKeys -contains 'unroutable') { $hintUnr = @($script:PrevStatus.unroutable | Where-Object { $_ }) }
+    }
+    $hintSe = (New-Object -ComObject Microsoft.Update.Session).CreateUpdateSearcher(); $hintSe.ServerSelection = 2; $hintSe.Online = $false
+    $hintRes = $hintSe.Search('IsInstalled=0 and IsHidden=0')
+    $hintAll = 0; $hintCount = 0
+    foreach ($u in $hintRes.Updates) {
+      $hintAll++
+      $hintDef = $false
+      try {
+        foreach ($c in $u.Categories) {
+          if ("$($c.Type)" -eq 'UpdateClassification' -and ("$($c.CategoryID)" -replace '[{}]', '').Trim().ToLowerInvariant() -eq 'e0789628-ce08-4437-be74-2495b842f43b') { $hintDef = $true }
+        }
+      } catch { }
+      if ($hintDef) { continue }
+      $hintId = ''; try { $hintId = "$([string]$u.Identity.UpdateID):$([int]$u.Identity.RevisionNumber)" } catch { }
+      if ($hintId -and ($hintSat -contains $hintId)) { continue }
+      $hintKb = @($u.KBArticleIDs) | Select-Object -First 1
+      $hintKey = if ($hintKb) { "KB$hintKb" } else { "$($u.Title)".Trim() }
+      if ($hintKey -and ($hintUnr -contains $hintKey)) { continue }
+      $hintCount++
+    }
+    & 'C:\Program Files\Qubes Tools\bin\qrexec-client-vm.exe' 'dom0|qubes.NotifyUpdates|user|cmd' '/c' 'echo' "$hintCount" 2>&1 | Out-Null
+    Log ("hint: $hintClass - Windows' own scan finished at " + $hintScan.TimeCreated.ToString('s') +
+         "; $hintAll offer(s) in its result, $hintCount reported to dom0 qubes.NotifyUpdates (exit $LASTEXITCODE)")
+  } catch { Log "hint: $hintClass - Windows' own scan result could not be read or reported ($($_.Exception.Message)); nothing is reported" 'WARN' }
+  exit 0
+}
+
 $script:St = [ordered]@{ action=$Action; phase='init'; ts=$null; owner_pid=0; owner_pid_start=''; count=0; available=@();
                          downloading=$null; installing=$null; result=@(); reboot_needed=$false; error=$null; recovered='';
                          not_actionable=@(); satisfied=@(); satisfied_rule='installed'; unroutable=@(); route_unknown=@(); esu=$null; notice=$null }
@@ -3228,6 +3285,15 @@ if ($vmClassLive -eq 'TemplateVM') {
   $script:St.phase='skipped-standalone'; Save
   exit 0
 } else {
+  # The hint (-Action hint, above the status object) counts Windows' own scan result against what the template's last pass
+  # recorded satisfied and without a route. This qube started with that record in its status file and this pass has just
+  # written over it, so the two lists are carried into this pass's status for every hint after it.
+  if ($script:PrevStatus) {
+    if ((Test-RowKey $script:PrevStatus 'satisfied') -and (Test-RowKey $script:PrevStatus 'satisfied_rule') -and "$($script:PrevStatus.satisfied_rule)" -eq 'installed') {
+      $script:St.satisfied = @($script:PrevStatus.satisfied | Where-Object { $_ })
+    }
+    if (Test-RowKey $script:PrevStatus 'unroutable') { $script:St.unroutable = @($script:PrevStatus.unroutable | Where-Object { $_ }) }
+  }
   Log "$vmClassLive - not a template; updates are the template's business. Exiting before any proxy activity."
   $script:St.phase='skipped-appvm'; Save
   exit 0

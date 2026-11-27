@@ -105,8 +105,25 @@ reasons, measurements, Jev verdicts and history.
 availability to dom0 over `qubes.NotifyUpdates`. A guest with no netvm reaches Windows Update only through
 `qubes.UpdatesProxy`, through the template's relay, which serves update processes and winget only (§18).
 
+`NoAutoUpdate=1` stops automatic installs only. Windows' update orchestrator still scans on its own, and those
+scans are left to Windows. A pass queues behind Windows' own update work: before an agent download or install it
+waits while Windows' installer is busy, and when the agent refuses it as busy it waits for that work to end and
+asks once more, before the refusal becomes a failure the user is told (owner 2026-11-27: «make sure WE wait until
+uso task finishes and we retry before delivering update failure to user»; «reliable coexistence is sufficient»).
+
+An AppVM or a DispVM runs no update pass. Each time Windows' own scan in it finishes, it reads that scan's result
+with an offline search, counts it as the template's report counts it, and reports the count to dom0 over
+`qubes.NotifyUpdates`, as a Linux AppVM reports for its template. It searches nothing itself and starts no proxy
+or relay; a result it cannot read is not reported, and never fails as a task (owner 2026-11-27: «we did not want
+appvms to run full update passes and fail but if we have cheap scan that runs by default thats a blessing»).
+
 **Why.** This is the Qubes model: the admin decides when a template changes, and a template with no netvm
-cannot be left to update itself.
+cannot be left to update itself. An AppVM's report costs no search of ours: Windows' own scan has already fetched
+what it reads.
+
+**Cost.** Windows' own scans reach Windows Update outside dom0's passes. A dom0 update that meets an install
+Windows is already running waits for it, up to about 3 minutes, and tries once more. An AppVM reports only when
+Windows' own scan runs in it, on Windows' schedule.
 
 ## 2. The invariant: dom0's reported state must be true
 
