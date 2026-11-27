@@ -109,7 +109,9 @@ qvm-kill "$VM" >/dev/null 2>&1; sleep 3; qvm-remove -f "$VM" >/dev/null 2>&1
 # explicit-off leg below reported "explicit off did NOT gate (got: send)" on 2026-09-14. Clearing it
 # here, before quick-upgrade's boots, is what makes the registry the deciding source in this run.
 qvm-features --unset "$VM" service.notify-errors >/dev/null 2>&1
-say "quick-upgrade over win11-qwt with $(python3 -c "import json;m=json.load(open('$PKG/MANIFEST.json'));print(m['package_version'],'rev',m['build_rev'])")"
+# The PATH, not only the version: launch-readiness covers a precheck only when its output names the package tree it ran.
+# The golden is quick-upgrade's to name (it logs the one it verified); this line used to say a retired win11-qwt.
+say "quick-upgrade of $PKG ($(python3 -c "import json;m=json.load(open('$PKG/MANIFEST.json'));print(m['package_version'],'rev',m['build_rev'])"))"
 # Tell the stall-repro gate who is calling, so a pass run through THIS test is not mistaken for a
 # bare quick-upgrade - the 2026-09-22 failure happened here, and 16 reproduction attempts that
 # called quick-upgrade directly had already deviated before they started.
