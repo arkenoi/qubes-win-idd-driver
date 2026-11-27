@@ -309,12 +309,12 @@ function Get-RelayPortOwner {
     foreach ($e in $ev) { if ("$($e.CategoryInfo.Category)" -ne 'ObjectNotFound') { return -1 } }
     return 0
 }
-# The template's permanent relay, when $owner (the port's LISTEN owner) is it: the record relay.cs WritePermanentRecord writes,
-# checked by pid AND start time. Mirrors qubes-windows-update.ps1 Get-PermanentRelay, which this handler cannot load; keep the two
-# in step.
+# The template's permanent relay, when $owner (the port's LISTEN owner) is it: the record relay.cs WritePermanentRecord writes in
+# the volatile RelayThisBoot key, checked by pid AND start time. Mirrors qubes-windows-update.ps1 Get-PermanentRelay, which this
+# handler cannot load; keep the two in step.
 function Get-PermanentRelay([int]$owner) {
     if ($owner -le 0) { return $false }
-    $v = Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Qubes\UpdatesProxy' -EA SilentlyContinue
+    $v = Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Qubes\UpdatesProxy\RelayThisBoot' -EA SilentlyContinue
     if (-not $v -or "$($v.Relay)" -notmatch '^(\d+)@(\d+)$' -or [int]$Matches[1] -ne $owner) { return $false }
     $ticks = $Matches[2]
     $p = Get-Process -Id $owner -EA SilentlyContinue

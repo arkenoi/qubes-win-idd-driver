@@ -788,8 +788,8 @@ function Test-RelayListening {
     Start-Sleep -Milliseconds 250
   }
 }
-# WHAT THE RELAY ITSELF SAID, for the failure paths below. The permanent relay writes the file its record names
-# ($script:RelayLogPath, from RelayLog), including its class-gate lines and then "listen 127.0.0.1:<port> target=..."
+# WHAT THE RELAY ITSELF SAID, for the failure paths below. The permanent relay writes the file Get-PermanentRelay derives
+# ($script:RelayLogPath), including its class-gate lines and then "listen 127.0.0.1:<port> target=..."
 # immediately before its listener.Start() - so its own log says how far it got. Neither failure path read it, and the harness did not collect it, so the
 # one artefact that explains the failure was discarded every time. Jev: diagnosis_gap 0.81.
 function Get-RelayDiagnosis {
@@ -826,22 +826,26 @@ function Format-RelayRefusal([int]$owner) {
   if ($owner -eq 0) { return ("REFUSED: nothing listens on 127.0.0.1:8082 right after relay pid {0} accepted a connection - that relay is gone" -f $script:RelayPid) }
   $who = ''
   try { $op = Get-Process -Id $owner -ErrorAction SilentlyContinue; if ($op) { $who = " ($($op.ProcessName), started $($op.StartTime.ToString('s')))" } } catch { }
-  return "REFUSED: 127.0.0.1:8082 is served by pid $owner$who, which is not the template's recorded permanent relay (HKLM\SOFTWARE\Qubes\UpdatesProxy Relay) - the pass never adopts a listener (ADR-updater 12.4 point 3), and another listener on its port is an ANOMALY: find out what pid $owner is before the next pass; it was NOT killed"
+  return "REFUSED: 127.0.0.1:8082 is served by pid $owner$who, which is not the template's recorded permanent relay (HKLM\SOFTWARE\Qubes\UpdatesProxy\RelayThisBoot Relay) - the pass never adopts a listener (ADR-updater 12.4 point 3), and another listener on its port is an ANOMALY: find out what pid $owner is before the next pass; it was NOT killed"
 }
 # The template's permanent relay, when it is the process listening on 127.0.0.1:8082: its record (relay.cs WritePermanentRecord,
-# Relay = "<pid>@<start time, UTC ticks>", RelayLog = its log) checked against the port's owner by pid AND start time, so a reused
-# pid is not it. Returns @{ Pid; Log } or $null; $script:RelayPortOwner is the owner read (Get-RelayPortOwner's values).
+# Relay = "<pid>@<start time, UTC ticks>" in the volatile RelayThisBoot key) checked against the port's owner by pid AND start
+# time, so a reused pid is not it. Returns @{ Pid; Log } or $null; $script:RelayPortOwner is the owner read (Get-RelayPortOwner's
+# values). Log is DERIVED, never recorded (ADR-updater 12.4 point 3): qubes-updates-relay-<yyyyMMdd>.log in the common log
+# directory, dated by the relay's LOCAL start day - log.c names the file once, at LogInit, from GetLocalTime. A start a moment
+# before local midnight whose LogInit lands after it names the next day; that residual is not built around.
 function Get-PermanentRelay {
   $script:RelayPortOwner = Get-RelayPortOwner
   if ($script:RelayPortOwner -le 0) { return $null }
-  $v = Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Qubes\UpdatesProxy' -EA SilentlyContinue
+  $v = Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Qubes\UpdatesProxy\RelayThisBoot' -EA SilentlyContinue
   if (-not $v -or "$($v.Relay)" -notmatch '^(\d+)@(\d+)$') { return $null }
   if ([int]$Matches[1] -ne $script:RelayPortOwner) { return $null }
   $ticks = $Matches[2]
   $p = Get-Process -Id $script:RelayPortOwner -EA SilentlyContinue
   if (-not $p) { return $null }
   try { if ("$($p.StartTime.ToUniversalTime().Ticks)" -ne $ticks) { return $null } } catch { return $null }
-  return @{ Pid = $script:RelayPortOwner; Log = "$($v.RelayLog)" }
+  $day = [DateTime]::new([long]$ticks, [DateTimeKind]::Utc).ToLocalTime().ToString('yyyyMMdd', [Globalization.CultureInfo]::InvariantCulture)
+  return @{ Pid = $script:RelayPortOwner; Log = (Join-Path (Get-QwtLogDir) ('qubes-updates-relay-' + $day + '.log')) }
 }
 # The relay serves a powershell only when it is a registered update pass (ADR-updater §18 point 2; relay.cs IsRegisteredUpdater):
 # REG_MULTI_SZ UpdaterPids under HKLM\SOFTWARE\Qubes\UpdatesProxy, one "<pid>@<start time, UTC ticks>" per running pass.
@@ -3312,7 +3316,7 @@ try {
   # So: watch the relay's own log across the scan. If it gave up on any fetch (complete=False)
   # AND the scan found nothing, the result is UNKNOWN, not zero - retry once, then refuse to
   # report a number nobody can stand behind.
-  # The relay writes the file its record names ($script:RelayLogPath, from RelayLog; Ensure-Proxy), and
+  # The relay writes the file Get-PermanentRelay derives ($script:RelayLogPath: the common log directory, its start day; Ensure-Proxy), and
   # this reads that same variable. The path was once hardcoded to the default WorkDir while the relay
   # wrote under the WorkDir it was started with, so any run with a non-default -WorkDir read a file
   # that never grew, counted zero give-ups, and disarmed the guard silently.

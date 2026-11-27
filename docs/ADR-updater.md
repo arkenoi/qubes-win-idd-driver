@@ -414,8 +414,10 @@ process with that name mid-transfer. A process found by name is any process with
 1. **A component touches only processes it started, and holds them by handle** (pid + start time).
 2. **Nothing is ever killed or adopted by process name.**
 3. **On a TemplateVM the relay is permanent, and no pass owns it** (§18). Its own boot task, `QubesUpdatesRelay`,
-   starts it. Once it listens it records itself under `HKLM\SOFTWARE\Qubes\UpdatesProxy`: `Relay` = its pid and
-   start time, `RelayLog` = its log file. A pass serves through it only when the owner of `127.0.0.1:8082` matches
+   starts it. Once it listens it records itself under `HKLM\SOFTWARE\Qubes\UpdatesProxy\RelayThisBoot`, a volatile
+   key the kernel discards at shutdown: `Relay` = its pid and start time. Its log is `qubes-updates-relay-<yyyyMMdd>.log`
+   in the common log directory (ADR-logging 1), dated by that start time; no path is recorded. A pass serves through
+   it only when the owner of `127.0.0.1:8082` matches
    that record. If the port is free, the pass starts the task, logs it as an anomaly, and checks again. Any other
    holder of the port is refused with a named reason. A pass never stops the relay.
 4. **The relay starts only on a TemplateVM, whoever starts it.** Before it listens it reads the class from

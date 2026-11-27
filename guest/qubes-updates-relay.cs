@@ -911,20 +911,26 @@ static class Relay
         return QwtLog.LogGetDirectory(logName, d, (uint)d.Capacity, n, (uint)n.Capacity) == 0 ? d.ToString() : null;
     }
 
-    // The permanent relay's record under HKLM\SOFTWARE\Qubes\UpdatesProxy, written once it listens: Relay = "<pid>@<start
-    // time, UTC ticks>" (the shape of UpdaterPids) and RelayLog = its log file. Only an administrator can write the key.
-    static bool WritePermanentRecord(string logFile)
+    // The permanent relay's record, written once it listens (ADR-updater 12.4 point 3): Relay = "<pid>@<start time, UTC
+    // ticks>" (the shape of UpdaterPids) in HKLM\SOFTWARE\Qubes\UpdatesProxy\RelayThisBoot, a VOLATILE key the kernel
+    // discards at shutdown - so the record is this boot's, and an AppVM, booting from its template's root, never finds one.
+    // No path is recorded: the pass derives the log from the common log directory and the start date. The Relay and
+    // RelayLog values earlier builds wrote in the parent key are removed. Only an administrator can write the key.
+    static bool WritePermanentRecord()
     {
         try
         {
             Process me = Process.GetCurrentProcess();
             string rec = me.Id + "@" + me.StartTime.ToUniversalTime().Ticks;
-            using (Microsoft.Win32.RegistryKey k = Microsoft.Win32.Registry.LocalMachine.CreateSubKey(@"SOFTWARE\Qubes\UpdatesProxy"))
+            using (Microsoft.Win32.RegistryKey parent = Microsoft.Win32.Registry.LocalMachine.CreateSubKey(@"SOFTWARE\Qubes\UpdatesProxy"))
             {
-                k.SetValue("Relay", rec, Microsoft.Win32.RegistryValueKind.String);
-                k.SetValue("RelayLog", logFile ?? "", Microsoft.Win32.RegistryValueKind.String);
+                using (Microsoft.Win32.RegistryKey k = parent.CreateSubKey("RelayThisBoot",
+                           Microsoft.Win32.RegistryKeyPermissionCheck.ReadWriteSubTree, Microsoft.Win32.RegistryOptions.Volatile))
+                    k.SetValue("Relay", rec, Microsoft.Win32.RegistryValueKind.String);
+                try { parent.DeleteValue("Relay", false); parent.DeleteValue("RelayLog", false); }
+                catch (Exception e) { Log('W', "the parent key's Relay/RelayLog from an earlier build were not removed (" + e.Message + ") - no reader uses them"); }
             }
-            Log("permanent relay recorded: Relay=" + rec + " RelayLog=" + logFile);
+            Log("permanent relay recorded: Relay=" + rec + " in RelayThisBoot (volatile)");
             return true;
         }
         catch (Exception e)
@@ -1204,17 +1210,18 @@ static class Relay
             return 2;
         }
         string self = Process.GetCurrentProcess().MainModule.FileName;
-        // The permanent relay opens its log through LogInit on the one log directory, and records the path LogInit names
-        // (<dir>\qubes-updates-relay-<yyyyMMdd>.log, winutils log.c) for the pass to read. LogInit, NOT LogStart on that
+        // The permanent relay opens its log through LogInit on the one log directory: <dir>\qubes-updates-relay-<yyyyMMdd>.log
+        // (winutils log.c), the path the pass derives itself (ADR-updater 12.4 point 3). LogInit, NOT LogStart on that
         // same path: only LogInit writes the QWTBIRTH line, and the log sweep reads a module file without one as a module
         // whose silence cannot be judged - measured on quick-upgrade win11de-up 2026-11-27, SWEEP-GATE-RESULT INCONCLUSIVE
         // nobirth=qubes-updates-relay-20261127.log.
+        string permDir = null;
         if (_permanent && string.IsNullOrEmpty(logFile))
         {
             // LogInit with NO directory: it resolves the rule itself and, on a fall-through, writes the line naming the
-            // failed step first - given permDir it would take that as configured and say nothing.
-            string permDir = QwtLogDir("qubes-updates-relay");
-            if (permDir != null) logFile = Path.Combine(permDir, "qubes-updates-relay-" + DateTime.Now.ToString("yyyyMMdd") + ".log");
+            // failed step first - given permDir it would take that as configured and say nothing. permDir is the same
+            // rule's answer, and names the handlers' directory below.
+            permDir = QwtLogDir("qubes-updates-relay");
             QwtLog.LogInit(null, "qubes-updates-relay");
         }
         // Otherwise the library opens this relay's log: --log-file as given, else qubes-updates-relay-<yyyyMMdd>.log in
@@ -1222,8 +1229,9 @@ static class Relay
         else if (!string.IsNullOrEmpty(logFile)) QwtLog.LogStart(logFile);
         else if (!string.IsNullOrEmpty(logDir)) QwtLog.LogInit(logDir, "qubes-updates-relay");
         else QwtLog.LogInitDefault("qubes-updates-relay");
-        // The handlers write into --log, else into the directory of --log-file, else (neither given) into the library's own.
-        _handlerLogDir = !string.IsNullOrEmpty(logDir) ? logDir : (!string.IsNullOrEmpty(logFile) ? Path.GetDirectoryName(logFile) : null);
+        // The handlers write into --log, else into the directory of --log-file, else the permanent relay's directory, else
+        // (none of them) into the library's own.
+        _handlerLogDir = !string.IsNullOrEmpty(logDir) ? logDir : (!string.IsNullOrEmpty(logFile) ? Path.GetDirectoryName(logFile) : permDir);
         // THE CLASS GATE (ADR-updater 12.4 point 4, §18 point 7; owner 2026-11-26: «preventing relay from starting anywhere
         // but templateVM is mandatory»). Every start path passes here - the boot task, a caller's --parent-pid, a hand start -
         // so no starter's own check is relied on. A class qubesdb cannot answer yet (the daemon syncs from dom0 at boot) is
@@ -1250,7 +1258,7 @@ static class Relay
         listener.Start();
         // The pass identifies the permanent relay by this record and nothing else: pid and start time read back from the port's
         // owner (ADR-updater 12.4 point 3). A relay the pass cannot identify is refused, so a record that cannot be written ends it.
-        if (_permanent && !WritePermanentRecord(logFile)) return 5;
+        if (_permanent && !WritePermanentRecord()) return 5;
         if (parentPid > 0)
             StartParentWatchdog(parentPid, ParentCheckMs, delegate { Environment.Exit(3); });
 
