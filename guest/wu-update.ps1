@@ -346,7 +346,15 @@ function Remove-DeadPassLeftovers {
     # designed state; a free port or any other listener is reported as an anomaly - neither is this handler's to change.
     $relayOwner = Get-RelayPortOwner
     if ($relayOwner -lt 0) { $failed += 'cannot read who listens on 127.0.0.1:8082 (Get-NetTCPConnection failed) - whether the relay serves is UNKNOWN' }
-    elseif ($relayOwner -eq 0) { $failed += 'nothing listens on 127.0.0.1:8082 - the template relay (task QubesUpdatesRelay) is not running; the next pass starts its task' }
+    elseif ($relayOwner -eq 0) {
+        # A FREE PORT IS AN ANOMALY ONLY ON A TEMPLATE: the relay refuses to listen on any other class (ADR-updater 12.4 point 4),
+        # so there it is the designed state and saying "CHECK the qube" would be a false alarm. The class is qubesdb's, read
+        # with the shipped reader; a class that cannot be read is reported as unread, never assumed.
+        $cls = $null
+        try { $qdb = 'C:\Program Files\Qubes Tools\bin\qubesdb-read.exe'; if (Test-Path -LiteralPath $qdb) { $cls = "$(& $qdb /type 2>$null)".Trim() } } catch { $cls = $null }
+        if ($cls -and $cls -ne 'TemplateVM') { $done += ("nothing listens on 127.0.0.1:8082 - this $cls runs no relay (only a template does)") }
+        else { $failed += ('nothing listens on 127.0.0.1:8082 - the template relay (task QubesUpdatesRelay) is not running; the next pass starts its task' + $(if (-not $cls) { ' (the qube class could not be read)' } else { '' })) }
+    }
     elseif (Get-PermanentRelay $relayOwner) { $done += ('the permanent relay pid ' + $relayOwner + ' serves 127.0.0.1:8082 (its record) - left running') }
     else { $failed += (Format-RelaySurvivor $relayOwner) }
     # never end in a bare number (see Msg): the summary closes with a word
