@@ -2060,20 +2060,23 @@ function Get-CbsPackageStates {
 # HRESULT, never by its localized text: 0x80240009 WU_E_OPERATIONINPROGRESS, 0x80240016 WU_E_INSTALL_NOT_ALLOWED,
 # 0x8024001B WU_E_SELFUPDATE_IN_PROGRESS.
 $script:WuBusyPattern = '8024(0009|0016|001B)'
-$script:WuIdleWaitSec = 1200   # the dom0 call waits up to 2 h for a pass (wu-update.ps1); 20 min covers a Settings-started install
+# WHAT HOLDS THE AGENT IS AN INSTALL, NEVER A SCAN: Windows' own scan takes 16-31 s and the agent queues ours behind it, and
+# with NoAutoUpdate=1 Windows installs nothing by itself, so only a user's Install in Settings or a Defender definition update
+# can hold the installer. The wait therefore ends on the installer alone (IUpdateInstaller.IsBusy). The orchestrator's worker
+# process is not waited for: it outlives its scan (MoUsoCoreWorker was running when win11de-up's boot pass started at 10:49).
+$script:WuIdleWaitSec = 180    # a definition install; the dom0 call waits up to 2 h for a pass (wu-update.ps1)
 $script:WuBusyRetried = $null  # seconds the last retry waited, for the reason dom0 is given when the retry is refused too
-# Three exits, each logged: free (the agent's installer is not busy and, with -Uso, the orchestrator's worker has exited); a
-# restart is needed before any install, which waiting cannot clear; the deadline - then the call goes ahead and its own
-# result decides. An installer state that cannot be read is said and not waited on.
-function Wait-WuIdle([string]$why, [switch]$Uso) {
+# Three exits, each logged: free (the agent's installer is not busy); a restart is needed before any install, which waiting
+# cannot clear; the deadline - then the call goes ahead and its own result decides. An installer state that cannot be read is
+# said and not waited on.
+function Wait-WuIdle([string]$why) {
   $t0 = Get-Date; $said = $false
   while ($true) {
     $busy = $null; $rbi = $false
     try { $i = (New-Object -ComObject Microsoft.Update.Session).CreateUpdateInstaller(); $busy = [bool]$i.IsBusy; $rbi = [bool]$i.RebootRequiredBeforeInstallation }
     catch { Log "WUWAIT $why`: the installer's state could not be read ($(("$($_.Exception.Message)" -replace "`r|`n", ' ').Trim())) - not waiting" 'WARN'; return 0 }
-    $uso = if ($Uso) { @(Get-Process -Name MoUsoCoreWorker, usoclient, wuauclt -EA SilentlyContinue) } else { @() }
     $secs = [int]((Get-Date) - $t0).TotalSeconds
-    if (-not $busy -and $uso.Count -eq 0) { if ($said) { Log "WUWAIT $why`: Windows Update is free after $secs s" }; return $secs }
+    if (-not $busy) { if ($said) { Log "WUWAIT $why`: Windows Update is free after $secs s" }; return $secs }
     if ($rbi) { Log "WUWAIT $why`: Windows needs a restart before any install, which waiting cannot clear: $(Get-WuBusyState)" 'WARN'; return $secs }
     if ($secs -ge $script:WuIdleWaitSec) { Log "WUWAIT $why`: still held after $secs s, going ahead: $(Get-WuBusyState)" 'WARN'; return $secs }
     if (-not $said) { Log "WUWAIT $why`: Windows' own update work holds Windows Update, this pass waits for it: $(Get-WuBusyState)"; $said = $true }
@@ -2090,7 +2093,7 @@ function Invoke-WuQueued([string]$what, [scriptblock]$op) {
     $hr = '0x{0:X8}' -f $(if ($_.Exception.InnerException) { $_.Exception.InnerException.HResult } else { $_.Exception.HResult })
     if ("$hr $($_.Exception.Message)" -notmatch $script:WuBusyPattern) { throw }
     Log "WUBUSY $what refused with $hr`: another Windows Update operation holds the agent - waiting for it, then once more"
-    $script:WuBusyRetried = Wait-WuIdle $what -Uso
+    $script:WuBusyRetried = Wait-WuIdle $what
     return (& $op)
   }
 }
@@ -2642,7 +2645,7 @@ function Install-ViaAgentCacheQueued($u){
   $row = Install-ViaAgentCache $u
   if($row.ok -or "$($row.hresult) $($row.reason)" -notmatch $script:WuBusyPattern){ return $row }
   Log "WUBUSY $what refused: another Windows Update operation holds the agent - waiting for it, then once more"
-  $secs = Wait-WuIdle $what -Uso
+  $secs = Wait-WuIdle $what
   $row = Install-ViaAgentCache $u
   if(-not $row.ok -and "$($row.hresult) $($row.reason)" -match $script:WuBusyPattern){
     $row.reason = "$($row.reason) - refused again after this pass waited $secs s for Windows' own update work and tried once more"
