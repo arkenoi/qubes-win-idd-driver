@@ -210,8 +210,10 @@ Write-Output '#ENDRELAYLOG#'
 # THE PERMANENT RELAY LISTENS FROM BOOT, before this pass's window opens, so its listen line is never among the lines the
 # pass appended. U3 reads the last listen line of the whole current relay log, and who owns 127.0.0.1:8082 now.
 Write-Output '#RELAYLISTEN#'
+# Per-day files only (LogInit's <dir>\qubes-updates-relay-<yyyyMMdd>.log, oldest first): the legacy $rOld holds an older
+# binary's lines, and Log-Files lists it LAST, so it would name a 19:03 listen of a relay long gone (measured win11de-uc).
 $lastListen = $null
-foreach ($p in @(Log-Files 'qubes-updates-relay-*.log' $rOld)) {
+foreach ($p in @(Log-Files 'qubes-updates-relay-*.log' $rOld | Where-Object { $_ -ne $rOld })) {
     foreach ($l in @(New-Lines $p 0)) { if ($l -match ' listen 127\.0\.0\.1:\d+ ') { $lastListen = $l } }
 }
 if ($lastListen) { Write-Output ("last_listen=" + $lastListen.Trim()) } else { Write-Output 'last_listen=' }
