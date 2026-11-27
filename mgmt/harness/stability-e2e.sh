@@ -25,6 +25,7 @@ cd /home/user/qubes-win-idd-driver
 source .claude/skills/win-guest-e2e/e2e-lib.sh
 source mgmt/harness/lifecycle-lib.sh   # ctl_start/ctl_stop: the notepad each check starts is stopped by its recorded identity, never by name
 source mgmt/harness/window-grade-lib.sh # grade_mapped_window: the ONE window check, shared with matrix.sh and quick-upgrade.sh
+source mgmt/harness/logvol-lib.sh       # logvol_qemu_write: the AppVM's own empty qemu-extra-args (the template's log stick)
 # Evidence goes somewhere DURABLE. This used to be a per-job scratch directory, so every artefact
 # a run produced - shots, logs, the run ledger - was deleted with the job that made it.
 T="${STAB_OUT:-$HOME/qwt-accept/stability}"; S=$T/stability; mkdir -p $S
@@ -335,6 +336,9 @@ EOF
   if qvm-ls --raw-list 2>/dev/null | grep -qx "$APP"; then qvm-remove -f "$APP" >/dev/null 2>&1; fi
   qvm-create --class AppVM --template "$TPL" --label red "$APP" >/dev/null 2>&1 || { no "$TAG: AppVM create failed"; return 1; }
   qvm-tags "$APP" add win-idd-testbed >/dev/null 2>&1
+  # The template's qemu-extra-args reach the AppVM, its devices do not (a template's log stick, /dev/xvdj, leaves the AppVM
+  # unstartable - win11de-uca 2026-11-27): an empty value of its own overrides them.
+  logvol_qemu_write "$APP" '' || { no "$TAG: could not give $APP its own empty qemu-extra-args"; return 1; }
   qvm-prefs "$APP" memory 8192 >/dev/null 2>&1; qvm-prefs "$APP" maxmem 0 >/dev/null 2>&1
   qvm-prefs "$APP" vcpus 4 >/dev/null 2>&1; qvm-prefs "$APP" qrexec_timeout 6000 >/dev/null 2>&1
   export QTEST_VM="$APP"

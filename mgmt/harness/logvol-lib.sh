@@ -409,7 +409,13 @@ logvol_qemu_remove(){ # <vm>
   cur=$(qvm-features "$vm" qemu-extra-args 2>/dev/null || true)
   [ -n "$cur" ] || return 0
   new=$(logvol_qemu_args_strip "$cur")
-  if [ -z "$new" ]; then logvol_qemu_write "$vm" --unset || return 1
+  if [ -z "$new" ]; then
+    # An AppVM or a DispVM keeps an EMPTY value of its own: unset, it reads its template's again, and a template's log-stick
+    # arguments (/dev/xvdj) leave it unstartable (win11de-uca 2026-11-27).
+    case "$(qvm-prefs "$vm" klass 2>/dev/null)" in
+      AppVM|DispVM) logvol_qemu_write "$vm" '' || return 1 ;;
+      *)            logvol_qemu_write "$vm" --unset || return 1 ;;
+    esac
   else logvol_qemu_write "$vm" "$new" || return 1; fi
 }
 

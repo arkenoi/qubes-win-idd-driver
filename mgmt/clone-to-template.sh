@@ -10,6 +10,7 @@
 # the qube and copies volumes into it BEFORE the tags are applied, so the volume call hits
 # a qube policy does not yet cover. Create, tag, then copy - that order satisfies policy.
 . "$(dirname "$0")/harness/shutdown-lib.sh"
+. "$(dirname "$0")/harness/logvol-lib.sh"   # logvol_qemu_write: the AppVM's own empty qemu-extra-args
 set -u
 HINT_NETVM=""
 SRC="${1:?usage: $0 <src-standalone> <new-template> <new-appvm>}"
@@ -57,6 +58,9 @@ EOF
 log "creating AppVM $APP on $TPL"
 qvm-create --class AppVM --template "$TPL" --label red "$APP" || exit 1
 qvm-tags "$APP" add win-idd-testbed || exit 1
+# The template's qemu-extra-args reach the AppVM, its devices do not (a template's log stick, /dev/xvdj, leaves the AppVM
+# unstartable - win11de-uca 2026-11-27): an empty value of its own overrides them.
+logvol_qemu_write "$APP" '' || { log "FAIL: could not give $APP its own empty qemu-extra-args"; exit 1; }
 
 # EXTEND THE PRIVATE VOLUME. README.md ("check the private volume size first"): QWT places user
 # data on Q:\Users on the private image - stock behaviour - and the Qubes default private volume is

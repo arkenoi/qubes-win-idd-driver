@@ -2966,6 +2966,12 @@ cell_appvm(){ # $1=unused $2=tpl $3=tag $4=appvm $5=churn-subject (source of the
     || { no "$3-appvm: could not TAG $app win-idd-testbed - dom0 policy will refuse every call to it; not proceeding"; return; }
   qvm-features "$app" os Windows >/dev/null 2>&1
   qvm-features "$app" timezone localtime >/dev/null 2>&1 || true   # same reason as the create path above
+  # THE TEMPLATE'S qemu-extra-args REACH THIS AppVM, ITS DEVICES DO NOT: a template carrying the log stick's arguments
+  # (/dev/xvdj) makes every AppVM made from it fail at domain creation ("libxenlight failed to create new domain") -
+  # win11de-uca 2026-11-27, two starts refused, the third started with only this value changed. An empty value of the
+  # AppVM's own overrides the template's; a stick this cell attaches later composes onto it.
+  logvol_qemu_write "$app" '' \
+    || { no "$3-appvm: could not give $app its own empty qemu-extra-args - a template's log-stick arguments would leave it unstartable"; return; }
   qvm-prefs "$app" memory 8192 >/dev/null 2>&1; qvm-prefs "$app" maxmem 0 >/dev/null 2>&1
   qvm-prefs "$app" vcpus 4 >/dev/null 2>&1; qvm-prefs "$app" qrexec_timeout 6000 >/dev/null 2>&1
   if [ "$had_app" = 1 ]; then
