@@ -133,6 +133,10 @@ no(){ FAIL=$((FAIL+1)); log "[ERROR] FAIL  $*"; }
 # --- lifecycle: per-guest lock + orphan-free teardown (run-lib.sh, same as prime-run) -------
 source mgmt/harness/vmlock.sh
 source mgmt/harness/run-lib.sh
+# Who hands the log stick back (logvol_hand_back): this run when it takes the lock itself; a caller already holding
+# the subject's lock reads the stick after us and hands it back at its own exit.
+QU_OWNS_LOCK=1; [ "${QWT_VMLOCK_HELD:-}" = "$SUBJECT" ] && QU_OWNS_LOCK=0
+QU_BOUND=0
 vm_lock "$SUBJECT"
 job_init quick-upgrade
 job_on_abort(){
@@ -193,6 +197,11 @@ finish(){ # $1=rc $2=message  - every exit goes through here and says which exit
       || log "[WARN] log volume could not be pulled from $LOGVOL_IMG: $(tail -1 "$OUT/logvol-pull.out" 2>/dev/null | cut -c1-140)"
   fi
   release_loop
+  # AFTER THE PULL (matrix's order: a hand-back first would send the last lines to Q:). PASS and REFUSED only: a
+  # subject that failed keeps the stick as evidence and is never reused.
+  if [ "$QU_OWNS_LOCK" = 1 ] && [ "$QU_BOUND" = 1 ] && { [ "$rc" = 0 ] || [ "$rc" = 3 ]; }; then
+    logvol_hand_back "$SUBJECT" log 2>>"$OUT/logvol-hand-back.out"
+  fi
   # HARDWIRED ERROR SWEEP over this run's own log. Every error-shaped line is either declared in
   # mgmt/harness/error-ledger.txt with a reason, or this says so and the run is not clean
   # (owner, 2026-10-14: "HARDWIRE ERROR LOG SWEEP").
@@ -542,6 +551,7 @@ esac
 # attach time because the binder runs in the guest.
 if [ -n "$LOGVOL_IMG" ]; then
   if logvol_bind_guest "$SUBJECT" "$SUBJECT" >>"$OUT/logvol-bind.out" 2>&1; then
+    QU_BOUND=1
     log "QWT logs bound to the log volume"
   else
     # HARD: a bind that failed means the modules keep writing to C:, which dies with the guest.

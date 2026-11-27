@@ -49,11 +49,13 @@ R="$OUT/results.log"; : > "$R"
 log(){ echo "$(date -u +%T)Z flood[$SUBJ]: $*" | tee -a "$R"; }
 source mgmt/harness/shutdown-lib.sh
 source mgmt/harness/vmlock.sh; vm_lock "$SUBJ" || { echo "FAIL  the rig lock for $SUBJ is held by a live job" >&2; exit 2; }
+source mgmt/harness/logvol-lib.sh   # logvol_hand_back
 # THE SUBJECT COMES DOWN WHEN THIS STOPS, however it stops. A guest running this measurement keeps
 # forwarding notifications to the OWNER'S dom0 screen: on 2026-10-07 the harness was interrupted and
 # left the subject up, and he watched the flood continue with nothing driving it. SIGTERM/SIGINT and a
 # normal exit all land here.
 _teardown(){ local rc=$?; trap - EXIT INT TERM
+  [ "$rc" = 0 ] && logvol_hand_back "$SUBJ" log   # this run holds the lock, so quick-upgrade left the stick bound
   if [ "$(qvm-ls --raw-data --fields STATE "$SUBJ" 2>/dev/null | tr -d '\n')" != Halted ]; then
     echo "$(date -u +%T)Z flood[$SUBJ]: stopping the subject - it must not keep sending notifications to dom0" | tee -a "$R"
     qwt_shutdown "$SUBJ" 420 >/dev/null 2>&1

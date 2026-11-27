@@ -583,6 +583,31 @@ logvol_unbind_guest(){ # <vm> - put LogDir and LogSafeFlush back (registry mode)
   return 0
 }
 
+# THE LOCK HOLDER HANDS THE STICK BACK, AT A CLEAN EXIT (owner 2026-11-27: «nothing outside our test harness should
+# inherit logstick volume path»). The bound LogDir is in the subject's registry, on its own volumes, so a subject kept,
+# cloned or used as a template hands the stick's path to everything made from it - win11de-uca 2026-11-27 logged
+# nowhere. Whoever holds the subject's vmlock puts the bind's recorded value back while the subject still answers:
+# quick-upgrade when it took the lock itself, otherwise the caller holding it, before its own halt. A subject that
+# FAILED keeps the stick: it is evidence (collect-failure reads the stick first) and is never reused - except a
+# TEMPLATE under test (updater-component-test), whose root every AppVM boots: it hands back on every exit. Modules already
+# running keep their open files on the stick for the rest of the boot. One pushrun (one qrexec call) per subject;
+# LOGVOL_HANDED_BACK makes a second call a no-op. Returns 1 when the subject may still name the stick.
+logvol_hand_back(){ # <vm> [say-fn]
+  local vm="${1:?[ERROR] logvol_hand_back <vm> [say-fn]}" say="${2:-_lv_say}" line cur
+  [ "${LOGVOL_HANDED_BACK:-}" = "$vm" ] && return 0
+  if ! qvm-check --running "$vm" >/dev/null 2>&1; then
+    "$say" "[WARN] $vm is not running - its LogDir may still name the log stick, and anything made from it would log nowhere"
+    return 1
+  fi
+  if ! line=$(logvol_unbind_guest "$vm"); then
+    "$say" "[ERROR] LogDir was NOT handed back on $vm - anything made from it would log nowhere${line:+ ($line)}"
+    return 1
+  fi
+  LOGVOL_HANDED_BACK="$vm"
+  cur=$(printf '%s' "$line" | sed -n "s#.*logdir=\\([A-Za-z0-9+/=]*\\).*#\\1#p" | base64 -d 2>/dev/null)
+  "$say" "LogDir on $vm handed back: '${cur:-<absent - the product default applies>}'"
+}
+
 # ---------------------------------------------------------------------- the evidence path, PROVEN
 # WHY THIS EXISTS. Four acceptance campaigns in a row were graded on an evidence path that was not
 # working, and each time the harness found out AFTER the cells had been scored: the sweep read a

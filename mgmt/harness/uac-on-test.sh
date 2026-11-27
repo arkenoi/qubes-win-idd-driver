@@ -259,4 +259,6 @@ case $rc in
   *) say "VERDICT: INSTRUMENT - no verdict; the product is not implicated" ;;
 esac
 say "evidence in $OUT"
+# This run holds the lock, so quick-upgrade left the stick bound: hand it back on a pass (logvol_hand_back).
+if [ "$rc" = 0 ]; then source mgmt/harness/logvol-lib.sh; logvol_hand_back "$VM" say; fi
 exit $rc

@@ -347,5 +347,7 @@ fi
 
 say "=== notify-errors guest test: $pass passed, $fail failed ==="
 qvm-features --unset "$VM" service.notify-errors >/dev/null 2>&1
+# This run holds the lock, so quick-upgrade left the stick bound: hand it back on a pass (logvol_hand_back).
+if [ "$fail" -eq 0 ]; then source mgmt/harness/logvol-lib.sh; logvol_hand_back "$VM" say; fi
 vm_unlock "$VM"
 [ "$fail" -eq 0 ] || exit 1

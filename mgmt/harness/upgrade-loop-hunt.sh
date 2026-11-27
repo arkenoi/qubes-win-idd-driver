@@ -92,4 +92,7 @@ done
 
 say "RESULT: $clean clean, $stalls wedge(s), $fails other failure(s) over the runs attempted"
 say "evidence: $OUT"
+# This loop holds the lock, so each quick-upgrade left the stick bound: hand the last subject back when nothing
+# failed (logvol_hand_back); a wedged or failed one is evidence.
+if [ "$stalls" = 0 ] && [ "$fails" = 0 ]; then source mgmt/harness/logvol-lib.sh; logvol_hand_back "$SUBJECT" say; fi
 [ "$stalls" = 0 ]

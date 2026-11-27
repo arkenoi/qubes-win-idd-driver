@@ -176,4 +176,6 @@ sys.exit(0 if not fails else 1)
 PY
 vrc=$?
 log "verdict rc=$vrc"
+# This run holds the lock, so quick-upgrade left the stick bound: hand it back on a pass (logvol_hand_back).
+if [ "$vrc" = 0 ]; then . "$ROOT/mgmt/harness/logvol-lib.sh"; logvol_hand_back "$SUBJ" log; fi
 exit "$vrc"

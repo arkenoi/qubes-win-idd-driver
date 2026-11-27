@@ -102,21 +102,7 @@ source mgmt/harness/logvol-lib.sh
 # exit hands that value back while the subject still answers - the campaign does the same at the end of every
 # install cell. Modules already running keep their open files on the stick for the rest of this boot, so nothing
 # this test reads moves. The exit status is the test's own; a restore that fails says so in the log.
-restore_product_logdir(){
-  local line cur
-  if ! qvm-check --running "$VM" >/dev/null 2>&1; then
-    say "[WARN] $VM is not running at exit - its LogDir may still name the log stick, and AppVMs made from it would log nowhere"
-    return 0
-  fi
-  if line=$(logvol_unbind_guest "$VM" 2>>"$OUT/logdir-restore.out"); then
-    cur=$(printf '%s' "$line" | sed -n "s#.*logdir=\\([A-Za-z0-9+/=]*\\).*#\\1#p" | base64 -d 2>/dev/null)
-    say "  LogDir on $VM restored to the product's '${cur:-<absent - the product default applies>}'"
-  else
-    say "[ERROR] the product LogDir was NOT restored on $VM - AppVMs made from it would log nowhere ($OUT/logdir-restore.out)"
-  fi
-  printf '%s\n' "$line" >>"$OUT/logdir-restore.out"
-}
-trap restore_product_logdir EXIT
+trap 'logvol_hand_back "$VM" say 2>>"$OUT/logdir-restore.out"' EXIT
 say "component test of the updater, package $PKG, over golden $GOLDEN (reporter $REPORTER)"
 
 # 1. install the package over the golden. quick-upgrade.sh is the sanctioned short cycle: it wraps

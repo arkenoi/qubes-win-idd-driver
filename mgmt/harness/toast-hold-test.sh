@@ -695,6 +695,8 @@ for a in "$AUMID_A" "$AUMID_W" "$AUMID_C" "$AUMID_SYS"; do dismiss_toasts "$a"; 
 verdict_aggregate "$OUT/verdicts.txt" '^GRADED$'; agg=$?
 verdict_done_line "subject=$VM package=$PV commit=${SHA:0:12} role=$ROLE evidence=$OUT" | tee -a "$R"
 if [ "$agg" -eq 0 ] && [ "$grc" -eq 0 ]; then
+  # This run holds the lock, so quick-upgrade left the stick bound: hand it back before the halt (logvol_hand_back).
+  source mgmt/harness/logvol-lib.sh; logvol_hand_back "$VM" log
   qwt_shutdown "$VM" 300 >/dev/null 2>&1 && log "subject $VM shut down cleanly" || log "subject $VM did not halt within 300 s - left running"
   finish 0 "PASS ($ROLE): $(grep -a '^GRADED|' "$OUT/grade.txt" | sed 's/.*-> //')"
 fi

@@ -148,6 +148,7 @@ log "$(printf '%s\n' "$_census" | tail -1)"
 # contaminates every later cell (lint rule L9, which caught exactly this in the first draft of this file).
 source mgmt/harness/shutdown-lib.sh
 source mgmt/harness/vmlock.sh; vm_lock "$SUBJ" || { echo "FAIL  the rig lock for $SUBJ is held by a live job" >&2; exit 2; }
+source mgmt/harness/logvol-lib.sh   # logvol_hand_back
 SINCE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 log "start iso=$(sha256sum "$ISO" | cut -c1-12) golden=$GOLDEN cells='$CELLS' cycles=$CYCLES click=$CLICK out=$OUT"
 
@@ -1620,7 +1621,9 @@ if has L10; then
     fi
   done
   # NOTHING INHERITS THIS SUBJECT. It asks and polls - never qvm-shutdown --wait, which kills at its
-  # timeout and contaminates every later use of the guest (lint L9).
+  # timeout and contaminates every later use of the guest (lint L9). This run holds the lock, so quick-upgrade left
+  # the stick bound: hand it back while the subject still answers (logvol_hand_back).
+  logvol_hand_back "$SUBJ" log
   qwt_shutdown "$SUBJ" 900 || log "  [WARN] L10: the subject did not shut down cleanly after the injection"
 fi
 
@@ -1631,4 +1634,6 @@ while IFS=$'\t' read -r c v claim ev; do printf '%-5s %-8s %s\n' "$c" "$v" "$cla
 nf=$(awk -F'\t' '$2=="FAIL"' "$VERDICTS" | wc -l); ni=$(awk -F'\t' '$2=="INVALID"' "$VERDICTS" | wc -l)
 echo "--- $(wc -l < "$VERDICTS") cell(s): $(awk -F'\t' '$2=="PASS"' "$VERDICTS" | wc -l) pass, $nf fail, $ni invalid; evidence in $OUT"
 log "done"
+# A no-op when L10 already handed it back; a failed or invalid run keeps the stick as evidence.
+[ "$nf" = 0 ] && [ "$ni" = 0 ] && logvol_hand_back "$SUBJ" log
 [ "$nf" = 0 ] && [ "$ni" = 0 ] && exit 0 || exit 1
