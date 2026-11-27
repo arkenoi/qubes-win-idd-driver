@@ -348,10 +348,35 @@ function Remove-DeadPassLeftovers {
     if ($relayOwner -lt 0) { $failed += 'cannot read who listens on 127.0.0.1:8082 (Get-NetTCPConnection failed) - whether the relay serves is UNKNOWN' }
     elseif ($relayOwner -eq 0) {
         # A FREE PORT IS AN ANOMALY ONLY ON A TEMPLATE: the relay refuses to listen on any other class (ADR-updater 12.4 point 4),
-        # so there it is the designed state and saying "CHECK the qube" would be a false alarm. The class is qubesdb's, read
-        # with the shipped reader; a class that cannot be read is reported as unread, never assumed.
+        # so there it is the designed state and saying "CHECK the qube" would be a false alarm. The class is qubesdb's /type, read
+        # through qubesdb-client.dll - an inline mirror of guest/qubesdb-read.ps1's Get-QubesDbValue, as this file runs installed
+        # and alone. 5e2e4ff8 called bin\qubesdb-read.exe, which the guest does not ship (measured win11de-upa, build-4.3.47.1515),
+        # so every class read came back unread and the false alarm stayed; the qubesdb-cmd CLI's reads are broken (optind).
+        # A class that cannot be read is reported as unread, never assumed.
         $cls = $null
-        try { $qdb = 'C:\Program Files\Qubes Tools\bin\qubesdb-read.exe'; if (Test-Path -LiteralPath $qdb) { $cls = "$(& $qdb /type 2>$null)".Trim() } } catch { $cls = $null }
+        try {
+            if (-not ('QwtWuUpdQdb' -as [type])) {
+                Add-Type @'
+using System; using System.Runtime.InteropServices;
+public static class QwtWuUpdQdb {
+    [DllImport("qubesdb-client.dll", CallingConvention=CallingConvention.Cdecl)]
+    public static extern IntPtr qdb_open(IntPtr vmname);
+    [DllImport("qubesdb-client.dll", CallingConvention=CallingConvention.Cdecl, CharSet=CharSet.Ansi)]
+    public static extern IntPtr qdb_read(IntPtr h, string path, out uint value_len);
+    [DllImport("qubesdb-client.dll", CallingConvention=CallingConvention.Cdecl)]
+    public static extern void qdb_close(IntPtr h);
+}
+'@
+            }
+            $qh = [QwtWuUpdQdb]::qdb_open([IntPtr]::Zero)
+            if ($qh -ne [IntPtr]::Zero) {
+                try {
+                    $qlen = [uint32]0
+                    $qp = [QwtWuUpdQdb]::qdb_read($qh, '/type', [ref]$qlen)
+                    if ($qp -ne [IntPtr]::Zero) { $cls = [Runtime.InteropServices.Marshal]::PtrToStringAnsi($qp, [int]$qlen).Trim() }
+                } finally { [QwtWuUpdQdb]::qdb_close($qh) }
+            }
+        } catch { $cls = $null }
         if ($cls -and $cls -ne 'TemplateVM') { $done += ("nothing listens on 127.0.0.1:8082 - this $cls runs no relay (only a template does)") }
         else { $failed += ('nothing listens on 127.0.0.1:8082 - the template relay (task QubesUpdatesRelay) is not running; the next pass starts its task' + $(if (-not $cls) { ' (the qube class could not be read)' } else { '' })) }
     }
