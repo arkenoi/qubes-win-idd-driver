@@ -902,21 +902,13 @@ static class Relay
         return QdbValue("/qubes-vm-updateable") == "True" ? "StandaloneVM" : "AppVM";
     }
 
-    // THE ONE LOG DIRECTORY (docs/ADR-logging.md): the registry LogDir, else "<SystemDrive>\Qubes Logs" - the rule of
-    // log.ps1 Get-QwtLogDir and notifhost's qtb_shared.h QwtLogDir, which this C# cannot call.
-    static string QwtLogDir()
+    // THE ONE LOG DIRECTORY (docs/ADR-logging.md 1), asked of windows-utils' log.c for logName - the same rule, read for
+    // the same module, that LogInit applies when it is given no directory, so a path built on this answer is the file
+    // LogInit opens. null when no step could be used.
+    static string QwtLogDir(string logName)
     {
-        try
-        {
-            using (Microsoft.Win32.RegistryKey k = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(
-                       @"Software\Invisible Things Lab\Qubes Tools"))
-            {
-                string d = k == null ? null : k.GetValue("LogDir") as string;
-                if (!string.IsNullOrEmpty(d)) return d;
-            }
-        }
-        catch (Exception) { }
-        return Path.Combine((Environment.GetEnvironmentVariable("SystemDrive") ?? "C:") + "\\", "Qubes Logs");
+        StringBuilder d = new StringBuilder(32768), n = new StringBuilder(1024);   // MAX_PATH_LONG, LOG_DIR_NOTE_MAX (log.h)
+        return QwtLog.LogGetDirectory(logName, d, (uint)d.Capacity, n, (uint)n.Capacity) == 0 ? d.ToString() : null;
     }
 
     // The permanent relay's record under HKLM\SOFTWARE\Qubes\UpdatesProxy, written once it listens: Relay = "<pid>@<start
@@ -1219,9 +1211,11 @@ static class Relay
         // nobirth=qubes-updates-relay-20261127.log.
         if (_permanent && string.IsNullOrEmpty(logFile))
         {
-            string permDir = QwtLogDir();
-            logFile = Path.Combine(permDir, "qubes-updates-relay-" + DateTime.Now.ToString("yyyyMMdd") + ".log");
-            QwtLog.LogInit(permDir, "qubes-updates-relay");
+            // LogInit with NO directory: it resolves the rule itself and, on a fall-through, writes the line naming the
+            // failed step first - given permDir it would take that as configured and say nothing.
+            string permDir = QwtLogDir("qubes-updates-relay");
+            if (permDir != null) logFile = Path.Combine(permDir, "qubes-updates-relay-" + DateTime.Now.ToString("yyyyMMdd") + ".log");
+            QwtLog.LogInit(null, "qubes-updates-relay");
         }
         // Otherwise the library opens this relay's log: --log-file as given, else qubes-updates-relay-<yyyyMMdd>.log in
         // --log, else in the library's own directory (the registry LogDir).
@@ -2087,6 +2081,9 @@ static class QwtLog
     public static extern void LogInit(string logDir, string logName);
     [DllImport("windows-utils.dll", CharSet = CharSet.Unicode, CallingConvention = CallingConvention.Cdecl)]
     public static extern uint LogInitDefault(string logName);
+    // The one log-directory rule (docs/ADR-logging.md 1): the directory, and the note naming each step that failed.
+    [DllImport("windows-utils.dll", CharSet = CharSet.Unicode, CallingConvention = CallingConvention.Cdecl)]
+    public static extern uint LogGetDirectory(string logName, StringBuilder dir, uint cchDir, StringBuilder note, uint cchNote);
     // _LogFormat(level, raw, functionName, format, ...). The message is the "%s" argument, never the format.
     [DllImport("windows-utils.dll", CharSet = CharSet.Unicode, CallingConvention = CallingConvention.Cdecl)]
     static extern void _LogFormat(int level, int raw, IntPtr functionName, string format, string arg);

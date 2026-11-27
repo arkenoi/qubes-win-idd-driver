@@ -19,8 +19,12 @@ line in that directory is accounted for by the sweep.** Owner, 2026-11-01: *"fix
 MAKE SURE ALL LINES THERE ARE ACCOUNTED FOR IN SWEEP"*; 2026-10-07: *"NOTHING should write log
 outside"*. The bullet that sat under "Not done" since 2026-10-07 is this decision's reason.
 
-1. **The directory** is log.c's rule, for every writer: registry `LogDir` at the root key, else
-   `<SystemDrive>\Qubes Logs`.
+1. **The directory** is one rule, resolved in one place for every writer: windows-utils' `log.c`, which
+   every other writer asks rather than copies. The registry `LogDir` at the root key; else `Q:\Qubes Logs`
+   on the private volume; else, when that does not exist either, `<SystemDrive>\Qubes Logs`. A step whose
+   directory cannot be created falls through to the next, and the writer's first line in the directory it
+   lands in names the step that failed. Owner, 2026-11-27: *"we should log to private drive as fallback,
+   and if does not exist for whatever reason then system one"*.
 2. **The line** is the windows-utils shape `[yyyyMMdd.HHmmss.fff-PID[:TID]-L] msg`, one file per
    module per day: `<module>-<yyyyMMdd>.log` for native and C# writers, `<script>.ps1-<yyyyMMdd>.log`
    for PowerShell. Kept in their own declared shapes and matched by name: `bridge.log` and

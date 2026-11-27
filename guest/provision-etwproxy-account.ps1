@@ -44,8 +44,8 @@
 #     privileged groups AND Performance Log Users are actively stripped on every run, then the
 #     actual membership census is verified empty.
 #   * one outbound-Block Windows Firewall rule scoped to this account's SID.
-#   * LOG: the proxy logs to the STANDARD QWT log directory (HKLM ...\Qubes Tools:LogDir, else
-#     %SystemDrive%\Qubes Logs - qtb_shared.h QwtLogDir), file etw-proxy.log, rotated to
+#   * LOG: the proxy logs to the STANDARD QWT log directory (the one rule, docs/ADR-logging.md 1:
+#     LogDir, else Q:\Qubes Logs, else %SystemDrive%\Qubes Logs - qtb_shared.h QwtLogDir), file etw-proxy.log, rotated to
 #     etw-proxy.log.old at ~1MB. The ACE is scoped to the proxy's OWN log only:
 #       - Modify on the two pre-created files etw-proxy.log / etw-proxy.log.old (append, and
 #         the rotation rename needs DELETE on both);
@@ -420,8 +420,8 @@ try {
 
 # ---- 10. standard log location: an ACE scoped to the proxy's OWN log ---------------------
 # etwproxy.exe logs to <QwtLogDir>\etw-proxy.log (qtb_shared.h QwtLogDir + g_logName):
-# HKLM\SOFTWARE\Invisible Things Lab\Qubes Tools : LogDir if set, else %SystemDrive%\Qubes Logs
-# - the STANDARD QWT log location (windows-utils LogInitDefault convention), NOT the bridge
+# the one rule (docs/ADR-logging.md 1): LogDir, else Q:\Qubes Logs, else %SystemDrive%\Qubes Logs
+# - the STANDARD QWT log location (windows-utils log.c, LogGetDirectory), NOT the bridge
 # state dir. Resolve it the same way (this elevated 64-bit PowerShell reads the same 64-bit
 # view the proxy opens with KEY_WOW64_64KEY). The grant must survive the proxy's own rotation
 # (BLog: rename etw-proxy.log -> etw-proxy.log.old with REPLACE, then re-create via OPEN_ALWAYS):
@@ -430,13 +430,11 @@ try {
 #   - which grants the proxy access ONLY to files the proxy itself creates, never to other
 #   components' logs. icacls takes the */SID form, so no localized account names are involved.
 try {
-    $logDir = $null
-    try {
-        $lv = Get-ItemProperty -Path 'HKLM:\SOFTWARE\Invisible Things Lab\Qubes Tools' `
-                               -Name LogDir -ErrorAction Stop
-        if ($lv.LogDir) { $logDir = [Environment]::ExpandEnvironmentVariables([string]$lv.LogDir) }
-    } catch { }
-    if (-not $logDir) { $logDir = Join-Path $env:SystemDrive 'Qubes Logs' }
+    # THE DIRECTORY BY THE ONE RULE (docs/ADR-logging.md 1), the one etwproxy.exe asks windows-utils for: log.ps1's
+    # Get-QwtLogDir, staged beside this script, dot-sourced in a child scope so its functions stay out of this one.
+    $sink = Join-Path $PSScriptRoot 'log.ps1'
+    $logDir = & { . $sink; Get-QwtLogDir }
+    if (-not $logDir) { throw "no log directory came back from $sink" }
     if (-not (Test-Path -LiteralPath $logDir)) { New-Item -ItemType Directory -Force -Path $logDir | Out-Null }
 
     $aceOk = $true

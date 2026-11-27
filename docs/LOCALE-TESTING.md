@@ -56,7 +56,8 @@ The console OEM code page is 932/936/949/950 rather than 437/1252.
 * Does the update run at all, or does it fail early? Native tool output (`reg`, `schtasks`, `DISM`)
   is parsed in places.
 * Is the updater's log, `qubes-windows-update.ps1-<yyyyMMdd>.log` in the log directory (registry
-  `LogDir`, else `<SystemDrive>\Qubes Logs`), readable, or full of replacement characters?
+  `LogDir`, else `Q:\Qubes Logs`, else `<SystemDrive>\Qubes Logs` - `docs/ADR-logging.md` 1), readable,
+  or full of replacement characters?
 * Does a user profile path or computer name containing non-ASCII characters break the workdir
   (`C:\ProgramData\Qubes\wu`) or the qrexec transport?
 

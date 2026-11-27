@@ -62,45 +62,56 @@ inline std::wstring StateDir()
     return d;
 }
 
-// The STANDARD QWT log directory (windows-utils LogInitDefault convention, log.c:235-253):
-// HKLM\Software\Invisible Things Lab\Qubes Tools : LogDir if set, else %SYSTEMDRIVE%\Qubes Logs.
+// The STANDARD QWT log directory, by the ONE rule (docs/ADR-logging.md 1). The rule lives in
+// windows-utils' log.c and is ASKED here, never re-derived: LogGetDirectory from windows-utils.dll,
+// which the QWT MSI installs in System32 and every Qubes Tools program already links. Loaded from
+// System32 only, so a copy planted beside the exe is never the one asked; answered once per process.
+// *note gets the fallback line - the first line a writer puts in that directory - or stays empty.
+// A library that cannot be asked lands on the rule's last step, the system drive, and says why.
+// An EMPTY directory means no step could be used, and the caller writes nothing: an empty prefix
+// would make "\bridge.log" a stray at a drive root.
 // etwproxy.exe routes etw-proxy.log HERE (not the bridge's qubes-toast-bridge state dir): the
 // proxy runs as a different, lower-privileged account and must hold write access to its OWN log
 // ONLY - never to the bridge's control surfaces (stop file, heartbeat, banner markers). The
 // proxy-scoped ACE (Modify on this one log) is granted by guest/provision-etwproxy-account.ps1.
-inline std::wstring QwtLogDir()
+inline std::wstring QwtLogDir(std::wstring* note = nullptr)
 {
-    wchar_t buf[MAX_PATH];
-    HKEY k;
-    if (!RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"Software\\Invisible Things Lab\\Qubes Tools",
-                       0, KEY_READ | KEY_WOW64_64KEY, &k))
+    static bool asked = false;
+    static std::wstring dir, why;
+    if (!asked)
     {
-        DWORD cb = sizeof(buf), type = 0;
-        LONG r = RegQueryValueExW(k, L"LogDir", nullptr, &type, (BYTE*)buf, &cb);
-        RegCloseKey(k);
-        if (r == ERROR_SUCCESS && (type == REG_SZ || type == REG_EXPAND_SZ) &&
-            cb >= sizeof(wchar_t) && buf[0])
+        asked = true;
+        typedef DWORD (__cdecl *LogGetDirectoryFn)(const wchar_t*, wchar_t*, DWORD, wchar_t*, DWORD);
+        HMODULE wu = LoadLibraryExW(L"windows-utils.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+        LogGetDirectoryFn get = wu ? (LogGetDirectoryFn)GetProcAddress(wu, "LogGetDirectory") : nullptr;
+        if (!get)
         {
-            buf[cb / sizeof(wchar_t) < RTL_NUMBER_OF(buf) ? cb / sizeof(wchar_t) : RTL_NUMBER_OF(buf) - 1] = 0;
-            std::wstring d(buf);
-            if (type == REG_EXPAND_SZ)
+            // THE LIBRARY COULD NOT ANSWER - a broken install, when a log matters most. The rule's last
+            // step, as log.ps1 takes it, said as such in the line this writer puts first.
+            const DWORD err = GetLastError();
+            wchar_t sys[MAX_PATH];
+            const UINT cch = GetSystemDirectoryW(sys, RTL_NUMBER_OF(sys));
+            if (cch >= 3 && cch < RTL_NUMBER_OF(sys))
             {
-                wchar_t ex[MAX_PATH];
-                if (ExpandEnvironmentStringsW(d.c_str(), ex, RTL_NUMBER_OF(ex))) d = ex;
+                sys[3] = L'\0';
+                dir = std::wstring(sys) + L"Qubes Logs";
+                CreateDirectoryW(dir.c_str(), nullptr);
             }
-            return d;
+            wchar_t m[512];
+            swprintf(m, RTL_NUMBER_OF(m), L"windows-utils.dll LogGetDirectory is unavailable (error %lu) - logging to '%.300s'",
+                     err, dir.c_str());
+            why = m;
+        }
+        else
+        {
+            std::vector<wchar_t> d(32768), n(1024);   // MAX_PATH_LONG, LOG_DIR_NOTE_MAX (winutils log.h)
+            if (get(nullptr, d.data(), (DWORD)d.size(), n.data(), (DWORD)n.size()) == ERROR_SUCCESS)
+                dir = d.data();
+            why = n.data();
         }
     }
-    // Default: %SYSTEMDRIVE%\Qubes Logs (LOG_DEFAULT_DIR). Derive the system drive from the
-    // system directory (e.g. "C:\Windows\System32" -> "C:\").
-    wchar_t sysdir[MAX_PATH];
-    if (GetSystemDirectoryW(sysdir, RTL_NUMBER_OF(sysdir)) && sysdir[1] == L':')
-    {
-        std::wstring d(sysdir, 3);   // "C:\"
-        d += L"Qubes Logs";
-        return d;
-    }
-    return L"C:\\Qubes Logs";
+    if (note) *note = why;
+    return dir;
 }
 
 // --- BLog ---------------------------------------------------------------------------------
@@ -186,7 +197,15 @@ inline void BLogE(const wchar_t* fmt, ...)
 inline void BLogV(const wchar_t* tag, const wchar_t* fmt, va_list ap)
 {
     static std::wstring path;
-    if (path.empty()) path = (g_logDirOverride.empty() ? QwtLogDir() : g_logDirOverride) + g_logName;
+    if (path.empty())
+    {
+        std::wstring note, rule = QwtLogDir(&note);
+        std::wstring dir = g_logDirOverride.empty() ? rule : g_logDirOverride;
+        if (dir.empty()) return;   // no directory: say nothing rather than write a stray
+        path = dir + g_logName;
+        // the writer's first line in the directory it landed in names the step that failed
+        if (dir == rule && !note.empty()) BLogW(L"QWTLOGDIRFALLBACK %s", note.c_str());
+    }
     wchar_t line[2048];
     SYSTEMTIME st; GetLocalTime(&st);
     int off = swprintf(line, RTL_NUMBER_OF(line), L"%02u:%02u:%02u %s", st.wHour, st.wMinute,

@@ -487,12 +487,11 @@ static void EtwProxyShedAllPrivileges()
 
 static int EtwProxyMain(const wchar_t* clientSid)
 {
-    // Logs go to the STANDARD QWT log dir (QwtLogDir: registry LogDir else
-    // %SYSTEMDRIVE%\Qubes Logs), NOT the bridge's qubes-toast-bridge state dir. Set BEFORE
-    // the first BLog. The proxy holds a Modify ACE on THIS log only (provisioning script) and
-    // no write access to the bridge's control surfaces.
+    // Logs go to the STANDARD QWT log dir (QwtLogDir: the one rule, asked of windows-utils, which
+    // also makes the directory), NOT the bridge's qubes-toast-bridge state dir. Set BEFORE the first
+    // BLog. The proxy holds a Modify ACE on THIS log only (provisioning script) and no write access
+    // to the bridge's control surfaces.
     g_logDirOverride = QwtLogDir();
-    CreateDirectoryW(g_logDirOverride.c_str(), nullptr);   // best-effort; provisioning pre-creates + ACEs
     g_logName = L"\\etw-proxy.log";
 
     // NEVER-SYSTEM/ADMIN GUARD (code-enforced, complements the privilege drop below): the

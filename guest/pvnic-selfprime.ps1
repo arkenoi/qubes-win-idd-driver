@@ -1513,12 +1513,14 @@ if (-not $armed) {
 }
 
 # bootlog: what the payload wrote during THIS run - every <LogDir>\pvnic-boot.ps1-*.log written since $primeStart,
-# in name order, the directory by the one rule (log.ps1's Get-QwtLogDir: the registry LogDir, else
-# <SystemDrive>\Qubes Logs). None (the usual case: this run arms the latch through the cmd.exe re-arm task, not
-# the payload) falls back to the file the payload wrote before it moved, as this field always read.
+# in name order, the directory by the one rule (docs/ADR-logging.md 1), asked of the sink the payload loads - bin's
+# log.ps1, else the one beside this script - in a child scope so its functions stay out of this one. None (the usual
+# case: this run arms the latch through the cmd.exe re-arm task, not the payload) falls back to the file the
+# payload wrote before it moved, as this field always read.
 $bootLogDir = $null
-try { $bootLogDir = Get-ItemPropertyValue $qwtKey LogDir -ErrorAction Stop } catch { }
-if (-not $bootLogDir) { $bootLogDir = Join-Path $env:SystemDrive 'Qubes Logs' }
+foreach ($s in @($sinkBin, $sinkSrc)) {
+    if ($s -and (Test-Path -LiteralPath $s)) { try { $bootLogDir = & { . $s; Get-QwtLogDir } } catch { }; if ($bootLogDir) { break } }
+}
 $bootLogs = @(Get-ChildItem -LiteralPath $bootLogDir -Filter 'pvnic-boot.ps1-*.log' -EA SilentlyContinue |
               Where-Object { $_.LastWriteTime -ge $primeStart } | Sort-Object Name)
 if ($bootLogs.Count -gt 0) {
