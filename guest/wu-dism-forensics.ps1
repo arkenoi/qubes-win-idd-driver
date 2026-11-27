@@ -1,13 +1,12 @@
 # Why did an offline .msu install fail? Pull the decisive lines out of DISM's own log and CBS,
 # per package, instead of guessing from an exit code.
 $ErrorActionPreference = 'Continue'
-# THE ONE LOG DIRECTORY (docs/ADR-logging.md, Decision 2026-11-01), by log.ps1's rule, inlined because this probe runs
-# without it: the registry LogDir, else <SystemDrive>\Qubes Logs. A moved log is its per-day files there,
+# THE ONE LOG DIRECTORY (docs/ADR-logging.md, Decision 2026-11-01), asked of the installed log.ps1's Get-QwtLogDir
+# (the one rule: the registry LogDir, else Q:\Qubes Logs, else <SystemDrive>\Qubes Logs). A moved log is its per-day files there,
 # <module>-<yyyyMMdd>.log, newest last; only a guest with none of them reads the file at its old path.
 function Get-MovedLogFiles([string]$Module, [string]$Old) {
-    $d = $null
-    try { $d = Get-ItemPropertyValue 'HKLM:\Software\Invisible Things Lab\Qubes Tools' LogDir -ErrorAction Stop } catch { }
-    if (-not $d) { $d = Join-Path $env:SystemDrive 'Qubes Logs' }
+    # the log directory by the one rule (docs/ADR-logging.md 1), asked of the installed log.ps1
+    $d = & { . 'C:\Program Files\Qubes Tools\bin\log.ps1'; Get-QwtLogDir }
     $rx = '^' + [regex]::Escape($Module) + '-\d{8}\.log$'
     $f = @(Get-ChildItem -LiteralPath $d -Filter "$Module-*.log" -File -EA SilentlyContinue | Where-Object { $_.Name -match $rx } | Sort-Object Name | ForEach-Object { $_.FullName })
     if ($f.Count -eq 0 -and $Old -and (Test-Path -LiteralPath $Old)) { $f = @($Old) }
