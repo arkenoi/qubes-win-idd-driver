@@ -464,7 +464,8 @@ if ($relayTask.state -eq 'Running') {
 # the permanent relay was ended through its task (above), and a relay a probe started for itself exits by its --parent-pid
 # watchdog within seconds of that probe's exit (ParentCheckMs, 5 s). So wait, bounded to four watchdog periods (40 x 500 ms), for
 # 127.0.0.1:8082's LISTEN owner to go away - found by the PORT, identified by its PID, never by a name. A listener still there
-# afterwards is not ours to stop: the compile is skipped, the previous exe is kept, and the pid is named. Without a previous exe
+# afterwards is ended by its pid only when it is the recorded permanent relay or runs from the exe being replaced
+# (RELAY-ORPHAN-STOP below). Anything else is refused and named, and the previous exe is kept. Without a previous exe
 # there is nothing to keep, and a deploy must not report a relay it cannot vouch for: it refuses (Jev 2026-10-03, throw 0.80).
 # Get-RelayPortOwner mirrors qubes-windows-update.ps1 and wu-update.ps1 (0 = free, -1 = unreadable, UNKNOWN IS NOT ZERO); keep the
 # three in step.
@@ -485,25 +486,60 @@ if ($relayOwner -ne 0) {   # GUARD:relaynokill
     if ($relayOwner -gt 0) {
         $who = 'unknown'
         $ownerPath = $null
-        try { $op = Get-Process -Id $relayOwner -ErrorAction SilentlyContinue; if ($op) { $who = $op.ProcessName; try { $who += ' at ' + $op.Path; $ownerPath = $op.Path } catch { } } } catch { }
+        try { $op = Get-Process -Id $relayOwner -ErrorAction SilentlyContinue; if ($op) { $who = $op.ProcessName; try { $who += ' at ' + $op.Path; $ownerPath = $op.Path } catch { }; try { $who += ', started ' + $op.StartTime.ToString('s') } catch { } } } catch { }
         # ---- RELAY-ORPHAN-STOP-BEGIN  (driven by tools/tests/wu-installer-relay-test.ps1)
-        # AN UPGRADE THAT CANNOT REPLACE ITS OWN COMPONENT IS STUCK, NOT SAFE. Until now this refused
+        # AN UPGRADE THAT CANNOT REPLACE ITS OWN COMPONENT IS STUCK, NOT SAFE. Until 87e3a746 this refused
         # whenever anything still held 8082 and a previous exe existed. That condition is
         # SELF-PERPETUATING: the stale relay holds the port AND holds the exe open, so the deploy
-        # refuses; because it refuses, the stale relay is never replaced. On win11de-tup a relay has
-        # squatted 8082 SINCE SEPTEMBER and every Windows Update pass on that template has failed
-        # since, each deploy refusing into a log nobody read. Owner, 2026-10-21: "how upgrade process
+        # refuses; because it refuses, the stale relay is never replaced. On win11de-tup a relay
+        # squatted 8082 FROM SEPTEMBER and every Windows Update pass on that template failed,
+        # each deploy refusing into a log nobody read. Owner, 2026-10-21: "how upgrade process
         # can DELIBERATELY refuse to land the updated component?"
         # THIS IS NOT STOPPING BY NAME, which is what the standing rule forbids because a pattern
-        # matches the matcher. The pid comes from the PORT (Get-NetTCPConnection -LocalPort 8082) and
-        # is acted on ONLY when its executable path is THIS deploy's own relay exe. Anything else
-        # holding 8082 is not ours and still refuses, below, unchanged.
-        # AND IT CANNOT BE THE PERMANENT RELAY OR A LIVE PASS'S: the permanent relay was ended through
-        # its task above, and this deploy holds the updater mutex, so no pass is running. A listener
-        # still here after the 20 s wait is an orphan by construction.
-        # Jev on this fork: stop_the_identified_orphan 0.81, refusing_forever 0.21, rename_around 0.16.
-        if ($ownerPath -and $exe -and ($ownerPath -ieq $exe)) {
-            Log ("the listener on 127.0.0.1:8082 is OUR OWN relay exe (pid {0} at {1}) and no pass is running - ending that pid so this deploy can replace it" -f $relayOwner, $ownerPath)
+        # matches the matcher. The pid comes from the PORT (Get-NetTCPConnection -LocalPort 8082), and
+        # it is ended only when it is identified in one of two ways (ADR-updater 12.4 point 6):
+        #  1. THE RECORD. Its pid AND start time are the ones the permanent relay recorded in
+        #     HKLM\SOFTWARE\Qubes\UpdatesProxy\RelayThisBoot (relay.cs WritePermanentRecord). A pass makes
+        #     this test before it serves through the relay (12.4 point 3). The relay's task was ended
+        #     above when it was running, so a recorded relay still listening 20 s later outlived that. Owner
+        #     2026-11-28: «find the way to track its pid and shut it down properly».
+        #     The test is not written again here. It is the rpc handler's Get-PermanentRelay, read out of
+        #     the wu-update.ps1 this deploy installs with the PowerShell parser, and run in a child scope on
+        #     the port's pid. The handler's copy is the record test and nothing else.
+        #     qubes-windows-update.ps1's copy also re-reads the port and derives the relay's log through
+        #     log.ps1's Get-QwtLogDir, which this script does not load. If the test cannot be read or run,
+        #     it identifies nothing: that is logged, and the listener is judged by its image or refused.
+        #  2. THE IMAGE (87e3a746). The listener is not the recorded relay, but it runs from exactly the exe
+        #     this deploy replaces. Only this case covers a relay of a build that writes no RelayThisBoot
+        #     record and that did not exit. No release through v4.3.46 carries 5f2be986. A relay older
+        #     than --parent-pid (v4.3.30) has no watchdog; the win11de-tup squatter above was one.
+        # Anything else holding 8082 is not ours and still refuses, below. This deploy holds the updater
+        # mutex, so no pass is running.
+        # Jev on 87e3a746: stop_the_identified_orphan 0.81, refusing_forever 0.21, rename_around 0.16.
+        $recorded = $false
+        $recordNote = ''
+        try {
+            $handler = Join-Path $SetupRoot 'wu-update.ps1'
+            $hTok = $null; $hErr = $null
+            $hAst = [System.Management.Automation.Language.Parser]::ParseFile($handler, [ref]$hTok, [ref]$hErr)
+            $hDef = @($hAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Get-PermanentRelay' }, $true))
+            if (@($hErr).Count -gt 0 -or $hDef.Count -ne 1) {
+                throw ("{0} parse error(s) and {1} Get-PermanentRelay definition(s) in {2}{3}" -f @($hErr).Count, $hDef.Count, $handler, $(if (@($hErr).Count) { ' - ' + $hErr[0].Message } else { '' }))
+            }
+            $recorded = [bool](& { . ([scriptblock]::Create($hDef[0].Extent.Text)); Get-PermanentRelay $relayOwner })
+        } catch {
+            $recordNote = "the record test (Get-PermanentRelay in the wu-update.ps1 under '$SetupRoot') could not run: $($_.Exception.Message)"
+            Log ("{0} - pid {1} is not identified by its record" -f $recordNote, $relayOwner)
+        }
+        $endAs = ''
+        if ($recorded) { $endAs = 'record' }
+        elseif ($ownerPath -and $exe -and ($ownerPath -ieq $exe)) { $endAs = 'image' }
+        if ($endAs) {
+            if ($endAs -eq 'record') {
+                Log ("the listener on 127.0.0.1:8082 is the template's RECORDED permanent relay (pid {0}, {1}: its pid and start time are the ones RelayThisBoot holds) and it is still listening after the task step and the wait above - ending that pid so this deploy can replace it" -f $relayOwner, $who)
+            } else {
+                Log ("the listener on 127.0.0.1:8082 is OUR OWN relay exe (pid {0} at {1}) and no pass is running - ending that pid so this deploy can replace it; {2}" -f $relayOwner, $ownerPath, $(if ($recordNote) { 'its record test did not run' } else { 'it is not the relay RelayThisBoot records' }))
+            }
             # BY ID, NEVER BY NAME. -Name would match every process called qubes-updates-relay,
             # whoever started it, which is the 2026-10-03 defect this file's own suite exists to
             # keep out (Test-NothingKilled counts any by-name lookup as a failure).
@@ -514,11 +550,15 @@ if ($relayOwner -ne 0) {   # GUARD:relaynokill
             if ($relayOwner -eq 0) {
                 Log ("port 127.0.0.1:8082 freed after {0} ms - continuing to compile and replace the relay" -f ($stopWaits * 500))
             } else {
-                Log ("the orphan was ended but 127.0.0.1:8082 is STILL held (owner now {0}) - refusing below rather than compiling over an unknown state" -f $relayOwner)
+                Log ("the listener was ended but 127.0.0.1:8082 is STILL held (owner now {0}) - refusing below rather than compiling over an unknown state" -f $relayOwner)
             }
         }
         # ---- RELAY-ORPHAN-STOP-END
         $reason = "QWTRELAYBUSY: pid $relayOwner ($who) is still listening on 127.0.0.1:8082 after 20 s while this deploy holds the updater mutex and after the permanent relay's task was ended - it is NOT killed (nothing is killed by name, ADR-updater 12.4)"
+        if (-not $endAs) {
+            if ($recordNote) { $reason += ": $recordNote, and it does not run from $exe" }
+            else { $reason += ": it is not the relay RelayThisBoot records and does not run from $exe" }
+        }
     }
 }
 # THE REFUSAL IS A SEPARATE DECISION FROM THE WAIT, and it has to re-read the state. When the orphan
