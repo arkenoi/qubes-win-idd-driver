@@ -509,7 +509,7 @@ function Fail {
     try { Clear-BootResume } catch { }
     try { Reset-AutoRunCounter } catch { }
     try { Restore-SweptBinaries } catch { }
-    if ($script:UpdTasksDisabled) {   # GUARD:failupdtasks
+    if ($script:UpdTasksDisabled) {
         $prev = $ErrorActionPreference
         $ErrorActionPreference = 'Continue'
         foreach ($t in $script:UpdTasksDisabled) {
@@ -892,7 +892,7 @@ function Suspend-QubesServiceRecovery {
     # absent.
     $exrc = 0
     try { & sc.exe query $Name 2>&1 | Out-Null; $exrc = $LASTEXITCODE } catch { $exrc = -1 }
-    if ($exrc -eq 1060) {   # GUARD:recovabsent
+    if ($exrc -eq 1060) {
         Write-Log "recovery disarm for ${Name}: the service is not installed on this system (sc query rc=1060), so the SCM has nothing to restart behind this stage - nothing to disarm"
         $script:RecoveryAbsent[$Name] = $true
         $script:Result.detail.svc_recovery_absent = (($script:RecoveryAbsent.Keys | Sort-Object) -join ' ')
@@ -917,7 +917,7 @@ function Suspend-QubesServiceRecovery {
     # `failure <svc> reset= 0 actions=` with nothing after it and answered 1639, ERROR_INVALID_COMMAND_LINE.
     # Measured on the rig 2026-10-07: the disarm had therefore NEVER run, in any build, and the detail key
     # that said so was unclassified in the checker until the same day, so the install read green.
-    & sc.exe failure $Name reset= 0 actions= '""' 2>&1 | Out-Null   # GUARD:recovquote
+    & sc.exe failure $Name reset= 0 actions= '""' 2>&1 | Out-Null
     $rc1 = $LASTEXITCODE
     & sc.exe failureflag $Name 0 2>&1 | Out-Null
     $rc2 = $LASTEXITCODE
@@ -926,10 +926,10 @@ function Suspend-QubesServiceRecovery {
     # second suspend of QubesGuiWatchdog ended stage 2 with that exception and the install delivered nothing. Keeping
     # the FIRST reading matters just as much: a second `sc qfailure` reads the DISARMED state, so overwriting would
     # make the re-arm restore "no actions" - the very configuration the arming exists to prevent.
-    if (-not $script:RecoverySuspended.ContainsKey($Name)) { $script:RecoverySuspended[$Name] = $before }   # GUARD:recovsuspend
+    if (-not $script:RecoverySuspended.ContainsKey($Name)) { $script:RecoverySuspended[$Name] = $before }
     # AND THE VERDICT IS THE READBACK, not $rc1/$rc2 - an exit code of 0 from a command that wrote nothing
     # would read exactly like success. The codes stay in the message as evidence.
-    $after = Read-QubesServiceRecovery $Name   # GUARD:recovreadback
+    $after = Read-QubesServiceRecovery $Name
     if ($null -ne $after -and $after.actions.Count -eq 0) {
         Write-Log "recovery disarmed for $Name before this stage stops it (was: $before; now reads no actions); the SCM cannot restart it behind us"
         $script:Result.detail.svc_recovery_suspended = (($script:RecoverySuspended.GetEnumerator() | ForEach-Object { "$($_.Key)[$($_.Value)]" }) -join ' ')
@@ -960,7 +960,7 @@ function Resume-QubesServiceRecovery {
         # READ BACK HERE TOO. This call was never checked at all, and a silent failure here is worse than a
         # silent failure in the disarm: the guest leaves the installer with NO recovery for a service of ours
         # while the log says "re-armed".
-        $now = Read-QubesServiceRecovery $n   # GUARD:rearmreadback
+        $now = Read-QubesServiceRecovery $n
         if ($null -ne $now -and $now.actions.Count -gt 0) {
             Write-Log "recovery re-armed for $n (now: $($now.actions -join '/'); prior: $prior)"
         } else {
@@ -1008,7 +1008,7 @@ function Set-QubesServiceRecovery {
     # not the MSI's: pvnic-selfprime.ps1 creates it later in this stage and arms it where it is
     # created (its NETSETUP-RECOVERY region); health-check.ps1 2b asserts all four.
     $recov = [ordered]@{}
-    foreach ($svc in 'QdbDaemon', 'QrexecAgent', 'QubesGuiWatchdog') {   # GUARD:recovthree
+    foreach ($svc in 'QdbDaemon', 'QrexecAgent', 'QubesGuiWatchdog') {
         try {
             & sc.exe failure $svc reset= 86400 actions= restart/5000/restart/15000/restart/60000 | Out-Null
             $rc1 = $LASTEXITCODE
@@ -1508,7 +1508,7 @@ function Register-QwtEventSource {
             $script:Result.detail.event_source = "failed: message file absent ($dllPath)"
             return
         }
-        & reg.exe add $key /v EventMessageFile /t REG_EXPAND_SZ /d $dll /f | Out-Null   # GUARD:evsrc
+        & reg.exe add $key /v EventMessageFile /t REG_EXPAND_SZ /d $dll /f | Out-Null
         $rc1 = $LASTEXITCODE
         & reg.exe add $key /v TypesSupported /t REG_DWORD /d 7 /f | Out-Null
         $rc2 = $LASTEXITCODE
@@ -1544,7 +1544,10 @@ function Register-QwtEventSource {
 #                alone: 4011-4014 (the same children ended by the system with their session, deathevent.h)
 #                are recorded there and are not deaths, and a provider-only Select launched this task for
 #                them, during the shutdown that wrote them, where Task Scheduler refuses the launch (203,
-#                ERROR_SHUTDOWN_IN_PROGRESS) - one Error record per shutdown (measured 2026-10-10, win10-acc)
+#                ERROR_SHUTDOWN_IN_PROGRESS) - one Error record per shutdown (measured 2026-10-10, win10-acc);
+#                and, in a Select of their own, 4021 and 4022 of our source (winutils log.h): the first full
+#                qrexec connection table in a boot and the first client a pipe server drops for want of
+#                memory or a thread - not deaths, two ACTION notices (docs/ADR-qrexec.md 3, points 1 and 2)
 #   System       7031/7034/7023/7024 (Service Control Manager) for OUR four services, by DISPLAY name,
 #                which is what param1 carries (English only: Package.en-us.wxl is the MSI's one locale)
 #   TaskScheduler/Operational  201 with a non-zero ResultCode other than 2147943691, and 203, for OUR
@@ -1611,7 +1614,7 @@ function Register-QwtDeathReporter {
 
         # 2. the channel 201/203 are written to
         $global:LASTEXITCODE = $null
-        & wevtutil.exe set-log Microsoft-Windows-TaskScheduler/Operational /enabled:true 2>&1 | Out-Null   # GUARD:tasklog
+        & wevtutil.exe set-log Microsoft-Windows-TaskScheduler/Operational /enabled:true 2>&1 | Out-Null
         if ($LASTEXITCODE -ne 0) { throw "wevtutil could not enable Microsoft-Windows-TaskScheduler/Operational (rc '$LASTEXITCODE')" }
 
         # 2b. NOTHING OF OURS MAY BE RUNNING THE SCRIPT WHILE IT IS REPLACED. MEASURED 2026-11-11, acceptance of
@@ -1678,7 +1681,7 @@ function Register-QwtDeathReporter {
         # split into two lists, each well inside the limit, and every crash id gets one Select per list. The xpath selftest holds each
         # Select to at most 16 terms (knob onelist puts the single list back and must fail).
         $exeHalf = [int][math]::Ceiling($ourExes.Count / 2)
-        $exeOrA = ($ourExes[0..($exeHalf - 1)] | ForEach-Object { "Data='$_'" }) -join ' or '   # GUARD:termlimit
+        $exeOrA = ($ourExes[0..($exeHalf - 1)] | ForEach-Object { "Data='$_'" }) -join ' or '
         $exeOrB = ($ourExes[$exeHalf..($ourExes.Count - 1)] | ForEach-Object { "Data='$_'" }) -join ' or '
         $svcOr  = ($ourServices | ForEach-Object { "Data[@Name='param1']='$_'" }) -join ' or '
         $taskOr = ($ourTasks | ForEach-Object { "Data[@Name='TaskName']='$_'" }) -join ' or '
@@ -1692,6 +1695,7 @@ function Register-QwtDeathReporter {
             "<Select Path=`"Application`">*[System[Provider[@Name='Windows Error Reporting'] and EventID=1001] and EventData[$exeOrB]]</Select>",
             "<Select Path=`"Application`">*[System[Provider[@Name='.NET Runtime'] and EventID=1026]]</Select>",
             "<Select Path=`"Application`">*[System[Provider[@Name='Qubes Windows Tools'] and (EventID=4001 or EventID=4002 or EventID=4003 or EventID=4004)]]</Select>",
+            "<Select Path=`"Application`">*[System[Provider[@Name='Qubes Windows Tools'] and (EventID=4021 or EventID=4022)]]</Select>",
             '</Query>',
             '<Query Id="1" Path="System">',
             "<Select Path=`"System`">*[System[Provider[@Name='Service Control Manager'] and (EventID=7031 or EventID=7034 or EventID=7023 or EventID=7024)] and EventData[$svcOr]]</Select>",
@@ -1710,7 +1714,7 @@ function Register-QwtDeathReporter {
             '</Query>',
             '</QueryList>'
         ) -join ''
-        $arguments = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $reporter + '" -Channel "$(Channel)" -RecordId $(RecordId)'   # GUARD:argsinject
+        $arguments = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $reporter + '" -Channel "$(Channel)" -RecordId $(RecordId)'
         $xml = @"
 <?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.3" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
@@ -3742,7 +3746,7 @@ function Invoke-Stage2 {
         $s = Get-Service -Name $svc -ErrorAction SilentlyContinue
         if (-not $s) { $prestop[$svc] = 'absent'; continue }
         if ($s.Status -eq 'Stopped') { $prestop[$svc] = 'already-stopped'; continue }
-        [void](Suspend-QubesServiceRecovery -Name $svc)   # GUARD:prestopdisarm - the relauncher first (R1)
+        [void](Suspend-QubesServiceRecovery -Name $svc)   # the relauncher first (R1)
         Set-QwtRuntimeAffinity -Site "pre-msiexec, before $svc stops"   # a service the SCM restarted since starts unpinned
         $svcPid = (Get-CimInstance Win32_Service -Filter "Name='$svc'" -ErrorAction SilentlyContinue).ProcessId
         try { Stop-Service -Name $svc -Force -ErrorAction Stop } catch { Write-Log "Stop-Service $svc threw: $($_.Exception.Message)" 'WARN' }
@@ -5767,10 +5771,10 @@ public static class QdbPrime {
             } catch {
                 $udMsg = "$($_.Exception.Message)"
                 $script:UpdaterDeployFailure = Get-UpdaterDeployFailureRecord -Message $udMsg
-                Write-Log "Windows Update agent deploy FAILED: $udMsg" 'ERROR'   # GUARD:deployerror
+                Write-Log "Windows Update agent deploy FAILED: $udMsg" 'ERROR'
                 Write-Log "  the install continues without it; this qube keeps its previous updater (if any). $($script:UpdaterDeployFailure.remedy)" 'ERROR'
                 $script:Result.detail.updater_agent = "error: $udMsg"
-                $script:Result.detail.updater_agent_failed = $true   # GUARD:deployflag
+                $script:Result.detail.updater_agent_failed = $true
             }
         } else {
             Write-Log 'install-updater-agent.ps1 not in payload - updater agent unavailable' 'WARN'
@@ -5789,7 +5793,7 @@ public static class QdbPrime {
     $errFlags = @()
     $dd = $script:Result.detail
     if ($dd.idd_failed -eq $true)                                   { $errFlags += 'idd_failed' }
-    if ($dd.updater_agent_failed -eq $true)                         { $errFlags += 'updater_agent_failed' }   # GUARD:deployfold
+    if ($dd.updater_agent_failed -eq $true)                         { $errFlags += 'updater_agent_failed' }
     if ($dd.idd_vga_disable_pending -eq $true)                      { $errFlags += 'idd_vga_disable_pending' }
     if ($dd.pvnic_prime_failed -eq $true)                           { $errFlags += 'pvnic_prime_failed' }
     if ($dd.vchan_prestop_failed -eq $true)                         { $errFlags += 'vchan_prestop_failed' }
@@ -5927,11 +5931,11 @@ public static class QdbPrime {
     # the route logs its own outcome ('send', 'failed:transport', ...) on the line below.
     if ($script:UpdaterDeployFailure) {
         $udf = $script:UpdaterDeployFailure
-        Write-Log "Windows Update agent was NOT installed: $($udf.cause)." 'ERROR'   # GUARD:deployverdict
+        Write-Log "Windows Update agent was NOT installed: $($udf.cause)." 'ERROR'
         Write-Log "  What to do: $($udf.remedy)" 'ERROR'
         Write-Log '  Until then this qube keeps its previous updater (if it had one), and dom0 may show no updates while Windows Update lists some.' 'ERROR'
         $qa = Get-Service -Name 'QrexecAgent' -ErrorAction SilentlyContinue
-        if ($qa -and "$($qa.Status)" -eq 'Running') {   # GUARD:deploynotify
+        if ($qa -and "$($qa.Status)" -eq 'Running') {
             $notifyHelper = Join-Path $Root 'qwt-notify-error.ps1'
             $sent = 'unavailable:helper-absent'
             if (Test-Path -LiteralPath $notifyHelper) {
