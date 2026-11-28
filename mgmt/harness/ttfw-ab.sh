@@ -276,7 +276,7 @@ if run_side B "$B" "$BH" "smoke"; then
     # Jev on that reason: caused 0.91, conf 0.86. A gate that does not carry the campaign's
     # dispositions invents P1s, and an invented P1 is as bad as a missed one.
     (cd "$ROOT" && timeout 1200 bash mgmt/harness/log-sweep.sh "$SUBJ" "$SINCE_SMOKE" "$OUT/smoke-sweep" \
-      --tolerate-error '(SetupNetwork: Failed to get qubes-ip|QioWriteBuffer: WriteFile failed with error 0xe8|send_command_to_daemon: write to daemon failed with error 0xe8|wmain: open agent pipe failed with error 0x2)' \
+      --tolerate-error-outside 'qrexec-wrapper' '(SetupNetwork: Failed to get qubes-ip|QioWriteBuffer: WriteFile failed with error 0xe8|send_command_to_daemon: write to daemon failed with error 0xe8|wmain: open agent pipe failed with error 0x2)' \
       'this rig gives every subject an EMPTY netvm (CLAUDE.md: only a guest that TESTS PV networking gets one), so /qubes-ip legitimately does not exist and those modules fail that way. Same disposition matrix.sh:497 carries for every cell; Jev on that reason caused 0.91 conf 0.86.') \
       > "$OUT/smoke-sweep.out" 2>&1
     sweepline=$(grep -a 'LOGSWEEP-RESULT' "$OUT/smoke-sweep.out" | tail -1)

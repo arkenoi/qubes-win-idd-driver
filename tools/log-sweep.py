@@ -3498,6 +3498,13 @@ def build_structure(files, boots, declared=None):
 # compiled patterns are not JSON. compute_metrics always runs before compare (the analyze path
 # calls them in that order), and a stale value cannot leak between runs: this is a single-shot CLI.
 _RUN_DECL_RE = []
+# A declaration's "not_in_file": the files whose lines it does not cover (see compute_metrics).
+_RUN_DECL_NOT_IN_FILE = {}
+
+
+def _decl_covers(rx, line):
+    nf = _RUN_DECL_NOT_IN_FILE.get(rx)
+    return bool(rx.search(getattr(line, "raw", "") or "")) and not (nf and nf.search(getattr(line, "file", "") or ""))
 
 
 def compute_metrics(files, boots, st, since, now=None, build=None):
@@ -3877,6 +3884,13 @@ def compute_metrics(files, boots, st, since, now=None, build=None):
     # pass. The mechanism modelled only the first kind.
     # A tolerated declaration still has to be USED to suppress, so it cannot hide a line it never
     # matched; what changes is only whether its ABSENCE is counted against the run.
+    # A DECLARATION CAN NAME THE LOG FILES IT DOES NOT COVER ("not_in_file", a regex on the file's name).
+    # The line text alone cannot tell two emitters of one message apart: QioWriteBuffer's "WriteFile
+    # failed with error 0xe8" is netsetup's qubesdb client writing to a closing daemon pipe (the receipt
+    # the empty-netvm tolerance was written for) AND, since core-agent ae68bbe, the qrexec wrapper's one
+    # ERROR line for a failed write to a child's stdin. Tolerated without its file, the wrapper's loss
+    # left no undeclared ERROR at all (Opus audit of ae68bbe, measured on gweck-logs-1027
+    # qrexec-wrapper-20261027.log:171).
     _decl, _tol, _bad = [], [], 0
     for d in (st.get("context") or {}).get("declared_errors", []):
         pat = d.get("pattern") if isinstance(d, dict) else None
@@ -3885,6 +3899,9 @@ def compute_metrics(files, boots, st, since, now=None, build=None):
             continue
         try:
             rx = re.compile(pat)
+            nf = d.get("not_in_file")
+            if nf:
+                _RUN_DECL_NOT_IN_FILE[rx] = re.compile(nf)
         except re.error:
             _bad += 1   # a malformed declaration can match nothing, so it counts as one that never appeared
             continue
@@ -3893,14 +3910,14 @@ def compute_metrics(files, boots, st, since, now=None, build=None):
         if isinstance(d, dict) and d.get("tolerate"):
             _tol.append(rx)
     def _is_declared(line):
-        return any(rx.search(line.raw) for rx in _decl)
+        return any(_decl_covers(rx, line) for rx in _decl)
     _count("error_lines_undeclared", [l for l in errs if not _is_declared(l)])
     # a declaration that matches nothing is itself a finding: the stimulus it names did not happen, so the
     # run proved less than it claims (the same rule as a check that has never been seen to fail) - unless it
     # was declared TOLERATED, which claims no stimulus and whose absence proves nothing was wrong
     m["declared_errors_unmatched"] = _bad + len([1 for rx in _decl
-                                                 if rx not in _tol   # GUARD:tolerate DEFECT: if True
-                                                 and not any(rx.search(l.raw) for l in errs)])
+                                                 if rx not in _tol
+                                                 and not any(_decl_covers(rx, l) for l in errs)])
     m["declared_errors_tolerated"] = len(_tol)
     # EVERY DECLARATION IS AUDITABLE, because the tolerated kind is the one an author will reach for
     # to make a cell pass (Jev, asked which of these six changes is weakest: tolerated-declarations
@@ -3910,7 +3927,7 @@ def compute_metrics(files, boots, st, since, now=None, build=None):
     # this is the field that shows it.
     m["declared_errors_detail"] = [{"pattern": rx.pattern[:120],
                                     "kind": "tolerated" if rx in _tol else "caused",
-                                    "matched": sum(1 for l in errs if rx.search(l.raw))}
+                                    "matched": sum(1 for l in errs if _decl_covers(rx, l))}
                                    for rx in _decl]
     _warns_all = [(lf, l) for lf in files for l in lf.all_lines() if l.level == "W" and sel(l.ts)]   # both halves: see _errs_all
     _warns_unattrib = [l for lf, l in _warns_all if not _prior(lf, l) and _unattrib(lf, l)]
@@ -4159,8 +4176,7 @@ def compare(sigs, baseline, metrics):
     # written against.
     def _run_declared(_s):
         _l = _s.get("cur_line") or _s.get("line")
-        _raw = getattr(_l, "raw", "") or ""
-        return any(_rx.search(_raw) for _rx in globals().get("_RUN_DECL_RE") or [])
+        return any(_decl_covers(_rx, _l) for _rx in globals().get("_RUN_DECL_RE") or [])
     _unclassified_ew = [_s for _s in (new + unsettled)
                         if (_s.get("level") or "") in ("E", "W") and not _run_declared(_s)]
     metrics["signatures_unclassified"] = len(_unclassified_ew) if (baseline or {}).get("signatures") else None

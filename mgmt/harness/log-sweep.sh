@@ -1,7 +1,7 @@
 #!/bin/bash
 # log-sweep.sh - the PROACTIVE LOG SWEEP as a post-step any harness can call after a run.
 #
-#   mgmt/harness/log-sweep.sh <vm> <since-utc> <outdir> [--fault-injection] [--marker FILE]... [--declare-error <regex> <why>]... [--tolerate-error <regex> <why>]...
+#   mgmt/harness/log-sweep.sh <vm> <since-utc> <outdir> [--fault-injection] [--marker FILE]... [--declare-error <regex> <why>]... [--tolerate-error <regex> <why>]... [--tolerate-error-outside <file-regex> <regex> <why>]...
 #       <vm>         the guest (TAGGED win-idd-testbed; this is also QTEST_VM for every call - no default target)
 #       <since-utc>  logs modified / events recorded since this instant, as 2026-10-07T08:00:00Z (a harness passes
 #                    the time it started the run)
@@ -49,7 +49,7 @@ if [ -z "$VM" ] || [ -z "$SINCE" ] || [ -z "$OUT" ]; then
   echo "usage: $0 <vm> <since-utc e.g. 2026-10-07T08:00:00Z> <outdir> [--fault-injection] [--marker FILE]... [--declare-error <regex> <why>]... [--tolerate-error <regex> <why>]..." >&2; exit 2
 fi
 shift 3
-DECL_PAT=(); DECL_WHY=(); DECL_TOL=(); FI_DECLARED=""; MARKERS=()
+DECL_PAT=(); DECL_WHY=(); DECL_TOL=(); DECL_NOTIN=(); FI_DECLARED=""; MARKERS=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --fault-injection) FI_DECLARED=1 ;;
@@ -66,7 +66,7 @@ while [ $# -gt 0 ]; do
     # condition. Any error is fuckup!"), so a cell that ends a helper on purpose says so here rather than
     # leaving the gate to read its own stimulus as the product's failure. A declaration that matches nothing
     # is itself a breach, so this cannot be used as a standing allowlist.
-    --declare-error) DECL_PAT+=("${2:?--declare-error needs <regex> <why>}"); DECL_WHY+=("${3:?--declare-error needs <regex> <why>}"); DECL_TOL+=(0); shift 2 ;;
+    --declare-error) DECL_PAT+=("${2:?--declare-error needs <regex> <why>}"); DECL_WHY+=("${3:?--declare-error needs <regex> <why>}"); DECL_TOL+=(0); DECL_NOTIN+=(""); shift 2 ;;
     # TOLERATED vs CAUSED IS ABOUT GUARANTEE, NOT ABOUT WHO CAUSED IT (Jev 0.90). A caused stimulus
     # - a fault injection, a cell that ends a helper on purpose - is CERTAIN to produce its line, so
     # an unmatched one means the stimulus did not happen. A condition that merely PERMITS a line (an
@@ -76,7 +76,13 @@ while [ $# -gt 0 ]; do
     # the line, but its ABSENCE is not a failed stimulus, so it does not breach
     # declared_errors_unmatched. Measured 2026-10-17: a caused-style declaration of the
     # geometry-changed line failed win10-appvm, a cell with error_lines=0, on the declaration alone.
-    --tolerate-error) DECL_PAT+=("${2:?--tolerate-error needs <regex> <why>}"); DECL_WHY+=("${3:?--tolerate-error needs <regex> <why>}"); DECL_TOL+=(1); shift 2 ;;
+    --tolerate-error) DECL_PAT+=("${2:?--tolerate-error needs <regex> <why>}"); DECL_WHY+=("${3:?--tolerate-error needs <regex> <why>}"); DECL_TOL+=(1); DECL_NOTIN+=(""); shift 2 ;;
+    # TOLERATED, EXCEPT IN THE LOG FILES NAMED: one message can have two emitters, and the line alone does
+    # not say which. QioWriteBuffer's "WriteFile failed with error 0xe8" is netsetup's write to a closing
+    # qubesdb pipe (tolerated on a netvm-free subject) and the qrexec wrapper's only ERROR for a failed write
+    # to a child's stdin (core-agent ae68bbe), which no tolerance may cover. <file-regex> is matched against
+    # the log file's name; a line in a matching file is not covered by this declaration.
+    --tolerate-error-outside) DECL_NOTIN+=("${2:?--tolerate-error-outside needs <file-regex> <regex> <why>}"); DECL_PAT+=("${3:?--tolerate-error-outside needs <file-regex> <regex> <why>}"); DECL_WHY+=("${4:?--tolerate-error-outside needs <file-regex> <regex> <why>}"); DECL_TOL+=(1); shift 3 ;;
     --marker) [ -n "${2:-}" ] && [ -f "$2" ] || { echo "FAIL  --marker needs an existing file (got '${2:-}')" >&2; exit 2; }; MARKERS+=("$2"); shift ;;
     *) echo "FAIL  unknown option '$1'" >&2; exit 2 ;;
   esac
@@ -173,7 +179,7 @@ log "pulled: $(grep -ac ': OK' "$OUT/decode.txt") blocks verified; $(grep -a '^D
 
 # 2b. the clock as measured in 1b, the context the caller declares, and the injection records it captured (evidence
 # lives in the files, never in names). Written on every run: the clock fields always exist.
-python3 - "$OUT/logs/context.json" "${FI_DECLARED:-0}" "${0##*/}" "$PRESYNC_GUEST_UTC" "$PRESYNC_HOST_UTC" "$PRESYNC_SKEW_S" "$POSTSYNC_GUEST_UTC" "${LOGSWEEP_MAX_SKEW_S:-120}" "${#DECL_PAT[@]}" "${DECL_PAT[@]}" "${DECL_WHY[@]}" "${DECL_TOL[@]}" <<'PY'
+python3 - "$OUT/logs/context.json" "${FI_DECLARED:-0}" "${0##*/}" "$PRESYNC_GUEST_UTC" "$PRESYNC_HOST_UTC" "$PRESYNC_SKEW_S" "$POSTSYNC_GUEST_UTC" "${LOGSWEEP_MAX_SKEW_S:-120}" "${#DECL_PAT[@]}" "${DECL_PAT[@]}" "${DECL_WHY[@]}" "${DECL_TOL[@]}" "${DECL_NOTIN[@]}" <<'PY'
 import json, sys
 out, fi, caller = sys.argv[1], sys.argv[2] == '1', sys.argv[3]
 g_utc, h_utc, skew, post = sys.argv[4:8]
@@ -183,6 +189,7 @@ max_skew = sys.argv[8]
 n = int(sys.argv[9])
 pats, whys = sys.argv[10:10 + n], sys.argv[10 + n:10 + 2 * n]
 tols = sys.argv[10 + 2 * n:10 + 3 * n]
+notin = sys.argv[10 + 3 * n:10 + 4 * n]
 ctx = {"source": "log-sweep.sh (caller: %s)" % caller,
        # measured BEFORE the sync (step 1b); the analyzer carries it into report.json context.guest_clock and
        # prints it as the summary's CLOCK line
@@ -192,8 +199,9 @@ ctx = {"source": "log-sweep.sh (caller: %s)" % caller,
 if fi:
     ctx["fault_injection_declared"] = True
 if n:
-    ctx["declared_errors"] = [dict({"pattern": p, "why": w}, **({"tolerate": True} if t == "1" else {}))
-                              for p, w, t in zip(pats, whys, tols)]
+    ctx["declared_errors"] = [dict({"pattern": p, "why": w}, **({"tolerate": True} if t == "1" else {}),
+                                   **({"not_in_file": x} if x else {}))
+                              for p, w, t, x in zip(pats, whys, tols, notin)]
 with open(out, "w", encoding="utf-8") as f:
     json.dump(ctx, f)
 PY
