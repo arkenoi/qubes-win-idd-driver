@@ -4018,7 +4018,8 @@ try {
         # GUARD:actioned - dom0's count is what the ADMIN still has to do. An offer THIS PASS installed and proved installed
         # (ADR-updater section 2 point 3) drops out of it: measured 2026-09-20 on the German 25H2 guest, after a pass that
         # INSTALLED KB5007651 and found the Defender signatures current, both were still offered and both still counted, so dom0
-        # sat at "updates available" for work already done. Key on kb AND title: a no-KB row is recorded under its TITLE.
+        # sat at "updates available" for work already done. The offer leaves by its own identity; an installed row without one
+        # is joined to the scan's offer on kb AND title (a no-KB row is recorded under its TITLE) in Get-InstalledIdentities.
         # Rows with ok=$false stay counted, which is what keeps a DEFERRED cumulative visible - the control that must never be
         # excluded.
         # ---- WU-INFO-EXCLUDE-BEGIN
@@ -4038,7 +4039,7 @@ try {
         # its opposite. On an already-updated guest this bug is invisible, which is the whole
         # argument for running both controls against one build.
         $installedKeys = @(Get-InstalledKeys)
-        # AND THE OFFER'S OWN IDENTITY DECIDES FIRST, where it has one (GUARD:offeridentity, this end).
+        # AND THE OFFER'S OWN IDENTITY DECIDES (GUARD:offeridentity, this end).
         # The kb/title join alone cannot answer for a no-KB offer: every one of them is labelled
         # '(no KB)' by Get-Available and by Install-ViaWU's rows alike, so the join either matched ALL
         # of them off one install (measured: two offered, one installed, dom0 told ZERO - the guest
