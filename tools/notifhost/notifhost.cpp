@@ -6,15 +6,18 @@
 //
 // --bridge (DESIGN-toast-bridge.md, Proposal C phase A0): resident notification bridge.
 // Toasts from ALLOWLISTED apps (HKLM gui-agent config, NotifyBridgeAllow REG_MULTI_SZ of
-// AUMIDs) are read via UserNotificationListener and forwarded over ONE long-lived
+// AUMIDs), and every toast classified verdict=bridge, are read via UserNotificationListener
+// and forwarded over ONE long-lived
 // qubes.Notifications connection to the dom0-native notification service; their Windows
 // banner is never mapped into dom0 - the AGENT holds each toast's banner window until this
 // bridge's per-notification record says bridge/window (docs/ADR-toasts.md 10, the --hold
 // IPC in agent/gui-agent/toastident.h; the per-AUMID ShowBanner=0 write is retired,
 // only the sweep that undoes an older version's markers remains). dom0 dismissal is echoed
-// back as RemoveNotification (guest Notification Center stays in sync). Everything else -
-// every non-allowlisted app, and every toast while the bridge is unhealthy or disconnected -
-// takes today's window path untouched: fail-open is the design invariant. Launched and
+// back as RemoveNotification (guest Notification Center stays in sync). The allowlist is a
+// shortcut, not the gate (docs/ADR-toasts.md 2): every toast that is not allowlisted is
+// classified from its own content - verdict=bridge forwards it, verdict=window leaves it on
+// the window path. Every toast while the bridge is unhealthy or disconnected takes today's
+// window path untouched: fail-open is the design invariant. Launched and
 // supervised by the SYSTEM gui-agent via Task Scheduler (/ru user /it, wgcbroker pattern),
 // gated by registry "NotifyBridge" / qubesdb /qubes-service/notify-bridge, default OFF.
 // P3a shadow instrumentation (MEASURE-ONLY, DESIGN-toast-bridge.md 3.4.1): every new toast
@@ -26,8 +29,8 @@
 // signal exists, on an OFF-THREAD worker paced by a WAL file-watch; tier 3: none -> window;
 // see the P3-ETW section) and
 // dry-run classified (CLASSIFY + SUPPAPI lines in bridge.log), and each forward's dom0 ack
-// round-trip is timed (FWD_RTT) to size the Phase-3 deferred-map hold budget. None of this
-// can change which toasts banner or forward - the A0 routing is byte-for-byte unchanged.
+// round-trip is timed (FWD_RTT) to size the Phase-3 deferred-map hold budget. The ETW tier
+// only chooses where the row is read from; the content verdict routes (ADR-toasts 2).
 // Toast DETECTION is push-first: UserNotificationListener.NotificationChanged gates the
 // expensive center listing, with a bounded 30 s floor pass as the can-never-lose-a-toast
 // safety net; the loop still wakes every 2 s for the supervisor heartbeat contract.
