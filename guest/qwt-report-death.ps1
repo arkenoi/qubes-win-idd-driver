@@ -817,9 +817,29 @@ function Get-QwtDeathNodeText {
     return ''
 }
 
+# The record's own TimeCreated as a UTC DateTime, or $null when it carries none that parses. One parse for the classifier
+# and for the catch-up's already-reported check, so both name a record by the same instant.
+function Get-QwtDeathRecordTime {
+    param([Parameter(Mandatory)][xml]$Doc)
+    $tc = $Doc.GetElementsByTagName('TimeCreated')
+    if ($tc.Count -eq 0) { return $null }
+    # ONE FRAME IN THIS FILE, pinned where the instant is BUILT. AdjustToUniversal only converts
+    # when the text carries a zone: a SystemTime without the trailing Z parses to
+    # Kind=Unspecified, and the consumers then disagree about what that means - QwtShutdownNearProbe
+    # reads Unspecified as UTC, while ConvertTo-QwtDeathEpoch's ToUniversalTime() reads it as LOCAL
+    # and shifts the dedup key by the host's offset. Windows always writes the Z, so this is not a
+    # measured failure; it is the shape that produced the measured one (a local instant meeting a
+    # UTC one in a subtraction), and it costs one line to make unreachable.
+    try {
+        $t = [DateTime]::Parse("$($tc[0].GetAttribute('SystemTime'))", [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AdjustToUniversal)
+        if ($t.Kind -ne [DateTimeKind]::Utc) { $t = [DateTime]::SpecifyKind($t, [DateTimeKind]::Utc) }
+        return $t
+    } catch { return $null }
+}
+
 # --- the event -> a death record, or $null when the record is not one of ours --------------------
-# Returns [ordered]@{ ours; ignore; reason; kind; origin; time; exe; component; pid; code; ranMs; anchor; label; evidence; detail;
-#                     rec; eventId; hung; clrType; task; taskName; svcKey; svcCount; svcDelay; svcAction }
+# Returns [ordered]@{ ours; ignore; reason; kind; origin; time; created; exe; component; pid; code; ranMs; anchor; label; evidence;
+#                     detail; rec; eventId; hung; clrType; task; taskName; svcKey; svcCount; svcDelay; svcAction }
 function ConvertFrom-QwtDeathEvent {
     param([Parameter(Mandatory)][string]$XmlText)
     $doc = [xml]$XmlText
@@ -831,20 +851,11 @@ function ConvertFrom-QwtDeathEvent {
     $recordId = Get-QwtDeathNodeText $doc 'EventRecordID'
     $time = [DateTime]::UtcNow
     $timeKnown = $false   # a record with no usable TimeCreated cannot be placed against a shutdown (the session-end rule below)
-    $tc = $doc.GetElementsByTagName('TimeCreated')
-    if ($tc.Count -gt 0) {
-        # ONE FRAME IN THIS FILE, pinned where the instant is BUILT. AdjustToUniversal only converts
-        # when the text carries a zone: a SystemTime without the trailing Z parses to
-        # Kind=Unspecified, and the consumers then disagree about what that means - QwtShutdownNearProbe
-        # reads Unspecified as UTC, while ConvertTo-QwtDeathEpoch's ToUniversalTime() reads it as LOCAL
-        # and shifts the dedup key by the host's offset. Windows always writes the Z, so this is not a
-        # measured failure; it is the shape that produced the measured one (a local instant meeting a
-        # UTC one in a subtraction), and it costs one line to make unreachable.
-        try {
-            $time = [DateTime]::Parse("$($tc[0].GetAttribute('SystemTime'))", [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AdjustToUniversal)
-            if ($time.Kind -ne [DateTimeKind]::Utc) { $time = [DateTime]::SpecifyKind($time, [DateTimeKind]::Utc) }
-            $timeKnown = $true
-        } catch { }
+    $created = ''         # nor named apart from another boot's record at the same id (Test-QwtDeathLoggedRecord)
+    $t0 = Get-QwtDeathRecordTime $doc
+    if ($null -ne $t0) {
+        $time = $t0; $timeKnown = $true
+        try { $created = "$($t0.ToFileTimeUtc())" } catch { }   # an instant before 1601 has no FILETIME: no identity, never a throw
     }
     $positional = New-Object System.Collections.ArrayList
     $named = @{}
@@ -856,6 +867,7 @@ function ConvertFrom-QwtDeathEvent {
 
     $r = [ordered]@{ ours = $false; ignore = $false; reason = ''; kind = ''; origin = "$channel/$eventId#$recordId"; time = $time
                      channel = $channel; recordId = $recordId   # carried so a notified record can advance the watermark
+                     created = $created   # the record's TimeCreated as FileTimeUtc: with channel and id, WHICH record
                      exe = ''; component = ''; pid = $null; code = $null; ranMs = $null
                      anchor = 'enrich'; label = ''; evidence = ''; detail = ''; rec = ''; eventId = $eventId
                      hung = $false; clrType = ''; task = ''; taskName = ''; svcKey = ''; svcCount = ''; svcDelay = ''; svcAction = ''
@@ -1538,7 +1550,7 @@ function Invoke-QwtDeathReport {
             try { $seen = Read-QwtDeathWatermark } catch { $seen = $null }
             $dupChecked = $true
             if ((Test-QwtDeathAlreadyNotified -Channel $ev.channel -RecordId $rid -Marks $seen) -or
-                (Test-QwtDeathLoggedRecord    -Channel $ev.channel -RecordId $rid)) {
+                (Test-QwtDeathLoggedRecord    -Channel $ev.channel -RecordId $rid -Created $ev.created)) {
                 Write-QwtDeathLog 'INFO' "$($ev.origin) $($ev.channel) record $rid was already reported - not notified again"
                 return 'already-reported'
             }
@@ -1597,7 +1609,9 @@ function Invoke-QwtDeathReport {
     }
     $id = 'death-' + $reg.number   # GUARD:deathid
     $st = Send-QwtError -Component $notice.Component -Id $id -Severity ACTION -Header $notice.Header -Next $notice.Next -Cause $notice.Cause -Tech $notice.Tech
-    if ($st -eq 'send') { Write-QwtDeathLog 'INFO' "DEATH #$($reg.number) notified to dom0 as $($notice.Component).$id" }
+    # The line names the record it told (Test-QwtDeathLoggedRecord reads exactly this): channel/event#id and its TimeCreated.
+    $created = 'unknown'; if ($ev.created) { $created = $ev.created }
+    if ($st -eq 'send') { Write-QwtDeathLog 'INFO' "DEATH #$($reg.number) notified to dom0 as $($notice.Component).$id for $($ev.origin) created $created" }
     elseif ($st -eq 'suppressed:cap') { # The cap bounds a crash storm; past it every further death is still logged here, just not sent.
     Write-QwtDeathLog 'ERROR' "DEATH #$($reg.number) NOT notified: the limit of 8 per boot is reached" }
     else { Write-QwtDeathLog 'ERROR' "DEATH #$($reg.number) NOT notified: route status $st" }
@@ -1778,41 +1792,39 @@ function Test-QwtDeathLoggedRecord {
     # MEASURED 2026-10-24 on win11r-sup: the catch-up exemption re-reported a death the live reporter
     # had already sent - DEATH lines went 2 -> 4 for ONE injected death, dom0_loud_failures=2 - and a
     # double is P1 by standing rule.
-    # THE LOG IS THE DURABLE MARKER, and it is written FIRST: `DEATH #1 NEW Application/4002#339: ...`
-    # is appended before `DEATH #1 notified to dom0 as ...`, so a record that reached the user has its
-    # id in the log whatever the shutdown did to the watermark. Read-only, best effort: a log we
-    # cannot read returns $false, which re-reports rather than drops - the safe direction for a death.
-    param([Parameter(Mandatory)][string]$Channel, [Parameter(Mandatory)][long]$RecordId)
+    # THE LOG IS THE DURABLE MARKER: the notified line is appended right after the route accepted the notice, so a
+    # record that reached the user is named in the log whatever the shutdown did to the watermark. Read-only, best
+    # effort: a log we cannot read returns $false, which re-reports rather than drops - the safe direction for a death.
+    # WRITTEN UP IS NOT TOLD. MEASURED 2026-10-24: the live reporter wrote `DEATH #1 NEW ...` 7 s after the kill and the
+    # shutdown ended it before it could notify; a predicate keyed on the NEW line told the catch-up to skip it, and the
+    # death reached the user from neither path. Only a notified line tells.
+    # A RECORD ID IS NOT A RECORD, AND A DEATH NUMBER IS NO JOIN (DEATHRECORDIDREPEATSINAPPVM). An AppVM's Application log
+    # is its template's again at every boot, so ids repeat, while this log on the private volume keeps every boot's
+    # lines; and the death number restarts every boot and can repeat within one (Register-QwtDeath's ledger is not
+    # locked against the catch-up and a live instance at once). So the notified line names the record itself -
+    # `DEATH #<n> notified to dom0 as <tag> for <channel>/<event>#<rid> created <FileTimeUtc>`, TimeCreated being an
+    # identity, not a freshness comparison - and TOLD means exactly that a whole line naming THIS record exists. A
+    # notified line without `for ... created` (written before this rule) names no record: the death is reported again -
+    # the safe direction, at most one double, never a drop.
+    param([Parameter(Mandatory)][string]$Channel, [Parameter(Mandatory)][long]$RecordId, [string]$Created = '')
+    if ($Created -cnotmatch '^[0-9]{1,20}\z') { return $false }
     try {
-        # THE SAME DIRECTORIES Write-QwtDeathLog APPENDS TO - Get-QwtDeathLogDir - not $global:qwtLogPath,
-        # which is the shared PS sink's own file and need not be where the death log lives. Reading the
-        # wrong variable made this predicate answer $false everywhere, including in its own test.
+        # THE SAME DIRECTORIES Write-QwtDeathLog APPENDS TO - Get-QwtDeathLogDir, then its %ProgramData%\Qubes fallback
+        # for a line the configured directory refused - not $global:qwtLogPath, which is the shared PS sink's own file.
+        # Reading the wrong variable made this predicate answer $false everywhere, including in its own test.
         $dirs = @(Get-QwtDeathLogDir)
+        if ($env:ProgramData) { $pd = Join-Path $env:ProgramData 'Qubes'; if ($dirs -notcontains $pd) { $dirs += $pd } }
         if (-not $dirs -or $dirs.Count -eq 0) { return $false }
         foreach ($dir in $dirs) {
           if (-not $dir -or -not (Test-Path -LiteralPath $dir)) { continue }
           foreach ($f in Get-ChildItem -LiteralPath $dir -Filter 'qwt-*death*.log' -ErrorAction SilentlyContinue) {
             $lines = @(Get-Content -LiteralPath $f.FullName -ErrorAction SilentlyContinue)
-            # WRITTEN UP IS NOT TOLD. The opening line - `DEATH #1 NEW Application/4002#293: ...` -
-            # proves only that the record was created. MEASURED 2026-10-24: the live reporter wrote
-            # exactly that 7 s after the kill and the shutdown ended it before it could notify, so
-            # the log held the NEW line with NO `notified to dom0` line, dom0_death_rows stayed 0,
-            # and this predicate - keyed on the NEW line alone - told the catch-up to skip it. The
-            # death then reached the user from neither path, which is the very outcome the exemption
-            # exists to prevent.
-            # THE DEATH NUMBER IS THE JOIN: `DEATH #<n> NEW <channel>/<id>#<rid>` and
-            # `DEATH #<n> notified to dom0 as <tag>` share it, and the notified line carries no
-            # record id of its own. So: find the number from the opening line, then require a
-            # notified line for THAT number. No notified line means not told, and the record is
-            # reported now.
-            $num = $null
-            foreach ($ln in $lines) {
-                $m = [regex]::Match($ln, 'DEATH #(\d+) NEW ' + [regex]::Escape($Channel) + '/\d+#' + $RecordId + '\b')
-                if ($m.Success) { $num = $m.Groups[1].Value }
-            }
-            if (-not $num) { continue }
-            $told = @($lines | Where-Object { $_ -match ('DEATH #' + $num + ' notified to dom0') })
-            if ($told.Count -gt 0) { return $true }
+            # The WHOLE line, case-sensitive: Write-QwtDeathLog's '<yyyy-MM-dd HH:mm:ss> [INFO] ' and then the message, so
+            # text inside another line cannot spell it. The time is any run without a space: ':' in that format is the
+            # culture's time separator, and a guest whose culture writes 10.00.07 must still find its own lines.
+            $told = '^[0-9]{4}-[0-9]{2}-[0-9]{2} [^ ]+ \[INFO\] DEATH #[0-9]+ notified to dom0 as .+ for ' +
+                    [regex]::Escape($Channel) + '/[0-9]+#' + $RecordId + ' created ' + $Created + '\z'
+            foreach ($ln in $lines) { if ([regex]::IsMatch($ln, $told)) { return $true } }
           }
         }
     } catch { }
@@ -1933,7 +1945,9 @@ function Invoke-QwtDeathCatchUp {
                     $rid = [long]$e.RecordId
                     if (Test-QwtDeathAlreadyNotified -Channel $ch -RecordId $rid -Marks $marks) { continue }
                     # AND the log, because a shutdown can stop the notified-set from ever being written
-                    if (Test-QwtDeathLoggedRecord -Channel $ch -RecordId $rid) {
+                    $created = ''
+                    try { $t1 = Get-QwtDeathRecordTime ([xml]$e.ToXml()); if ($null -ne $t1) { $created = "$($t1.ToFileTimeUtc())" } } catch { }
+                    if (Test-QwtDeathLoggedRecord -Channel $ch -RecordId $rid -Created $created) {
                         Write-QwtDeathLog 'INFO' "catch-up: $ch record $rid was already written up in this log - not reported again"
                         continue
                     }
