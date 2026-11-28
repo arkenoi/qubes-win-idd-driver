@@ -188,9 +188,22 @@ def open_records(changed, base):
                 t = line.rstrip()
                 m = re.match(r"- (?:\*\*)?([A-Z0-9]{8,})\b", t)                 # a register id, else the opening words
                 key = m.group(1) if m else t[2:80]
-                hits.append("findings/%s:%d [names %s] [quotes-owner %s] [new-in-range %s]: %s%s" % (
+                # THE OWNER'S WORDS PAST THE CUT, with 200 characters either side, overlapping windows merged. The
+                # rubric asks whether a record carries an owner order a listed commit leaves undone, and the 400-char
+                # cut hid exactly that: on 2026-11-28 the four quotes-owner records read "the owner's capture" (a
+                # window), "by the owner's hand", "owner's call" and an order the same record says holds - every
+                # word of which was past the cut, and Jev called each a coin toss.
+                spans = []
+                for mm in OWNER_RE.finditer(t, 400):
+                    a, b = max(0, mm.start() - 200), mm.end() + 200
+                    if spans and a <= spans[-1][1]:
+                        spans[-1][1] = b
+                    else:
+                        spans.append([a, b])
+                past = " [owner words past the cut: %s]" % " | ".join(t[a:b] for a, b in spans) if spans else ""
+                hits.append("findings/%s:%d [names %s] [quotes-owner %s] [new-in-range %s]: %s%s%s" % (
                     name, i, ", ".join(named), "yes" if OWNER_RE.search(t) else "no", "no" if key in then else "yes",
-                    t[:400], " [+%d chars]" % (len(t) - 400) if len(t) > 400 else ""))
+                    t[:400], " [+%d chars]" % (len(t) - 400) if len(t) > 400 else "", past))
     return hits
 
 
