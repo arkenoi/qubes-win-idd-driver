@@ -3204,7 +3204,7 @@ static DWORD WaitOrDepart(DWORD n, const HANDLE* work, DWORD timeoutMs)
         DWORD left = INFINITE;
         if (timeoutMs != INFINITE) { const ULONGLONG t = GetTickCount64(); left = (t >= until) ? 0 : (DWORD)(until - t); }
         const DWORD w = WaitForMultipleObjects(m, hs, FALSE, left);
-        if (w == WAIT_TIMEOUT) return WAIT_TIMEOUT;
+        if (w == WAIT_TIMEOUT || w == WAIT_FAILED) return w;   // never matched to an absent handle's sentinel below
         const DWORD k = (w >= WAIT_ABANDONED_0 && w < WAIT_ABANDONED_0 + m) ? (w - WAIT_ABANDONED_0)
                       : (w < WAIT_OBJECT_0 + m) ? (w - WAIT_OBJECT_0) : MAXDWORD;
         if (k < n) return k;
