@@ -1480,7 +1480,69 @@ function Format-QwtDeathNotice {
 # --- the whole thing for one record: log at ERROR, count, notify ----------------------------------
 # Returns the route's status for a new death, 'enriched' for another record of a counted one,
 # 'not-ours' / 'ignored' otherwise.
+# ONE RECORD AT A TIME ACROSS PROCESSES (owner: "make sure nothing is lost, but no doubles"). The catch-up
+# task and a live QwtDeathReporter instance run at once (the Queue policy serialises only the reporter's own instances).
+# Unlocked, two things broke: Register-QwtDeath's ledger (count + 1, then a plain write) gave two deaths one number, and
+# the route's per-boot marker on that id then sent the second as suppressed:duplicate - a death nobody heard of; and two
+# processes handling one record both passed the already-reported check before either wrote its notified line - a
+# double. So one record's whole handling - the already-reported check, the number, the DEATH line, the send, the
+# notified line and that record's watermark step - runs under one Global\ mutex (the shape of
+# Global\QubesWindowsUpdate), and so does the catch-up's end-of-pass watermark write (Invoke-QwtDeathCatchUp).
+# THE NAME IS NOT PROTECTED. Global\ puts both tasks' processes on one name, and ANY process in the guest can create or
+# hold that name too: the privilege check on Global\ names covers file mappings and symbolic links, not mutexes. A
+# process that holds it makes every death record wait 60 s and then be refused, so no death notice goes out while it
+# holds it; one that creates it shut to SYSTEM makes every open fail, the same refusal. Each is an ERROR line below.
+# THE WAIT IS BOUNDED AND ITS END IS A HARD FAILURE. The holder does one record's work, all of it local - the route
+# hands the notice to notifhost with a Start-Process that does not wait - so the lock held for 60 s means a wedged
+# holder or a foreign one. Refusing at once instead would turn every overlap into a lost record. Not free in time, or
+# not openable, is logged at ERROR and THROWN as a TimeoutException, never skipped:
+#   - the live trigger logs 'reporter failed' and exits 1; the record is next read by the next boot's catch-up, whose
+#     pre-boot pass carries only Application 4001-4004 across a boot - those are told a boot late (never in an AppVM,
+#     whose log is its template's again), every other kind is not told;
+#   - the catch-up's scan stops that channel's mark before the record (the same next-boot outcome, for it and for the
+#     channel's later records);
+#   - the catch-up's pre-boot pass stops there and holds the channel's mark below the record, so the next boot reads it
+#     and the records after it again.
+# The reporter's own tasks are not in QwtDeathTaskNames, so their failed result is no notice; the ERROR line is the trace.
+# ABANDONED IS NOT REFUSED. A holder ended at its PT5M limit or by a shutdown while this process waits hands the mutex
+# over abandoned (Microsoft: the next acquirer of a system-wide mutex whose holder was terminated). The waiter owns it
+# then, and the already-reported check under it still runs, so going on loses nothing; the dead holder's own record is
+# the kill-between-send-and-notified-line case. Logged at ERROR, and the work goes on.
+$script:QwtDeathLockName = 'Global\QubesQwtDeathReporter'
+$script:QwtDeathLockWaitMs = 60000
+function Enter-QwtDeathLock {
+    # Returns the held mutex for Exit-QwtDeathLock, or logs ERROR and throws a TimeoutException. $What names the work.
+    param([Parameter(Mandatory)][string]$What)
+    try { $m = New-Object System.Threading.Mutex($false, $script:QwtDeathLockName) }
+    catch {
+        Write-QwtDeathLog 'ERROR' "the reporter lock $($script:QwtDeathLockName) could not be opened ($(Format-QwtDeathForeign $_.Exception.Message 1024)) - $What is NOT done now"
+        throw (New-Object System.TimeoutException 'reporter lock not opened')
+    }
+    $held = $false
+    try { $held = $m.WaitOne($script:QwtDeathLockWaitMs) }
+    catch [System.Threading.AbandonedMutexException] {
+        $held = $true   # .NET hands the mutex over with the exception
+        Write-QwtDeathLog 'ERROR' "the reporter lock $($script:QwtDeathLockName) was ABANDONED - its holder ended without releasing it, perhaps between a send and its notified line; this process owns it now and goes on with $What"
+    }
+    if (-not $held) {
+        $m.Dispose()
+        Write-QwtDeathLog 'ERROR' "the reporter lock $($script:QwtDeathLockName) was not free within $($script:QwtDeathLockWaitMs) ms - its holder is wedged, or another process holds the name; $What is NOT done now"
+        throw (New-Object System.TimeoutException 'reporter lock not taken')
+    }
+    return $m
+}
+function Exit-QwtDeathLock {
+    param([Parameter(Mandatory)]$Mutex)
+    try { $Mutex.ReleaseMutex() } catch { }
+    $Mutex.Dispose()
+}
 function Invoke-QwtDeathReport {
+    param([Parameter(Mandatory)][string]$XmlText, [switch]$FromCatchUp)
+    $m = Enter-QwtDeathLock -What 'this record'
+    try { return (Invoke-QwtDeathReportOne -XmlText $XmlText -FromCatchUp:$FromCatchUp) }
+    finally { Exit-QwtDeathLock -Mutex $m }
+}
+function Invoke-QwtDeathReportOne {
     param([Parameter(Mandatory)][string]$XmlText, [switch]$FromCatchUp)
     $ev = ConvertFrom-QwtDeathEvent -XmlText $XmlText
     if (-not $ev.ours) {
@@ -1858,6 +1920,7 @@ function Invoke-QwtDeathCatchUp {
     foreach ($ch in @('Application', 'System', 'Microsoft-Windows-TaskScheduler/Operational')) {
         $from = if ($marks.ContainsKey($ch) -and -not $seed) { [long]$marks[$ch] } else { -1 }
         $newest = $from
+        $held = $null       # the pre-boot pass's hold below a record the lock refused
         try {
             # THE WATERMARK IS THE BOUND, NOT A COUNT. This read was `-MaxEvents 400`, which takes
             # the NEWEST 400 records - so if more than 400 arrived since the mark, the oldest of
@@ -1958,25 +2021,55 @@ function Invoke-QwtDeathCatchUp {
                             Write-QwtDeathLog 'INFO' "catch-up: $ch record $rid is OUR death record from before this boot (its trigger could not run - a shutdown refuses them) - reported now ($verdict)"
                             $r.reported++
                         }
+                    } catch [System.TimeoutException] {
+                        # REFUSED BY THE LOCK (Enter-QwtDeathLock logged why): never a mark past it. The channel's
+                        # mark is held below this record, so the next boot's pass reads it and every later one again.
+                        $held = $rid - 1
+                        Write-QwtDeathLog 'ERROR' "catch-up: $ch record $rid (ours, pre-boot) was NOT handled - the reporter lock refused it; this channel's mark stays at $held and the next boot reads it again"
+                        break
                     } catch {
                         Write-QwtDeathLog 'WARN' "catch-up: $ch record $rid (ours, pre-boot) could not be read ($(Format-QwtDeathForeign $_.Exception.Message 1024))"
                     }
                 }
             }
         }
+        if ($null -ne $held -and $held -lt $newest) { $newest = $held }
         if ($newest -ge 0) { $next[$ch] = $newest }
         $r.channels[$ch] = @{ from = $from; to = $newest }
     }
-    # PRUNE: once this pass's mark covers a notified id, the set no longer needs it. Carrying the
-    # rest forward is what keeps a live-notified record suppressed across the next boot.
-    foreach ($k in @($marks.Keys)) {
-        if ($k -notlike "$($script:QwtDeathNotifiedKey)/*") { continue }
-        $chan = $k.Substring($script:QwtDeathNotifiedKey.Length + 1)
-        $mark = if ($next.ContainsKey($chan)) { [long]$next[$chan] } else { -1 }
-        $keep = @(@($marks[$k]) | Where-Object { [long]$_ -gt $mark })
-        if ($keep.Count -gt 0) { $next[$k] = $keep }
+    # THE WRITE IS UNDER THE REPORTER LOCK, OVER THE FILE AS IT IS NOW. $marks was read at pass start, and a live
+    # instance may have stepped a record into the notified set since; for 'enriched', 'quiet:scheduled' and a capped,
+    # gated or rejected record that id is its only trace (no notified line is written but for a send), so writing
+    # $next as built would drop it and the next boot would tell that record again - a double. So the file is re-read
+    # under the lock, and the notified set written is the UNION of both reads. Refused, nothing is written (ERROR):
+    # the marks stay where they were, so the next pass reads from the earlier ones, and what this pass handled is
+    # answered there by its notified id or line - a record handled twice is asked twice, never told twice.
+    $lk = $null
+    try { $lk = Enter-QwtDeathLock -What "the catch-up's watermark write" }
+    catch { Write-QwtDeathLog 'ERROR' "catch-up: the watermark is NOT written this pass - the next pass reads from the earlier marks" }
+    if ($null -ne $lk) {
+        try {
+            $now = Read-QwtDeathWatermark
+            if ($null -eq $now) { $now = @{} }
+            # PRUNE: once this pass's mark covers a notified id, the set no longer needs it. Carrying the
+            # rest forward is what keeps a live-notified record suppressed across the next boot.
+            $ids = @{}
+            foreach ($src in @($marks, $now)) {
+                foreach ($k in @($src.Keys)) {
+                    if ($k -notlike "$($script:QwtDeathNotifiedKey)/*") { continue }
+                    if (-not $ids.ContainsKey($k)) { $ids[$k] = @() }
+                    $ids[$k] += @($src[$k])
+                }
+            }
+            foreach ($k in @($ids.Keys)) {
+                $chan = $k.Substring($script:QwtDeathNotifiedKey.Length + 1)
+                $mark = if ($next.ContainsKey($chan)) { [long]$next[$chan] } else { -1 }
+                $keep = @(@($ids[$k]) | ForEach-Object { [long]$_ } | Where-Object { $_ -gt $mark } | Sort-Object -Unique)
+                if ($keep.Count -gt 0) { $next[$k] = $keep }
+            }
+            [void](Write-QwtDeathWatermark -Marks $next)
+        } finally { Exit-QwtDeathLock -Mutex $lk }
     }
-    [void](Write-QwtDeathWatermark -Marks $next)
     if ($fresh) {
         Write-QwtDeathLog 'INFO' ("catch-up: no watermark yet - this pass recorded the end of each channel and reported nothing " +
                                   "(a fresh install does not replay the machine's history)")
