@@ -81,7 +81,7 @@ flowchart TD
 | 10 | The guest banner is suppressed by not mapping it, never by ShowBanner | ACCEPTED (owner, Jev); built for 4.3.35, guest acceptance owed | 2026-10-04 |
 | 11 | A toast's buttons travel to dom0 as actions, and a dom0 click is carried out in the guest - all of them or none | ACCEPTED (owner, 2026-10-31); shipped - 4.3.36 carries seven fixes to the buttons a forwarded notification carries | 2026-10-31 |
 | 12 | An explicit Deny of notification access stops the bridge by its own reading: it says why and stands down | ACCEPTED (owner, Jev 0.95); not built | 2026-11-13 |
-| 13 | Stacked toasts | ACCEPTED (owner) | 2026-11-24 |
+| 13 | Stacked toasts | ACCEPTED (owner), AMENDED 2026-11-28 | 2026-11-24 |
 
 Status words and the section format are defined in `docs/ADR-README.md`.
 
@@ -695,9 +695,31 @@ agent's 60 s `QGANOTIFNOTREADY` ERROR stays for it (Jev 0.49 against 0.49, no ve
 
 ## 13. Stacked toasts
 
-**Status.** ACCEPTED (owner, 2026-11-24).
+**Status.** ACCEPTED (owner, 2026-11-24). AMENDED (owner, 2026-11-28).
 
 **Decision.**
+
+**Amended by the owner, 2026-11-28:** «amend ADR 13. It was based on wrong assumption that non-seamless mode
+properly stacks. so we just stack them if there is more than one at a time. just make sure there are no duplicates in
+this case, it matters even more.» Confirmed the same day («yes they may be combined», «ok, whatever» to the R1 option,
+«bridge death is serious error, recovery is secondary and mostly irrelevant task, we need it to be prevented, not
+worked around.»):
+- WITHDRAWN: «i want them to be stacked exactly like in non-seamless windows, just on dom0». dom0 does not reproduce
+  the guest banner's stack geometry.
+- When more than one toast is on screen at a time, dom0 stacks them, one under the other, at positions we choose.
+  Toasts the bridge does not take may stay combined in one surface; a bridged toast is never combined.
+- A toast is shown exactly once: as the bridge's dom0 notification or in the stack, never both. A duplicate inside a
+  stack is the defect this section exists to prevent.
+- A toast waiting for its verdict does not unmap the toasts already shown.
+- When the read that names a new frame's cards fails, dom0 keeps the previous frame past 3 s and the agent logs an
+  ERROR (R1).
+- The 2-pixel black band is the gap between two toasts dom0 stacks.
+- Bridge death is a serious error to PREVENT; recovering from it is secondary.
+- Kept unchanged below: «toast must show once», «dom0 shows every card in order of appearance», combining, «no
+  doubles», the 3 s rule, a frame waits for a read naming its cards, "Claim, no timer", «if it is lost or double it
+  is not tolerated».
+- BUILT: not yet. The build shows the guest's stack as one window (a card inserted below a shown toast unmaps it
+  until its verdict, TOASTSTACKNOTSHOWN R2); the stacking above is being built (2026-11-28).
 - Owner, 2026-11-24: «stacking toasts is NORMAL and REQUIRED and should not be "corrected" or "held"»
 - Owner, 2026-11-24: «toast must show once»
 - Owner, 2026-11-24: «dom0 shows every card in order of appearance»

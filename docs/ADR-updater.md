@@ -306,7 +306,8 @@ asked, and §8's accounting cannot tell that cycle from a requested one.
 
 ## 11. A cause outside our code, with a measured remedy, is CLOSED BY DECISION
 
-**Status:** ACCEPTED. Applied once, below; reopened 2026-11-14.
+**Status:** ACCEPTED. Applied once, below; reopened 2026-11-14; re-closed by the owner 2026-11-28 («re-close. will
+reopen if needed»): template first contact fixed by 1dbde0b3, shipped v4.3.46, confirmed by the reporter on 26H2.
 
 **Decision.** We chase a cause until it is NAMED, or BOUNDED to a component that is not ours **and** a remedy is
 measured. In the second case we stop deliberately, and the stop is recorded here rather than in the issue
@@ -424,8 +425,10 @@ process with that name mid-transfer. A process found by name is any process with
    QubesDB, does not listen while QubesDB cannot answer, and exits on any other class.
 5. **The handler's dead-pass cleanup kills nothing.** The recorded relay is not a dead pass's leftover. Any other
    listener on the port is reported as an anomaly.
-6. **The installer kills nothing by name or port.** It ends the relay through its task, replaces the exe, and
-   starts the task again. Any other listener: it waits for it to exit, or keeps the previous relay exe and says why.
+6. **The installer never kills by name.** It ends the relay through its task and waits. A listener still on the port
+   after 20 s, whose image path is exactly the relay exe being replaced, is ended by its pid and logged before the exe
+   is replaced. Any other listener: the deploy refuses (QWTRELAYBUSY) and says why; the previous exe stays in place,
+   held by the running copy. (Amended by the owner 2026-11-28 to what the installer does since 87e3a746.)
 7. A commit-time lint refuses kill-by-name and adopt-by-name in shipped guest scripts.
 8. **A relay that stops on its own is reported; a stop that was asked for is not** (owner 2026-11-26: «as relay gets
    permanent crash should be reported. do not confuse crash with intented shutdowns»). A crash (Application Error) or

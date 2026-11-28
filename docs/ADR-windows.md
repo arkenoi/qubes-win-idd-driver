@@ -503,7 +503,7 @@ offline proof only (161 assertions, three defect knobs each seen to fail on its 
 
 ## 12. A withheld window is reported to the user only for a fault that waiting cannot resolve
 
-**Status:** ACCEPTED (owner, Jev), 2026-11-14. Agent fb010de, on a test branch. Narrows when §8's dom0 notice
+**Status:** ACCEPTED (owner, Jev), 2026-11-14. Agent 84f74ab, shipped v4.3.44. Narrows when §8's dom0 notice
 is sent; §8 stands.
 
 **Context.** On a direct-capable guest a window is withheld until its first painted frame. Ten seconds after
@@ -544,8 +544,8 @@ not reached); the broker killed, then a window opened past its grace - withheld,
 broker-down (`bd-20261115T0823Z-gl2`).
 
 **Open.** The never-delivering first session in Cost. With the broker killed the death reporter's own notice
-reaches the user 70 s before the window notice; whether that pair reports one fault twice is undecided (Jev
-0.49 against 0.48).
+reaches the user 70 s before the window notice. Decided by the owner 2026-11-28: «BROKER DEATH IS SEVERE ERROR, NOT
+A NORMAL PATH. Yes, keep it.» Both notices stay; the pair is not a double.
 
 ## 13. A guest whose profiles live on an empty private volume says so, with the remedy
 
