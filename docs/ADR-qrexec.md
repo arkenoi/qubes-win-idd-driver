@@ -104,7 +104,8 @@ entered the ring ahead of the hello (#6).
 
 **Decision.** The accept thread is created suspended. The agent resumes it when the daemon has connected and
 the hello is in the ring. Until then the pipe does not exist, and a caller's connect fails with "not found".
-A resume that fails is logged as an error and leaves it that way: calls from dom0 are still served.
+A resume that fails, or an accept thread that ends before the pipe's first instance exists, is a hard failure,
+as in §3 point 5.
 The agent starts advertise-tools, whose qrexec-client-vm opens this pipe, only after the pipe's first instance
 exists: the accept loop sets an event when it has created it (winutils QpsMainLoopEx), and the agent waits for
 that event, the accept thread's end or a stop, with no time limit, before the launch.
@@ -138,14 +139,35 @@ hung while calls from dom0 kept working.
 **Decision.**
 
 1. A wrapper that cannot be started, or is started but cannot be tracked because the connection table is full,
-   is logged and the agent's loop goes on. Nothing is sent to the daemon for it.
+   is logged and the agent's loop goes on. Nothing is sent to the daemon for it. The first full table in a boot
+   also writes one record of our source to the Application log, which the death reporter sends to dom0 as an
+   ACTION notice: calls are stuck and no longer tracked, and the qube should be restarted (owner 2026-11-28).
 2. The accept loop ends one client on that client's error and goes on to the next. It returns only when it
-   cannot create the pipe it listens on, or when the server is being destroyed.
+   cannot create the pipe it listens on, or when the server is being destroyed. A client whose handshake cannot
+   be set up (no memory for its record, or no thread for it) is such an error: that client is dropped and the
+   loop goes on. When the loop cannot create the pipe it listens on after the hello, the agent ends its service
+   with the error. The service's recovery restarts it (5 s, 15 s, 60 s, at most three a day), and dom0's daemon
+   reconnects. dom0's calls in flight are cut, and calls made inside the qube fail until the restarted agent has
+   sent its hello. Both are loud (owner 2026-11-28):
+   - a dropped client is logged at ERROR, and the first in a boot writes one record of our source "Qubes Windows
+     Tools" to the Application log, which the death reporter sends to dom0 as an ACTION notice: the qube is out
+     of memory and refused a call made inside it;
+   - the service's end is recorded by Windows (7024), which the death reporter shows in the qube at once and
+     sends to dom0 at the next boot.
 3. A client that connected and has already left counts as connected. What it wrote is still read.
 4. A new client carries its host's reference before any other thread can find it.
-5. A pipe server that cannot be created ends the service with the error, so that it is restarted.
+5. A pipe server that cannot be created at start, or that cannot open at the hello (§2), is a hard failure. The
+   agent logs the reason at ERROR and leaves it in the notification store, so dom0 is told at the next start. It
+   then powers the qube off at once, with the reason, which Windows records as event 1074. These fail only in a
+   qube that is already broken: the server's creation fails only on a memory allocation, and regular resource
+   exhaustion does not reach them this early (owner 2026-11-28).
 
 **Cost.** A client that opens the first pipe and leaves costs one error line where it used to stop the loop.
+
+**Cost (1).** A wrapper that never exits holds its slot. Once all 128 are held, every later call runs untracked:
+dom0 is not told when it ends, so its data port in dom0's daemon stays in use. An agent restart does not release
+those ports either. When dom0's ports run out, every call to the qube fails until the qube is restarted. The full
+table is logged at ERROR on each call that finds it full (owner 2026-11-28).
 
 **Evidence.** Point 2 (#12), on two clones of one golden that differ by the package alone. Seen to fail, the
 build before the fixes: one caller opened the trigger pipe and left, the agent logged one error, and the
@@ -194,9 +216,11 @@ rewritten.
    room for as long as the host takes (#20). A client is dropped by a disconnect, not by a clock.
 3. The wrapper's wait for its data client has no limit. A stop request now ends it, and the wrapper then closes
    its vchan itself (#8).
-4. The 120-second backstop on the drain after the child's exit stays. It starts again while an output pump is
-   inside a send or has completed one since it was set, so it no longer cuts a transfer that is still moving
-   (#4, §7.5).
+4. The 120-second backstop on the drain after the child's exit stays. It runs from the later of the drain's start
+   and the last time the peer was seen to take output out of the ring, so it no longer cuts a transfer that is
+   still moving. Output that only found room in the ring counts for nothing, so a peer that takes nothing ends
+   the drain however much is still written (#4, owner 2026-11-28). While it waits, the drain reads the vchan
+   and discards input that arrives after the exit, as the Linux agent does (#4, option c).
 5. The limits that were already in this code are not touched: the write timeout and the 100 ms wait before a
    pipe worker is killed, the 90-second wait for a logon, the vchan library's own waits.
 
@@ -221,13 +245,22 @@ no verdict (#1 apply 0.20, #26 apply 0.66).
 the exit. The caller got a Win32 pipe error as the exit code, and output still in the pumps was cut (#1).
 
 **Decision.** A failed stdin write closes stdin and the loop goes on. Input that arrives afterwards is
-discarded. After such a failure the loop looks at the child's exit before it waits again. In the loop that
-serves a call with no local program, a closed vchan is read to its end before leaving, and the call succeeded
-when the peer's exit code arrived (#26).
+discarded, logged at DEBUG with one of three reasons:
+- a write to the child's stdin failed (#1);
+- the child has exited: stdin is closed at the exit, and the drain after it reads and discards input (#4, §4
+  rule 4);
+- the call has no local program (#26).
+
+Data that arrives after the peer's own end-of-file, while the local program still runs, still ends the call.
+After a failed write the loop looks at the child's exit before it waits again. In the loop that serves a call
+with no local program, a closed vchan is read to its end before leaving, and the call succeeded when the peer's
+exit code arrived (#26).
 
 **Why.** The Linux agent closes stdin on the child's exit and sends the exit code only after the output.
 
-**Cost.** The existing error line for the failed write stays.
+**Cost.** The existing error line for the failed write stays. Input sent after the child's exit is dropped, as
+on Linux. A grandchild that inherited the child's stdin sees end-of-file when the child exits. A call with no
+local program now ends with status 0 where it ended with -1 or -2; nothing reads that status.
 
 **Evidence.** #1, on two clones of one golden that differ by the package alone: a piped call whose command
 is `exit 7` followed by 4,000,000 bytes of input. Seen to fail, the build before the fixes: the caller got 232,
