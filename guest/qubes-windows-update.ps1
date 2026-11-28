@@ -4048,10 +4048,15 @@ try {
         # on the offers, so the identity is already on both sides - the same set this block computes a
         # few lines below for St.satisfied, hoisted so the count can use it instead of guessing.
         $installedIds = @(Get-InstalledIdentities $installedKeys)
+        # ONLY THE OFFER'S OWN IDENTITY TAKES IT OUT (ADR-updater section 2 point 3: "only this may lower the number"), keyed
+        # exactly as the next scan keys it ($notPriorSat, WU-SCAN-COUNT). A kb/title clause stood beside it here and dropped a
+        # re-presented offer - same KB, NEW revision - by the installed row's KB, which the scan never does: dom0 heard N-1 from
+        # this rescan and N from the next scan (WURESCANKEYSBYKBSCANBYIDENTITY, replayed offline 2026-11-28: 1 then 2). The kb/title
+        # join still feeds $installedIds for an installed row with no identity of its own (Get-InstalledIdentities). An offer
+        # with no identity is counted, as the scan counts it: point 3 lets nothing else lower the number.
         $notInstalled = { param($r)
           $rid = $(if ((Test-RowKey $r 'uid') -and $r.uid) { "$($r.uid):$($r.rev)" } else { $null })
-          (-not ($rid -and $installedIds -contains $rid)) -and
-          ($installedKeys -notcontains $r.kb) -and ($installedKeys -notcontains $r.title) }
+          -not ($rid -and $installedIds -contains $rid) }
         # ...and the offers THIS pass verified have no route (St.unroutable, WU-ROUTE-PROOF) - the one measured exception
         # (ADR-updater section 2, point 5); the class-keyed notice branch that stood here is gone.
         $unroutableAfter = @($script:St.unroutable | Where-Object { $_ })
