@@ -59,9 +59,13 @@ PRECHECK = {
 E_LINE = re.compile(r"^\W*\[\d{8}\.\d{6}\.\d{3}-[0-9:]+-E\]")
 OPEN_RE = re.compile(r"\b(GAP|FIX OWED|fix not started|NOT FIXED|OPEN)\b")
 CLOSED_RE = re.compile(r"\b(FIX-LANDED|CLOSED|RETIRED|RETRACTED)\b")
-# The owner's words are a «quote», "owner-ordered" or a dated attribution ("owner 2026-10-20"). The bare word matched a
-# window's owner, "by the owner's hand" and "owner's call" and flagged records that quote nobody (2026-11-28).
-OWNER_RE = re.compile(r"«|owner-ordered|\b[Oo]wner,? \(?20\d\d-\d\d-\d\d")
+# The owner's words: a «quote», "owner-ordered", a dated attribution ("owner 2026-10-20"), a colon attribution
+# ("Owner: ...", "(owner: ...)") or an order word ("the owner's order|rule|requirement|directive|mandate|instruction").
+# The bare word matched a window's owner, "by the owner's hand" and "owner's call" (a decision owed, not an order) and
+# flagged records that quote nobody; the first narrowing (dated or «» only) then missed eight real orders - Mythos audit
+# wf_3ce1c999-51a, 2026-11-28. Measured over the 136 open bullets: old 40 tagged, this 19, the eight among them.
+OWNER_RE = re.compile(r"«|owner-ordered|\b[Oo]wner,? \(?20\d\d-\d\d-\d\d|\b[Oo]wner:|"
+                      r"\b[Oo]wner(?:'s)? (?:absolute )?(?:orders?|rules?|requirements?|directives?|mandates?|instructions?)\b")
 # WHAT BLOCKS IS THE OWNER'S RULE, quoted (2026-11-26): «only unaddressed owner orders block. defects don't (unless those
 # are newly introduced or recurring defects caused by your previous action)».
 RUBRIC = {"launch_ready": {
@@ -75,8 +79,10 @@ RUBRIC = {"launch_ready": {
                  "not itself put the work after this campaign or cut, or when it is a defect that is new in this range "
                  "or that recurs because of a listed commit. A changed product path not covered on this package blocks.",
         "context": "A campaign costs about four hours of rig time and locks the owner's screen. `quotes-owner` and "
-                   "`new-in-range` are computed: the first from the record's text, the second by whether the record's key "
-                   "is absent from the same findings file at the range's base."},
+                   "`new-in-range` are computed: the first from the record's text (a «quote», a dated or colon attribution, "
+                   "or the owner's order/rule/requirement/directive/mandate/instruction), the second by git ancestry when "
+                   "the record's header cites its introducing commit (the tag then names the commit and the base), "
+                   "otherwise by whether the record's key is absent from the same findings file at the range's base."},
     "criteria": {
         "ready_to_launch": "every changed product path is covered on this package, and no listed record is an unaddressed "
                            "owner order or a defect new in the range or recurring because of a listed commit",
@@ -208,16 +214,27 @@ def open_records(changed, base):
                 # ancestry, as for PIPEZEROINSTANCE (2026-11-28: a defect from 2026-10-24, registered that day, read
                 # "new-in-range yes" and alone pushed the verdict to blocked 0.91).
                 new = "no" if key in then else "yes"
-                im = INTRO_RE.search(t)
+                # ONLY THE RECORD'S HEADER, the first [...] after its key, where severity and status live: a phrase in
+                # the prose ("a guard introduced in <old sha>") must not turn a new defect old (Mythos wf_3ce1c999-51a).
+                hb = re.match(r"- (?:\*\*)?[^\[]*\[([^\]]*)\]", t)
+                im = INTRO_RE.search(hb.group(1)) if hb else None
                 if im:
                     sub, sha = im.group(1), im.group(2)
-                    cwd, at = (os.path.join(REPO, sub), git("rev-parse", "%s:%s" % (base, sub))[1].strip()) if sub else (REPO, base)
-                    if git("cat-file", "-e", sha + "^{commit}", cwd=cwd)[0] != 0 or not at:
+                    cwd, at = REPO, base
+                    if sub:
+                        cwd = os.path.join(REPO, sub)
+                        prc, at, _ = git("rev-parse", "%s:%s" % (base, sub))
+                        at = at.strip() if prc == 0 else ""     # a failed rev-parse still prints its argument
+                    if not at or not os.path.isdir(cwd) or git("cat-file", "-e", sha + "^{commit}", cwd=cwd)[0] != 0:
                         new += " (introducing commit %s unresolvable here; key absence decides)" % sha
-                    elif git("merge-base", "--is-ancestor", sha, at, cwd=cwd)[0] == 0:
-                        new = "no (introduced %s, already in %s)" % (sha, base)
                     else:
-                        new = "yes (introduced %s, not in %s)" % (sha, base)
+                        arc = git("merge-base", "--is-ancestor", sha, at, cwd=cwd)[0]
+                        if arc == 0:
+                            new = "no (introduced %s, already in %s)" % (sha, base)
+                        elif arc == 1:
+                            new = "yes (introduced %s, not in %s)" % (sha, base)
+                        else:                                   # an error is not a measured non-ancestor
+                            new += " (ancestry of %s unreadable, rc %d; key absence decides)" % (sha, arc)
                 hits.append("findings/%s:%d [names %s] [quotes-owner %s] [new-in-range %s]: %s%s%s" % (
                     name, i, ", ".join(named), "yes" if OWNER_RE.search(t) else "no", new,
                     t[:400], " [+%d chars]" % (len(t) - 400) if len(t) > 400 else "", past))
