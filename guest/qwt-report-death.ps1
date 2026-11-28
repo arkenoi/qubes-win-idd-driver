@@ -1480,7 +1480,55 @@ function Format-QwtDeathNotice {
 # --- the whole thing for one record: log at ERROR, count, notify ----------------------------------
 # Returns the route's status for a new death, 'enriched' for another record of a counted one,
 # 'not-ours' / 'ignored' otherwise.
+# ONE RECORD AT A TIME ACROSS PROCESSES (owner: "make sure nothing is lost, but no doubles"). The catch-up
+# task and a live QwtDeathReporter instance run at once (the Queue policy serialises only the reporter's own instances).
+# Unlocked, two things broke: Register-QwtDeath's ledger (count + 1, then a plain write) gave two deaths one number, and
+# the route's per-boot marker on that id then sent the second as suppressed:duplicate - a death nobody heard of; and two
+# processes handling one record both passed the already-reported check before either wrote its notified line - a
+# double. So one record's whole handling - the already-reported check, the number, the DEATH line, the send, the
+# notified line and that record's watermark step - runs under one Global\ mutex (the shape of
+# Global\QubesWindowsUpdate). Global\ because both tasks run as SYSTEM in session 0; creating a name there takes
+# SeCreateGlobalPrivilege, which a standard user does not hold.
+# NOT UNDER IT: the catch-up's end-of-pass Write-QwtDeathWatermark, which writes marks read at pass start, so a
+# notified id a live instance stepped in mid-pass can be dropped from the set. That record's notified line is
+# already in the log by then, and Test-QwtDeathLoggedRecord - asked under the mutex - still answers for it.
+# THE WAIT IS BOUNDED AND ITS END IS A HARD FAILURE. The holder does one record's work, all of it local - the route
+# hands the notice to notifhost with a Start-Process that does not wait - so the lock held for 60 s means a wedged
+# holder. Refusing at once instead would turn every overlap into a lost record. Either end - not free in time, or
+# handed over abandoned - is logged at ERROR here and THROWN, never skipped: the live trigger then logs 'reporter
+# failed' and exits 1; the catch-up's scan stops that channel's mark before the record, and its pre-boot pass logs it.
+# Abandonment is reachable: Microsoft documents that a system-wide mutex whose holder is terminated abruptly reaches the
+# next acquirer abandoned - here a holder ended at its PT5M limit or by a shutdown. (The updater measured the opposite
+# on Windows 10 for a WaitOne(0) after the holder was gone, 3/3; which one this wait meets is not measured.)
+# A RECORD REFUSED HERE IS LATE OR LOST, and that is the ordered hard failure (coordinator 2026-11-28: "a wait on it
+# must hard-fail loudly on abandonment/timeout ... no silent skip"): its trigger does not fire again, and the catch-up
+# runs once a boot, whose next pass carries only Application 4001-4004 across the boot - so those are told a boot
+# late (never in an AppVM, whose log is its template's again), every other kind is not told. The reporter's own tasks
+# are not in QwtDeathTaskNames, so their failed result is not a notice either; qwt-deaths.log's ERROR is the trace.
+$script:QwtDeathLockName = 'Global\QubesQwtDeathReporter'
+$script:QwtDeathLockWaitMs = 60000
 function Invoke-QwtDeathReport {
+    param([Parameter(Mandatory)][string]$XmlText, [switch]$FromCatchUp)
+    $m = New-Object System.Threading.Mutex($false, $script:QwtDeathLockName)
+    $held = $false
+    try {
+        try { $held = $m.WaitOne($script:QwtDeathLockWaitMs) }
+        catch [System.Threading.AbandonedMutexException] {
+            $held = $true   # .NET hands the mutex over with the exception: released in the finally
+            Write-QwtDeathLog 'ERROR' "the reporter lock $($script:QwtDeathLockName) was ABANDONED (its holder ended without releasing it) - this record is NOT handled now"
+            throw "reporter lock abandoned"
+        }
+        if (-not $held) {
+            Write-QwtDeathLog 'ERROR' "the reporter lock $($script:QwtDeathLockName) was not free within $($script:QwtDeathLockWaitMs) ms - its holder is wedged; this record is NOT handled now"
+            throw "reporter lock not taken"
+        }
+        return (Invoke-QwtDeathReportOne -XmlText $XmlText -FromCatchUp:$FromCatchUp)
+    } finally {
+        if ($held) { try { $m.ReleaseMutex() } catch { } }
+        $m.Dispose()
+    }
+}
+function Invoke-QwtDeathReportOne {
     param([Parameter(Mandatory)][string]$XmlText, [switch]$FromCatchUp)
     $ev = ConvertFrom-QwtDeathEvent -XmlText $XmlText
     if (-not $ev.ours) {
