@@ -171,6 +171,9 @@ inline std::wstring QwtLogDir(std::wstring* note = nullptr)
 #define QTB_REASON_AGENT_GONE     L"agent-gone"
 #define QTB_REASON_SESSION_CHANGED L"session-changed"
 #define QTB_REASON_STOP_REQUESTED L"stop-requested"
+// Not a departure asked for: this bridge cannot forward (its dom0 connection is gone or never came up) and shut down
+// rather than stay up serving nothing. The agent logs it at ERROR, once (QGANOTIFCANNOTFORWARD); guest toasts take over.
+#define QTB_REASON_CANNOT_FORWARD L"cannot-forward"
 
 inline const wchar_t* g_logName = L"\\bridge.log";
 inline std::wstring g_logDirOverride;

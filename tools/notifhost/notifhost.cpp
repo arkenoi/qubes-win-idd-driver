@@ -3226,6 +3226,34 @@ static DWORD WaitOrDepart(DWORD n, const HANDLE* work, DWORD timeoutMs)
     }
 }
 
+// THE LISTING, ENDED BY A DEPARTURE (bridge-death census P12/P11). GetNotificationsAsync(...).get() blocked the main
+// thread with no bound and heard no stop: the agent's 3 s wait for a stopping bridge then ended in its task delete.
+// The listing now runs as the async operation it is, its completion sets an event, and the thread waits on that event
+// in WaitOrDepart: a stop or the agent's death cancels the operation and *departed is set (the loop top then leaves on
+// that reason). There is still no bound on a listing that never completes while nobody asks the bridge to go: that is
+// the hang P12 names, and it needs a timer or the owner's call. A failed event falls back to the blocking get().
+static winrt::Windows::Foundation::Collections::IVectorView<WinUserNotification>
+ListToastsOrDepart(UserNotificationListener const& listener, bool* departed)
+{
+    *departed = false;
+    auto op = listener.GetNotificationsAsync(NotificationKinds::Toast);
+    auto done = std::make_shared<winrt::handle>(CreateEventW(nullptr, TRUE, FALSE, nullptr));
+    if (*done)
+    {
+        // Set once, before or after completion (a handler set on a completed operation runs at once). The shared
+        // handle outlives a cancelled wait, so a late completion signals a live event.
+        op.Completed([done](auto const&, winrt::Windows::Foundation::AsyncStatus) { SetEvent(done->get()); });
+        HANDLE h = done->get();
+        if (WaitOrDepart(1, &h, INFINITE) == 1)
+        {
+            try { op.Cancel(); } catch (...) {}
+            *departed = true;
+            return nullptr;
+        }
+    }
+    return op.get();
+}
+
 // mainThread: the caller is the bridge's main thread, so the wait also ends on a departure (WaitOrDepart). The reader
 // thread passes FALSE: the change notification is the main thread's, and the reader ends with the connection.
 static BOOL PipeXfer(BOOL rd, void* buf, DWORD n, DWORD timeoutMs, BOOL mainThread = FALSE)
@@ -3481,12 +3509,28 @@ static bool ForwardText(std::wstring const& title, std::wstring const& body, uin
 
     auto frame = EncodeNotifyFrame(seq, Utf8(title.empty() ? L"Notification" : title), Utf8(body), kind, actions);
     g_awaitSeq = seq; g_awaitOk = 0; ResetEvent(g_ackEvt);
-    if (!PipeXfer(FALSE, frame.data(), (DWORD)frame.size(), 15000, TRUE)) { rtt(-1); MarkConnDead(); return false; }
-    const DWORD aw = WaitOrDepart(1, &g_ackEvt, 15000);
-    if (aw != WAIT_OBJECT_0)
+    // THE SEND IS NOT CUT BY A STOP (Opus audit of c29428dc, item B). A frame being written, or written and awaiting its
+    // ack, may already be on dom0's screen; cutting the wait on a stop counted it not forwarded, its record read `window`
+    // once the bridge was down, and the live agent showed the banner too - a double. So a stop does not end these
+    // waits (FWD_RTT measured p50 9 ms, max 184 ms); the loop top takes it right after. What ends the ack wait when no
+    // ack comes is an EVENT for each way it cannot come, not a clock:
+    //   - the connection is dead (dom0's side closed, the relay ended, a pipe error): the reader thread exits on it
+    //     (MarkConnDead) and its handle is signalled - the next pass then says "cannot forward" and shuts down;
+    //   - the agent is gone: its liveness mutex is abandoned. No agent maps a banner then, so no double is possible,
+    //     and the loop top leaves on it.
+    // The 15 s bound stays only for the one case neither event covers: dom0 alive, connection open, and no answer.
+    // It is the failure detector that was there before c29428dc, not a fix for any path here.
+    if (!PipeXfer(FALSE, frame.data(), (DWORD)frame.size(), 15000)) { rtt(-1); MarkConnDead(); return false; }
+    HANDLE ackHs[3]; DWORD ackN = 0;
+    ackHs[ackN++] = g_ackEvt;
+    if (g_reader) ackHs[ackN++] = g_reader;
+    if (g_agentAlive) ackHs[ackN++] = g_agentAlive;
+    const DWORD ackW = WaitForMultipleObjects(ackN, ackHs, FALSE, 15000);
+    if (ackW != WAIT_OBJECT_0)
     {
         rtt(-2);
-        BLog(aw == 1 ? L"send seq=%llu: ack wait ended, the bridge departs" : L"send seq=%llu: ack timeout", (ULONGLONG)seq);
+        BLog(ackW == WAIT_TIMEOUT ? L"send seq=%llu: ack timeout"
+                                  : L"send seq=%llu: no ack - the connection's reader ended or the agent is gone", (ULONGLONG)seq);
         MarkConnDead(); return false;
     }
     rtt(g_awaitOk == 1 ? 1 : 0);
@@ -4301,32 +4345,19 @@ static int BridgeMain()
     // QTB_EXIT_ALREADY_RUNNING is its own code so the supervisor can tell "I am already running"
     // from "I finished", and main.c treats it as proof the bridge is alive rather than as a death. The mutex
     // is Local\\QubesToastBridgeSingleton; the holder is the running bridge, and exiting on it is NOT a death.
-    // A HOLDER THE AGENT'S TASK DELETE DID NOT END WAITS ITS TURN (bridge-death census P15). The task's own earlier
+    // A HELD SINGLETON IS "CANNOT FORWARD": ERROR AND SHUT DOWN (owner 2026-11-28: «if bridge cannot forward, it shold
+    // emit an error and shut down, then we go for normal guest toasts indeed.»; census P15). The task's own earlier
     // instance is ended by the agent's /delete before this one is created, so a holder here was started some other way
-    // (a hand-started --bridge). Exiting left this agent life with no bridge. This instance waits for the holder's
-    // mutex to be released or abandoned, and for nothing else but the agent's own death: no timer.
+    // (a hand-started --bridge). Waiting for it (c29428dc) left an instance that could not forward while the agent's
+    // 60 s check reported it anyway. This one says why and leaves before it publishes a pid; the agent's one ERROR is
+    // that QGANOTIFNOTREADY, and its hold, never told this bridge is up, shows the guest's toasts.
     HANDLE mtx = CreateMutexW(nullptr, FALSE, L"Local\\QubesToastBridgeSingleton");
     if (mtx) { DWORD w = WaitForSingleObject(mtx, 0); if (w != WAIT_OBJECT_0 && w != WAIT_ABANDONED) {
-        BLog(L"SINGLETON another bridge instance holds the singleton - waiting for it to leave%s",
-             g_agentAlive ? L" or for the agent to" : L" (no --alive: the agent's task delete ends this wait)");
-        HANDLE hs[2] = { mtx, g_agentAlive };
-        w = WaitForMultipleObjects(g_agentAlive ? 2 : 1, hs, FALSE, INFINITE);
-        if (w == WAIT_OBJECT_0 + 1 || w == WAIT_ABANDONED_0 + 1)
-        {
-            BLog(L"SINGLETON the agent left while this instance waited, exiting");
-            WriteExitReason(QTB_REASON_AGENT_GONE);
-            return 0;
-        }
-        if (w != WAIT_OBJECT_0 && w != WAIT_ABANDONED_0)
-        {
-            BLog(L"SINGLETON the wait for the other instance failed (%lu, %lu), exiting %u", w, GetLastError(),
-                 (unsigned)QTB_EXIT_ALREADY_RUNNING);
-            return QTB_EXIT_ALREADY_RUNNING;
-        }
-        BLog(L"SINGLETON the other instance left (%s) - this one starts", w == WAIT_ABANDONED_0 ? L"abandoned" : L"released");
-    } }
+        // "already holds the singleton" is the phrase tools/reported-error-diff.py counts (EXERCISE bridge-death).
+        BLogE(L"SINGLETON another bridge instance already holds the singleton (not this agent's task instance) - this "
+              L"one cannot forward, exiting %u", (unsigned)QTB_EXIT_ALREADY_RUNNING);
+        return QTB_EXIT_ALREADY_RUNNING; } }
     ProcessIdToSessionId(GetCurrentProcessId(), &g_mySession);
-
     InitializeCriticalSection(&g_corrLock);
     InitializeCriticalSection(&g_actLock);
     g_rdEvt = CreateEventW(nullptr, TRUE, FALSE, nullptr);
@@ -4334,9 +4365,38 @@ static int BridgeMain()
     g_connStop = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     g_ackEvt = CreateEventW(nullptr, FALSE, FALSE, nullptr);
 
-    // THE DEFERRED NOTICES ARE DRAINED ON THEIR OWN THREAD, STARTED ONCE THE PID IS PUBLISHED (DeferDrainThread,
-    // after HoldStart below; census P13). They were drained here, first: each child is waited on for up to 30 s, so
-    // two slow ones held the pid past the agent's 60 s mark.
+    // DRAIN ANY DEFERRED NOTIFICATION FIRST, ON ITS OWN THREAD (census P13; Opus audit of c29428dc, items A and J). This
+    // process is the session-resident bridge, so it is the one place with a route when the one-shot path had none
+    // (NOTIFYLOSTINSESSIONGAP): a message raised in the gap between a bridge stopping and a session existing is queued by
+    // NotifyDeferWrite and sent here, by a `--notify-file` child per file, each waited on up to 30 s.
+    // - STARTED HERE, before every start-time exit below (a stand-down, a refusal, a pid not published), so a bridge
+    //   that does not arm still sends what is queued - c29428dc started it after the pid and lost those notices.
+    // - ON A THREAD, so the pid below is not held behind the children (the P13 death: two slow ones passed 60 s).
+    // - JOINED ON EVERY RETURN (DeferDrainJoin, a scope object), so this process does not end while a child it started is
+    //   still sending: the next bridge's drain would find that file still queued and send it again. The wait is the
+    //   drain's own (30 s per child), not a new one.
+    struct DeferDrainJoin
+    {
+        HANDLE h = nullptr;
+        ~DeferDrainJoin() { if (h) { WaitForSingleObject(h, INFINITE); CloseHandle(h); } }
+    } drainJoin;
+    drainJoin.h = CreateThread(nullptr, 0, DeferDrainThread, nullptr, 0, nullptr);
+    if (!drainJoin.h)
+    {
+        BLog(L"NOTIFY defer-drain thread not started (%lu) - draining on the bridge's main thread", GetLastError());
+        NotifyDeferDrain();
+    }
+
+    // NO HOLD, NO FORWARDING (owner 2026-11-28, quoted at the connection block: a bridge that cannot forward says so
+    // and shuts down). Without the agent's hold section the agent maps every banner, so each toast this bridge
+    // forwarded would show twice. It leaves before it publishes a pid: the agent's one ERROR is its 60 s
+    // QGANOTIFNOTREADY (this tree's agent never launches it without the section: QGANOTIFNOTLAUNCHED).
+    if (!g_hold)
+    {
+        BLogE(L"BRIDGE cannot forward: no toast-hold section from the agent (--hold missing or not opened, see HOLD above) "
+              L"- every forwarded toast would show twice; not armed, exiting");
+        return 0;
+    }
 
     std::wstring stopf = StateDir() + L"\\stop";
     DeleteFileW(stopf.c_str());       // a stale stop request must not kill a fresh start
@@ -4490,6 +4550,8 @@ static int BridgeMain()
     int failStreak = 0, backoff = 0;
     ULONGLONG nextReconnect = 0;
     bool reconnectHeld = false;   // "not re-established, going down" said once per end
+    bool everConnected = false;   // a connection was up once: after its loss, one is made only on need
+    bool needConn = false;        // the listing has a toast that must reach dom0 while there is no connection
     int rc = 0;
 
     // ---- REST-ZERO S4c wake sources (docs/DESIGN-rest-zero-capture.md C) -----------------------------------------
@@ -4521,23 +4583,23 @@ static int BridgeMain()
             CloseHandle(f);
         }
         else pubErr = GetLastError();
+        // NOT PUBLISHED, NOT ARMED (owner 2026-11-28: a bridge that cannot forward shuts down). The agent, reading no
+        // pid, never tells its hold the bridge is up, so it maps every banner - each toast forwarded from here would
+        // show twice. It leaves instead; the agent's one ERROR is its 60 s QGANOTIFNOTREADY.
         if (!published)
-            BLogE(L"BRIDGE pid not published: %s not written (%lu) - the agent finds no bridge here, reports none ready "
-                  L"and holds no toast window back", hbf.c_str(), pubErr);
+        {
+            BLogE(L"BRIDGE cannot forward: pid not published, %s not written (%lu) - the agent cannot hold its toasts, "
+                  L"so a forwarded one would show twice; not armed, exiting", hbf.c_str(), pubErr);
+            if (pushArmed) { try { listener.NotificationChanged(changedTok); } catch (...) {} }
+            if (toastEvt) CloseHandle(toastEvt);
+            ShadowWorkerStop();
+            EtwTierStop();
+            return 0;
+        }
         if (g_readyEvt) SetEvent(g_readyEvt);
         else BLog(L"BRIDGE no --ready from the agent (mixed install?) - it will find our pid only on its own wakes");
     }
     HoldStart();   // the toast-hold records are live from here (ADR-toasts 10)
-    // DRAIN ANY DEFERRED NOTIFICATION, OFF THIS THREAD (census P13). This process is the session-resident bridge, so it
-    // is the one place with a route when the one-shot path had none (NOTIFYLOSTINSESSIONGAP): a message raised in the
-    // gap between a bridge stopping and a session existing is queued by NotifyDeferWrite and sent here. Its children
-    // are waited on (up to 30 s each) by that thread, so neither the pid above nor this loop waits behind them. It is
-    // not joined: the children are separate processes, and one this bridge's exit cuts off keeps its file queued.
-    {
-        HANDLE drain = CreateThread(nullptr, 0, DeferDrainThread, nullptr, 0, nullptr);
-        if (drain) CloseHandle(drain);
-        else { BLog(L"NOTIFY defer-drain thread not started (%lu) - draining on the bridge's main thread", GetLastError()); NotifyDeferDrain(); }
-    }
     // Without --alive (an older agent: a mixed install?) the agent's death falls back to the 30 s pid probe.
     if (!g_agentAlive)
         BLog(L"BRIDGE no --alive from the agent, its death is seen only by a 30 s poll");
@@ -4626,39 +4688,69 @@ static int BridgeMain()
         if (g_connDead)
         {
             ConnDown();   // reap the reader/pipe of a connection that died mid-flight
+            // A BRIDGE THAT CANNOT FORWARD SHUTS DOWN. Owner 2026-11-28: «if bridge cannot forward, it shold emit an error
+            // and shut down, then we go for normal guest toasts indeed.» The connection used to be re-made on a backoff
+            // (5 s .. 5 min, forever) while toasts took the window path. Now:
+            //   - it is made when the bridge NEEDS it: at its first pass (forwarding is what it starts for), and after a
+            //     loss only once a toast must be forwarded (needConn, set by the listing below). One attempt per need,
+            //     on that event - no backoff, no clock;
+            //   - an attempt that fails is "cannot forward": ERROR here, the reason recorded (the agent's one ERROR,
+            //     QGANOTIFCANNOTFORWARD), and the bridge leaves, so the agent's hold shows every toast.
+            // WHY NOT AT THE LOSS ITSELF: measured over 1530 bridge.log copies on this qube (scratchpad, win-iso/logvol,
+            // qwt-accept, qwt-quick-upgrade), every one of ~1675 "connection down" lines was followed by a stop request
+            // and none by "connection up": a loss is the session ending (qvm-shutdown, logoff), often before the agent's
+            // GoingDown is set. An ERROR there would be one on that ordinary path. A toast that needs dom0 is what
+            // tells a dead route from an ending session.
+            // A session going down, in either display mode (the agent's GoingDown): no connect at all.
+            const bool goingDown = g_hold && TI_LOAD32(&g_hold->GoingDown) != 0;
             if (connected)
             {
                 connected = false;
+                // The text is the one mgmt/harness/log-sweep-baseline.json carries; "until it is back" now means: until a
+                // toast needs dom0 (above).
                 BLog(L"connection down - toasts take the window path until it is back");
             }
             static const DWORD bo[] = { 5000, 15000, 60000, 300000 };
-            if ((!allow.empty() || !owned.empty()) && now >= nextReconnect && HoldSeamlessGoingDown())
+            const bool want = (!allow.empty() || !owned.empty()) && (!everConnected || needConn);
+            if (want && now >= nextReconnect && goingDown)
             {
-                // No relay is started while the session is going down. The header wakes nothing on a cancelled end,
-                // so the next look is the first backoff step, and the backoff is not spent.
+                // No relay is started while the session is going down - in either display mode now (it was seamless mode
+                // only, the ADR-supervision 2b latch). The header wakes nothing on a cancelled end, so the next look is the
+                // first backoff step.
                 nextReconnect = GetTickCount64() + bo[0];
                 if (!reconnectHeld)
                 {
                     reconnectHeld = true;
-                    BLog(L"connection not re-established: the session is going down (seamless mode)");
+                    BLog(L"connection not re-established: the session is going down");
                 }
             }
-            else if ((!allow.empty() || !owned.empty()) && now >= nextReconnect)
+            else if (want && now >= nextReconnect)
             {
                 reconnectHeld = false;
+                needConn = false;
                 // A fresh connection must trigger an immediate listing pass: toasts left
-                // deliberately unseen while disconnected (fail-open retry) forward NOW,
-                // not at the next NotificationChanged / 30 s floor. Banners are held per toast by the agent (ADR-toasts
+                // deliberately unseen while disconnected forward NOW. Banners are held per toast by the agent (ADR-toasts
                 // 10): no ShowBanner writes from here.
                 if (ConnUp())
                 {
-                    backoff = 0; connected = true; toastSignaled = true;
+                    backoff = 0; connected = true; everConnected = true; toastSignaled = true;
                     BLog(L"connection up - %u allowlisted app(s)", (UINT)allow.size());
                 }
                 else
                 {
-                    nextReconnect = GetTickCount64() + bo[backoff < 3 ? backoff : 3];
-                    backoff++;
+                    // A departure that cut the connect short is the loop top's to take on the next pass (WaitOrDepart
+                    // woke it), so it is not called a fault here.
+                    const bool departing = (g_agentAlive && WaitForSingleObject(g_agentAlive, 0) != WAIT_TIMEOUT) ||
+                                           GetFileAttributesW(stopf.c_str()) != INVALID_FILE_ATTRIBUTES ||
+                                           (g_hold && TI_LOAD32(&g_hold->GoingDown) != 0);
+                    if (!departing)
+                    {
+                        BLogE(L"BRIDGE cannot forward: the dom0 connection could not be %s (bridge.log above names the step) "
+                              L"- shutting down, guest toasts take the window path", everConnected ? L"re-made" : L"made");
+                        WriteExitReason(QTB_REASON_CANNOT_FORWARD);
+                        break;
+                    }
+                    nextReconnect = GetTickCount64() + bo[0];
                 }
             }
         }
@@ -4689,7 +4781,8 @@ static int BridgeMain()
                         WriteExitReason(wkey.c_str());
                         rc = 2; break;
                     }
-                    BLog(L"FATAL consent revoked %s -> %S - restoring banners, exiting", readout.c_str(), key); rc = 2; break;
+                    BLogE(L"FATAL consent revoked %s -> %S - cannot forward, restoring banners, exiting (the agent reports "
+                          L"this exit)", readout.c_str(), key); rc = 2; break;
                 }
             } catch (...) {}
         }
@@ -4734,7 +4827,9 @@ static int BridgeMain()
         walRetryAt = 0;
         try
         {
-            auto list = listener.GetNotificationsAsync(NotificationKinds::Toast).get();
+            bool departed = false;
+            auto list = ListToastsOrDepart(listener, &departed);
+            if (departed) continue;   // the loop top reads the stop file or the agent's mutex and leaves
             listN = list.Size();
             failStreak = 0;
             // First good poll after a failed baseline: seed `seen` with the whole current center
@@ -4813,6 +4908,10 @@ static int BridgeMain()
                                     : listed ? (g_connDead ? TH_VERDICT_WINDOW : TH_VERDICT_BRIDGE) : TH_VERDICT_PENDING,
                                 (listed ? TH_REC_FLAG_ALLOWLISTED : 0u) | (windowOnly ? TH_REC_FLAG_WINDOWONLY : 0u) |
                                 (app.empty() ? TH_REC_FLAG_NO_SENDER : 0u));
+                    // An allowlisted toast published window only because there is no connection: the bridge needs one now
+                    // (the connection block makes it on the next pass, or the bridge shuts down). This toast is shown in the
+                    // guest either way.
+                    if (listed && g_connDead && !windowOnly && seamless && !owned.count(id)) needConn = true;
                     ShadowClassify(un, id, aumid);
                     // A window-only app: its click is its action, so the banner stays in the guest and nothing is forwarded. While
                     // the agent watches, its record waits below like any window record: a banner marks it shown, or the agent's
@@ -4987,10 +5086,16 @@ static int BridgeMain()
                 if (fresh.empty() || g_connDead)
                 {
                     if (!fresh.empty())
+                    {
                         // Every record here reads bridge and stays the bridge's: the agent never maps it, so forwarding it when
                         // the connection returns cannot double it. Nothing is turned window (ADR-toasts 13).
-                        BLogE(L"%u toast(s) claimed for dom0 while dom0 is unreachable - held unforwarded (unseen, forwarded when the "
-                              L"connection returns); their banners stay unmapped", (UINT)fresh.size());
+                        // THE NEED THAT MAKES THE CONNECTION (owner 2026-11-28, quoted at the connection block): the next pass
+                        // connects once; if it cannot, the bridge says so at ERROR and shuts down, and the agent then shows
+                        // these banners. So this line is INFO - that ERROR is this end's one.
+                        needConn = true;
+                        BLog(L"%u toast(s) claimed for dom0 while dom0 is unreachable - held unforwarded (unseen); the connection "
+                             L"is made on the next pass, or the bridge shuts down", (UINT)fresh.size());
+                    }
                     // leave `fresh` UNSEEN so they forward once the connection returns
                 }
                 else if (fresh.size() > 3)
@@ -5110,7 +5215,7 @@ static int BridgeMain()
         {
             failStreak++;
             BLog(L"poll error (%d)", failStreak);
-            if (failStreak >= 30) { BLog(L"FATAL 30 consecutive poll errors"); rc = 3; break; }
+            if (failStreak >= 30) { BLogE(L"FATAL 30 consecutive poll errors - cannot forward, exiting (the agent reports this exit)"); rc = 3; break; }
             // THE LISTENER IS TAKEN AGAIN AFTER A FAILED LISTING (census P4). This bridge held the one it took at its
             // start for its life, so a notification platform that restarted left every later listing throwing on a
             // dead proxy until the 30th ended the bridge. Now the listing that fails takes Current() again and moves
@@ -5179,7 +5284,8 @@ static int BridgeMain()
                 const DWORD d = (at > t) ? (DWORD)((at - t) < 0x7FFFFFFFull ? (at - t) : 0x7FFFFFFFull) : 0;
                 if (timeout == INFINITE || d < timeout) timeout = d;
             };
-            if (g_connDead && (!allow.empty() || !owned.empty())) dueAt(nextReconnect);
+            // Only while a connection is wanted (the first one, or one a toast needs): a lost one is not re-made on a clock.
+            if (g_connDead && (!allow.empty() || !owned.empty()) && (!everConnected || needConn)) dueAt(nextReconnect);
             if (retryPending) dueAt(lastListTick + 2000);
             if (!(pushArmed || g_etw.state == ETW_STATE_LIVE)) dueAt(nextFloorList);
             if (walRetryAt) dueAt(walRetryAt);
