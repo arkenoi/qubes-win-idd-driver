@@ -2234,30 +2234,37 @@ static volatile LONG g_walArmed = 0;
 static DWORD WINAPI WalWatchThread(LPVOID)
 {
     NameThisThread(L"notifhost: wal-watch");
+    // A THROW HERE ENDS THIS THREAD, NOT THE BRIDGE (census P10): it had no handler, and a C++ throw on any thread of
+    // this process is std::terminate. The watch is then off, which is the fail-open state above. The loop's buffer is
+    // this frame's own (it was a vector) and the handler's log line is guarded, so the handler cannot throw again.
+    HANDLE h = INVALID_HANDLE_VALUE;
+    try
+    {
     wchar_t la[MAX_PATH] = { 0 };
     if (!GetEnvironmentVariableW(L"LOCALAPPDATA", la, RTL_NUMBER_OF(la))) return 0;
     std::wstring dir = std::wstring(la) + L"\\Microsoft\\Windows\\Notifications";
-    HANDLE h = CreateFileW(dir.c_str(), FILE_LIST_DIRECTORY,
-                           FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
-                           OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    h = CreateFileW(dir.c_str(), FILE_LIST_DIRECTORY,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                    OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
     if (h == INVALID_HANDLE_VALUE)
     { BLog(L"WALWATCH unavailable (%lu) - timed-retry fallback", GetLastError()); return 0; }
     BLog(L"WALWATCH armed dir=%s", dir.c_str());
     InterlockedExchange(&g_walArmed, 1);
-    std::vector<BYTE> buf(8192);
+    DWORD buf[8192 / sizeof(DWORD)];   // DWORD-aligned, as ReadDirectoryChangesW requires
+    BYTE* const b0 = (BYTE*)buf;
     for (;;)
     {
         if (WaitForSingleObject(g_shadow.stopEvt, 0) == WAIT_OBJECT_0) break;
         DWORD ret = 0;
-        if (!ReadDirectoryChangesW(h, buf.data(), (DWORD)buf.size(), FALSE,
+        if (!ReadDirectoryChangesW(h, buf, (DWORD)sizeof(buf), FALSE,
                 FILE_NOTIFY_CHANGE_LAST_WRITE | FILE_NOTIFY_CHANGE_SIZE |
                 FILE_NOTIFY_CHANGE_FILE_NAME, &ret, nullptr, nullptr))
             break;                           // cancelled at shutdown / dir gone
         // Any change to wpndatabase.db / -wal / -shm counts; a buffer overflow (ret==0,
         // "changes lost") counts too - over-signaling only wakes a retry early.
         bool hit = (ret == 0);
-        for (BYTE* p = buf.data();
-             !hit && ret && p + sizeof(FILE_NOTIFY_INFORMATION) <= buf.data() + ret; )
+        for (BYTE* p = b0;
+             !hit && ret && p + sizeof(FILE_NOTIFY_INFORMATION) <= b0 + ret; )
         {
             FILE_NOTIFY_INFORMATION* fi = (FILE_NOTIFY_INFORMATION*)p;
             if (fi->FileNameLength >= 14 * sizeof(wchar_t) &&
@@ -2269,7 +2276,9 @@ static DWORD WINAPI WalWatchThread(LPVOID)
         if (hit)
             SetEvent(g_shadow.walEvt);   // NOT the listing's trigger: a listing writes this database too (see g_etwHit)
     }
-    CloseHandle(h);
+    }
+    catch (...) { try { BLogE(L"WALWATCH thread threw - the watch is off, retries take the timed fallback"); } catch (...) {} }
+    if (h != INVALID_HANDLE_VALUE) CloseHandle(h);
     return 0;
 }
 
@@ -2436,14 +2445,21 @@ static DWORD WINAPI ShadowWorkerThread(LPVOID)
         if (WaitForMultipleObjects(2, hs, FALSE, INFINITE) == WAIT_OBJECT_0) return 0;
         for (;;)
         {
-            ShadowJob j;
+            // A THROW COSTS ONE JOB, NOT THE BRIDGE (census P10): the job's move out of the queue sat outside
+            // ShadowClassifyWork's own try. The toast it carried gets no verdict from here, and its listing's bound
+            // publishes `window` for it, as for any verdict that does not come in time.
+            try
             {
-                CsGuard g(&g_shadow.lock);
-                if (g_shadow.q.empty()) break;
-                j = std::move(g_shadow.q.front());
-                g_shadow.q.pop_front();
+                ShadowJob j;
+                {
+                    CsGuard g(&g_shadow.lock);
+                    if (g_shadow.q.empty()) break;
+                    j = std::move(g_shadow.q.front());
+                    g_shadow.q.pop_front();
+                }
+                ShadowClassifyWork(j);
             }
-            ShadowClassifyWork(j);
+            catch (...) { try { BLogE(L"SHADOW worker: a job threw outside its classify guard - dropped, the worker goes on"); } catch (...) {} }
             if (WaitForSingleObject(g_shadow.stopEvt, 0) == WAIT_OBJECT_0) return 0;
         }
     }
@@ -2751,15 +2767,29 @@ static DWORD WINAPI ShortcutScanThread(LPVOID)
     if (bg) SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_END);
     if (co) CoUninitialize();
     const size_t senders = entries.size();
+    // THE SWAP AND ITS LINE ARE GUARDED TOO (census P10): both sat after the try, where a throw (the hand-off's publish,
+    // the log line) was std::terminate. A scan that cannot end is aborted, so its waiters are released and a later
+    // miss may scan again.
+    bool ended = false;
+    try
     {
-        ActivatorLockEnsure();
-        CsGuard g(&g_activatorLock);
-        g_shortcutMap.EndScan(std::move(entries), GetTickCount64());
+        {
+            ActivatorLockEnsure();
+            CsGuard g(&g_activatorLock);
+            g_shortcutMap.EndScan(std::move(entries), GetTickCount64());
+            ended = true;
+        }
+        BLog(L"ACTIVATOR scan done: %d shortcut(s) read, %u sender(s) carry an AUMID, %u an activator, ms=%llu (%s%s); refreshed at most "
+             L"once per %u min, on a miss", files, (UINT)senders, withActivator, GetTickCount64() - t0,
+             pol.prio == ToastActScanPrio::Lowest ? L"lowest priority" : L"NORMAL priority", bg ? L", background mode" : L"",
+             (UINT)(kToastActScanTtlMs / 60000));
     }
-    BLog(L"ACTIVATOR scan done: %d shortcut(s) read, %u sender(s) carry an AUMID, %u an activator, ms=%llu (%s%s); refreshed at most "
-         L"once per %u min, on a miss", files, (UINT)senders, withActivator, GetTickCount64() - t0,
-         pol.prio == ToastActScanPrio::Lowest ? L"lowest priority" : L"NORMAL priority", bg ? L", background mode" : L"",
-         (UINT)(kToastActScanTtlMs / 60000));
+    catch (...)
+    {
+        if (!ended) { try { CsGuard g(&g_activatorLock); g_shortcutMap.AbortScan(); } catch (...) {} }
+        try { BLogE(L"ACTIVATOR scan threw at its end (%s)", ended ? L"after the swap: the new map stands"
+                                                                   : L"before the swap: aborted, the old map stands"); } catch (...) {}
+    }
     return 0;
 }
 
@@ -3151,7 +3181,54 @@ static std::vector<uint32_t> g_pendingDismiss;        // guest ids queued by the
 
 static void MarkConnDead() { InterlockedExchange(&g_connDead, 1); InterlockedExchange(&g_listWanted, 1); if (g_mainWake) SetEvent(g_mainWake); }
 
-static BOOL PipeXfer(BOOL rd, void* buf, DWORD n, DWORD timeoutMs)
+// THE BRIDGE'S DEPARTURES, HONOURED INSIDE ITS MAIN THREAD'S BLOCKING WAITS (bridge-death census P11). The loop reads the
+// agent's death and the stop file at its top only, and the connect, handshake and send waits below hold that thread for
+// 10-30 s each - past the agent's 3 s wait for a stopping bridge, after which its task delete ends this one. These
+// waits now also wake on the agent's liveness mutex and on the state directory's change notification (BridgeMain
+// sets g_stopWatch to the one its loop waits on). Both are null outside the resident bridge, and the wait is then
+// the one it replaced.
+static HANDLE g_stopWatch = nullptr;   // BridgeMain's FindFirstChangeNotification on the state directory (main thread only)
+
+// Waits for one of `work` (at most 2) for timeoutMs. Returns its index, WAIT_TIMEOUT, or n when the bridge is to
+// depart: the agent's mutex was released or abandoned (this thread then owns it, and the loop top reads it as gone), or
+// the stop file exists. Any other change in the state directory re-arms the watch and waits out the same deadline.
+static DWORD WaitOrDepart(DWORD n, const HANDLE* work, DWORD timeoutMs)
+{
+    HANDLE hs[4]; DWORD m = 0;
+    for (DWORD i = 0; i < n && i < 2; ++i) hs[m++] = work[i];
+    const DWORD iAlive = g_agentAlive ? m : MAXDWORD; if (g_agentAlive) hs[m++] = g_agentAlive;
+    const DWORD iStop = g_stopWatch ? m : MAXDWORD;   if (g_stopWatch) hs[m++] = g_stopWatch;
+    const ULONGLONG until = (timeoutMs == INFINITE) ? 0 : GetTickCount64() + timeoutMs;
+    for (;;)
+    {
+        DWORD left = INFINITE;
+        if (timeoutMs != INFINITE) { const ULONGLONG t = GetTickCount64(); left = (t >= until) ? 0 : (DWORD)(until - t); }
+        const DWORD w = WaitForMultipleObjects(m, hs, FALSE, left);
+        if (w == WAIT_TIMEOUT) return WAIT_TIMEOUT;
+        const DWORD k = (w >= WAIT_ABANDONED_0 && w < WAIT_ABANDONED_0 + m) ? (w - WAIT_ABANDONED_0)
+                      : (w < WAIT_OBJECT_0 + m) ? (w - WAIT_OBJECT_0) : MAXDWORD;
+        if (k < n) return k;
+        if (k == iAlive) { BLog(L"DEPART the agent is gone - a blocking wait ends early"); return n; }
+        if (k == iStop)
+        {
+            FindNextChangeNotification(g_stopWatch);
+            if (GetFileAttributesW((StateDir() + L"\\stop").c_str()) != INVALID_FILE_ATTRIBUTES)
+            {
+                // This wait re-armed the watch the loop's own wait sleeps on, so the loop is woken here: its top reads
+                // the stop file and leaves.
+                BLog(L"DEPART stop requested - a blocking wait ends early");
+                if (g_mainWake) SetEvent(g_mainWake);
+                return n;
+            }
+            continue;
+        }
+        return WAIT_FAILED;
+    }
+}
+
+// mainThread: the caller is the bridge's main thread, so the wait also ends on a departure (WaitOrDepart). The reader
+// thread passes FALSE: the change notification is the main thread's, and the reader ends with the connection.
+static BOOL PipeXfer(BOOL rd, void* buf, DWORD n, DWORD timeoutMs, BOOL mainThread = FALSE)
 {
     BYTE* b = (BYTE*)buf; DWORD done = 0;
     HANDLE evt = rd ? g_rdEvt : g_wrEvt;
@@ -3162,7 +3239,7 @@ static BOOL PipeXfer(BOOL rd, void* buf, DWORD n, DWORD timeoutMs)
                      : WriteFile(g_pipe, b + done, n - done, nullptr, &ov);
         if (!ok && GetLastError() != ERROR_IO_PENDING) return FALSE;
         HANDLE hs[2] = { evt, g_connStop };
-        DWORD w = WaitForMultipleObjects(2, hs, FALSE, timeoutMs);
+        DWORD w = mainThread ? WaitOrDepart(2, hs, timeoutMs) : WaitForMultipleObjects(2, hs, FALSE, timeoutMs);
         if (w != WAIT_OBJECT_0)
         {
             CancelIoEx(g_pipe, &ov);
@@ -3330,7 +3407,8 @@ static bool ConnUp()
     if (!CreateProcessW(nullptr, cmd, nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi))
     { BLog(L"CreateProcess(qrexec-client-vm) failed %lu", GetLastError()); abortConnect(); ConnDown(); return false; }
     CloseHandle(pi.hThread);
-    WaitForSingleObject(pi.hProcess, 10000);
+    if (WaitOrDepart(1, &pi.hProcess, 10000) == 1)   // the bridge departs (census P11); the client finishes on its own
+    { CloseHandle(pi.hProcess); abortConnect(); ConnDown(); return false; }
     DWORD ec = 1; GetExitCodeProcess(pi.hProcess, &ec);
     CloseHandle(pi.hProcess);
     if (ec != 0) { BLog(L"qrexec-client-vm exited %lu", ec); abortConnect(); ConnDown(); return false; }
@@ -3340,8 +3418,12 @@ static bool ConnUp()
         // A dom0 policy refusal is invisible here (exit 0 above means "handed to the agent"
         // only) - the relay then never connects and this wait is the failure detector.
         HANDLE hs[2] = { g_rdEvt, g_connStop };
-        if (WaitForMultipleObjects(2, hs, FALSE, 15000) != WAIT_OBJECT_0)
-        { BLog(L"relay never connected (policy refusal? no session?)"); abortConnect(); ConnDown(); return false; }
+        const DWORD cw = WaitOrDepart(2, hs, 15000);
+        if (cw != WAIT_OBJECT_0)
+        {
+            if (cw != 2) BLog(L"relay never connected (policy refusal? no session?)");
+            abortConnect(); ConnDown(); return false;
+        }
         DWORD x;
         if (!GetOverlappedResult(g_pipe, &ov, &x, FALSE) && GetLastError() != ERROR_PIPE_CONNECTED)
         { BLog(L"pipe connect completion failed %lu", GetLastError()); ConnDown(); return false; }
@@ -3350,11 +3432,11 @@ static bool ConnUp()
     // Handshake: the server speaks first (u32 LE version), we echo major + min(minor, ours=0).
     // wait-for-session can hold this until a dom0 GUI session exists - generous timeout.
     BYTE v[4];
-    if (!PipeXfer(TRUE, v, 4, 30000)) { BLog(L"handshake: no server version"); ConnDown(); return false; }
+    if (!PipeXfer(TRUE, v, 4, 30000, TRUE)) { BLog(L"handshake: no server version"); ConnDown(); return false; }
     uint32_t sv = GetU32(v);
     if ((sv >> 16) != 1) { BLog(L"handshake: server major %u (want 1)", sv >> 16); ConnDown(); return false; }
     std::vector<BYTE> rep; PutU32(rep, 1u << 16);
-    if (!PipeXfer(FALSE, rep.data(), 4, 10000)) { BLog(L"handshake: reply write failed"); ConnDown(); return false; }
+    if (!PipeXfer(FALSE, rep.data(), 4, 10000, TRUE)) { BLog(L"handshake: reply write failed"); ConnDown(); return false; }
 
     InterlockedExchange(&g_connDead, 0);
     g_reader = CreateThread(nullptr, 0, ReaderThread, nullptr, 0, nullptr);
@@ -3399,9 +3481,14 @@ static bool ForwardText(std::wstring const& title, std::wstring const& body, uin
 
     auto frame = EncodeNotifyFrame(seq, Utf8(title.empty() ? L"Notification" : title), Utf8(body), kind, actions);
     g_awaitSeq = seq; g_awaitOk = 0; ResetEvent(g_ackEvt);
-    if (!PipeXfer(FALSE, frame.data(), (DWORD)frame.size(), 15000)) { rtt(-1); MarkConnDead(); return false; }
-    if (WaitForSingleObject(g_ackEvt, 15000) != WAIT_OBJECT_0)
-    { rtt(-2); BLog(L"send seq=%llu: ack timeout", (ULONGLONG)seq); MarkConnDead(); return false; }
+    if (!PipeXfer(FALSE, frame.data(), (DWORD)frame.size(), 15000, TRUE)) { rtt(-1); MarkConnDead(); return false; }
+    const DWORD aw = WaitOrDepart(1, &g_ackEvt, 15000);
+    if (aw != WAIT_OBJECT_0)
+    {
+        rtt(-2);
+        BLog(aw == 1 ? L"send seq=%llu: ack wait ended, the bridge departs" : L"send seq=%llu: ack timeout", (ULONGLONG)seq);
+        MarkConnDead(); return false;
+    }
     rtt(g_awaitOk == 1 ? 1 : 0);
     return g_awaitOk == 1;
 }
@@ -3959,6 +4046,15 @@ static void NotifyDeferDrain()
     if (n) BLogW(L"NOTIFY defer-drain: %d deferred notification(s) found at bridge start", n);
 }
 
+// The bridge's drain, on a thread of its own (census P13): a throw in it ends this thread, never the bridge.
+static DWORD WINAPI DeferDrainThread(LPVOID)
+{
+    NameThisThread(L"notifhost: defer-drain");
+    try { NotifyDeferDrain(); }
+    catch (...) { try { BLogE(L"NOTIFY defer-drain threw - what it had not sent stays queued for the next bridge start"); } catch (...) {} }
+    return 0;
+}
+
 static int NotifyOnceMain(std::wstring const& summary, std::wstring const& body, NotifyKind kind)
 {
     // SESSION 0 CANNOT DELIVER. Hand off to the interactive session rather than failing there.
@@ -4190,6 +4286,10 @@ static int BridgeMain()
 {
     NameThisThread(L"notifhost: bridge-main");
     SetUnhandledExceptionFilter(BridgeCrashFilter);   // crash breadcrumb (see BridgeCrashFilter)
+    // THE APARTMENT FIRST (bridge-death census P9): init_apartment throws when this thread already has a different
+    // one, and it ran after the deferred drain and the first BLog had loaded other libraries into this process. Here it
+    // is the first thing the thread does. A throw is caught by wmain's guard around BridgeMain.
+    init_apartment(apartment_type::multi_threaded);
     // ALREADY RUNNING IS NOT "FINISHED". Returning 0 here made a second instance indistinguishable
     // from one that did its work and exited, and the GUI agent reports an unasked clean exit as a
     // death: FIELD-REPORTED by GWeck on 4.3.35 (forum 42717 post 175, screenshot) - "a lot of
@@ -4201,11 +4301,30 @@ static int BridgeMain()
     // QTB_EXIT_ALREADY_RUNNING is its own code so the supervisor can tell "I am already running"
     // from "I finished", and main.c treats it as proof the bridge is alive rather than as a death. The mutex
     // is Local\\QubesToastBridgeSingleton; the holder is the running bridge, and exiting on it is NOT a death.
+    // A HOLDER THE AGENT'S TASK DELETE DID NOT END WAITS ITS TURN (bridge-death census P15). The task's own earlier
+    // instance is ended by the agent's /delete before this one is created, so a holder here was started some other way
+    // (a hand-started --bridge). Exiting left this agent life with no bridge. This instance waits for the holder's
+    // mutex to be released or abandoned, and for nothing else but the agent's own death: no timer.
     HANDLE mtx = CreateMutexW(nullptr, FALSE, L"Local\\QubesToastBridgeSingleton");
     if (mtx) { DWORD w = WaitForSingleObject(mtx, 0); if (w != WAIT_OBJECT_0 && w != WAIT_ABANDONED) {
-        BLog(L"SINGLETON another bridge instance already holds the singleton, exiting %u",
-             (unsigned)QTB_EXIT_ALREADY_RUNNING);
-        return QTB_EXIT_ALREADY_RUNNING; } }
+        BLog(L"SINGLETON another bridge instance holds the singleton - waiting for it to leave%s",
+             g_agentAlive ? L" or for the agent to" : L" (no --alive: the agent's task delete ends this wait)");
+        HANDLE hs[2] = { mtx, g_agentAlive };
+        w = WaitForMultipleObjects(g_agentAlive ? 2 : 1, hs, FALSE, INFINITE);
+        if (w == WAIT_OBJECT_0 + 1 || w == WAIT_ABANDONED_0 + 1)
+        {
+            BLog(L"SINGLETON the agent left while this instance waited, exiting");
+            WriteExitReason(QTB_REASON_AGENT_GONE);
+            return 0;
+        }
+        if (w != WAIT_OBJECT_0 && w != WAIT_ABANDONED_0)
+        {
+            BLog(L"SINGLETON the wait for the other instance failed (%lu, %lu), exiting %u", w, GetLastError(),
+                 (unsigned)QTB_EXIT_ALREADY_RUNNING);
+            return QTB_EXIT_ALREADY_RUNNING;
+        }
+        BLog(L"SINGLETON the other instance left (%s) - this one starts", w == WAIT_ABANDONED_0 ? L"abandoned" : L"released");
+    } }
     ProcessIdToSessionId(GetCurrentProcessId(), &g_mySession);
 
     InitializeCriticalSection(&g_corrLock);
@@ -4215,12 +4334,9 @@ static int BridgeMain()
     g_connStop = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     g_ackEvt = CreateEventW(nullptr, FALSE, FALSE, nullptr);
 
-    // DRAIN ANY DEFERRED NOTIFICATION FIRST. This process is the session-resident bridge, so it is
-    // the one place with a route when the one-shot path had none (NOTIFYLOSTINSESSIONGAP): a message
-    // raised in the gap between a bridge stopping and a session existing is queued by
-    // NotifyDeferWrite and sent here. Before the stop file is cleared and before any polling, so a
-    // queued user-facing message is not held behind this instance's own startup.
-    NotifyDeferDrain();
+    // THE DEFERRED NOTICES ARE DRAINED ON THEIR OWN THREAD, STARTED ONCE THE PID IS PUBLISHED (DeferDrainThread,
+    // after HoldStart below; census P13). They were drained here, first: each child is waited on for up to 30 s, so
+    // two slow ones held the pid past the agent's 60 s mark.
 
     std::wstring stopf = StateDir() + L"\\stop";
     DeleteFileW(stopf.c_str());       // a stale stop request must not kill a fresh start
@@ -4238,7 +4354,6 @@ static int BridgeMain()
     std::vector<std::wstring> gapAumids;
     BannerRestoreAll(&gapAumids);
 
-    init_apartment(apartment_type::multi_threaded);
     EnsureConsent();
     // AN EXPLICIT DENY STOPS THIS BRIDGE BY ITS OWN READING (docs/ADR-toasts.md 12), whatever the access check would
     // answer: on 25H2 Windows granted access over a user or device Deny. It sends that setting's notice, records the
@@ -4413,12 +4528,23 @@ static int BridgeMain()
         else BLog(L"BRIDGE no --ready from the agent (mixed install?) - it will find our pid only on its own wakes");
     }
     HoldStart();   // the toast-hold records are live from here (ADR-toasts 10)
+    // DRAIN ANY DEFERRED NOTIFICATION, OFF THIS THREAD (census P13). This process is the session-resident bridge, so it
+    // is the one place with a route when the one-shot path had none (NOTIFYLOSTINSESSIONGAP): a message raised in the
+    // gap between a bridge stopping and a session existing is queued by NotifyDeferWrite and sent here. Its children
+    // are waited on (up to 30 s each) by that thread, so neither the pid above nor this loop waits behind them. It is
+    // not joined: the children are separate processes, and one this bridge's exit cuts off keeps its file queued.
+    {
+        HANDLE drain = CreateThread(nullptr, 0, DeferDrainThread, nullptr, 0, nullptr);
+        if (drain) CloseHandle(drain);
+        else { BLog(L"NOTIFY defer-drain thread not started (%lu) - draining on the bridge's main thread", GetLastError()); NotifyDeferDrain(); }
+    }
     // Without --alive (an older agent: a mixed install?) the agent's death falls back to the 30 s pid probe.
     if (!g_agentAlive)
         BLog(L"BRIDGE no --alive from the agent, its death is seen only by a 30 s poll");
     g_mainWake = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     HANDLE stopChg = FindFirstChangeNotificationW(StateDir().c_str(), FALSE, FILE_NOTIFY_CHANGE_FILE_NAME);
     if (stopChg == INVALID_HANDLE_VALUE) { stopChg = nullptr; BLog(L"BRIDGE stop-dir watch failed %lu - the stop file is seen on the next wake only", GetLastError()); }
+    g_stopWatch = stopChg;   // the connect, handshake and send waits of this thread end on a stop too (WaitOrDepart)
     HANDLE consentEvt = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     HKEY consentKeys[2] = { nullptr, nullptr };
     static const wchar_t* kConsentPath =
@@ -4440,7 +4566,16 @@ static int BridgeMain()
         RegisterClassExW(&wc);
         msgWnd = CreateWindowExW(0, L"QubesToastBridgeMsg", L"", 0, 0, 0, 0, 0, HWND_MESSAGE, nullptr,
                                  GetModuleHandleW(nullptr), nullptr);
-        if (!msgWnd || !WTSRegisterSessionNotification(msgWnd, NOTIFY_FOR_THIS_SESSION))
+        // EVERY SESSION, not this one only (census P7): a console that leaves this session and attaches to another sends
+        // that other session's connect, which NOTIFY_FOR_THIS_SESSION does not deliver here.
+        if (msgWnd && !WTSRegisterSessionNotification(msgWnd, NOTIFY_FOR_ALL_SESSIONS))
+        {
+            BLog(L"BRIDGE session notification for every session refused (%lu) - this session's only: a console attached "
+                 L"elsewhere is seen on the next wake", GetLastError());
+            if (!WTSRegisterSessionNotification(msgWnd, NOTIFY_FOR_THIS_SESSION))
+                BLog(L"BRIDGE session notification unavailable (%lu) - a console change is seen on the next wake only", GetLastError());
+        }
+        else if (!msgWnd)
             BLog(L"BRIDGE session notification unavailable (%lu) - a console change is seen on the next wake only", GetLastError());
     }
     bool consentChanged = true;   // checked once at entry, then on every change of its keys
@@ -4466,7 +4601,14 @@ static int BridgeMain()
             if (aw == WAIT_ABANDONED || aw == WAIT_OBJECT_0) { BLog(L"agent gone (its liveness mutex was released)"); WriteExitReason(QTB_REASON_AGENT_GONE); break; }
         }
         else if (AgentGone()) { BLog(L"agent gone"); WriteExitReason(QTB_REASON_AGENT_GONE); break; }
-        if (WTSGetActiveConsoleSessionId() != g_mySession) { BLog(L"session changed"); WriteExitReason(QTB_REASON_SESSION_CHANGED); break; }
+        // 0xFFFFFFFF IS NOT A CHANGE (census P7): Windows answers it while the console is being attached or detached,
+        // and it names no other session. The attach that ends it is a WM_WTSSESSION_CHANGE this window is registered for
+        // in every session, so a real change is read on that wake. A real change keeps the owner's decided exit
+        // (2026-10-08, quoted in the agent's main.c: "now we make sure session stays" - and loud).
+        {
+            const DWORD console = WTSGetActiveConsoleSessionId();
+            if (console != 0xFFFFFFFF && console != g_mySession) { BLog(L"session changed (%lu -> %lu)", g_mySession, console); WriteExitReason(QTB_REASON_SESSION_CHANGED); break; }
+        }
         if (GetFileAttributesW(stopf.c_str()) != INVALID_FILE_ATTRIBUTES) { BLog(L"stop requested"); WriteExitReason(QTB_REASON_STOP_REQUESTED); break; }
 
         // connection maintenance. Down => toasts stay on the window path (fail-open: the listing below
@@ -4530,7 +4672,25 @@ static int BridgeMain()
             armConsent();   // one-shot notifications: re-arm before reading, so no change between is lost
             try {
                 if (listener.GetAccessStatus() != UserNotificationListenerAccessStatus::Allowed)
-                { BLog(L"FATAL consent revoked - restoring banners, exiting"); rc = 2; break; }
+                {
+                    // AN EXPLICIT DENY WHILE IT RUNS IS THE STAND-DOWN THE START TAKES (docs/ADR-toasts.md 12; census P5):
+                    // that setting's notice ("exit code 2 (... access off)", notifytexts.h), the reason recorded, exit 2.
+                    // The agent reads a recorded listener-denied-* reason at exit 2 from the bridge it adopted, so this
+                    // is not reported as a death. A policy refusal or a reading that names neither records nothing and
+                    // keeps the FATAL: a death, as before.
+                    std::wstring readout;
+                    const char* key = ListenerDenialReason(readout);
+                    if (strcmp(key, "listener-denied-device") == 0 || strcmp(key, "listener-denied-user") == 0)
+                    {
+                        BLog(L"consent revoked: an explicit Deny %s -> %S - standing down, restoring banners, exiting",
+                             readout.c_str(), key);
+                        ReportErrorSelf(key);   // notifytexts.h: that reason's listener-denied-* row, as at the start
+                        const std::wstring wkey(key, key + strlen(key));
+                        WriteExitReason(wkey.c_str());
+                        rc = 2; break;
+                    }
+                    BLog(L"FATAL consent revoked %s -> %S - restoring banners, exiting", readout.c_str(), key); rc = 2; break;
+                }
             } catch (...) {}
         }
 
@@ -4951,6 +5111,33 @@ static int BridgeMain()
             failStreak++;
             BLog(L"poll error (%d)", failStreak);
             if (failStreak >= 30) { BLog(L"FATAL 30 consecutive poll errors"); rc = 3; break; }
+            // THE LISTENER IS TAKEN AGAIN AFTER A FAILED LISTING (census P4). This bridge held the one it took at its
+            // start for its life, so a notification platform that restarted left every later listing throwing on a
+            // dead proxy until the 30th ended the bridge. Now the listing that fails takes Current() again and moves
+            // the NotificationChanged subscription onto it. The first failure of a streak also asks for one listing on
+            // the fresh listener (its event, not a timer); later ones list on the push sources' signals as before. The
+            // 30th failure in a row still exits: a bridge that stays up and cannot list would have the agent hold every
+            // banner it never records - lost, where its exit makes the agent show them.
+            try
+            {
+                auto fresh = UserNotificationListener::Current();
+                if (pushArmed) { try { listener.NotificationChanged(changedTok); } catch (...) {} pushArmed = false; }
+                listener = fresh;
+                if (toastEvt)
+                {
+                    try
+                    {
+                        changedTok = listener.NotificationChanged(
+                            [toastEvt](UserNotificationListener const&, auto const&) { SetEvent(toastEvt); });
+                        pushArmed = true;
+                    }
+                    catch (...) {}
+                }
+                BLog(L"LISTENER taken again after poll error %d - NotificationChanged %s", failStreak,
+                     pushArmed ? L"re-armed" : L"not armed (the ETW proxy's signal or the floor drives the listing)");
+                if (failStreak == 1 && toastEvt) SetEvent(toastEvt);
+            }
+            catch (...) { BLog(L"LISTENER could not be taken again after poll error %d - the one held stays", failStreak); }
         }
         BLog(L"LIST trig=%s n=%u new=%d ms=%llu", listTrig, listN, sawNew ? 1 : 0, GetTickCount64() - listT0);
         // A WAL-triggered listing that found nothing new may have run before its toast became listable: retry it, twice
@@ -5030,6 +5217,7 @@ static int BridgeMain()
     if (msgWnd) { WTSUnRegisterSessionNotification(msgWnd); DestroyWindow(msgWnd); }
     for (HKEY k : consentKeys) if (k) RegCloseKey(k);
     if (consentEvt) CloseHandle(consentEvt);
+    g_stopWatch = nullptr;
     if (stopChg) FindCloseChangeNotification(stopChg);
     ShadowWorkerStop();   // bounded joins (worker + WAL watcher)
     EtwTierStop();        // bounded join of the IPC client; no kernel session to reap -
@@ -5342,7 +5530,16 @@ int wmain(int argc, wchar_t** argv)
     }
     if (dump) return DumpMain();
     if (probePush) return ProbePushMain(probeSecs, probeSub);
-    if (bridge) return BridgeMain();
+    // THE PROLOGUE'S THROW IS SAID (census P9): BridgeMain's loop has its own guard, and nothing caught a C++ throw
+    // before it (the apartment, a container's bad_alloc) or after it - std::terminate, exit 3, no line. It still
+    // leaves, with exit 3 as the listener-init failure does; the agent reports that exit as it does any other.
+    if (bridge)
+    {
+        try { return BridgeMain(); }
+        catch (winrt::hresult_error const& e) { try { BLogE(L"FATAL bridge outside its loop threw 0x%08lX - exiting 3", (unsigned long)e.code().value); } catch (...) {} }
+        catch (...) { try { BLogE(L"FATAL bridge outside its loop threw (not an HRESULT) - exiting 3"); } catch (...) {} }
+        return 3;
+    }
 
     // ---- legacy in-guest toast interceptor (default mode) ----
     // single instance per session
