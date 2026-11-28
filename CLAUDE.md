@@ -61,7 +61,8 @@ Latched once at Init. A working component that stops is a failure, not a capabil
 
 ## Toasts
 - **Stacked toasts are NORMAL and REQUIRED.** Owner 2026-11-24: «stacking toasts is NORMAL and REQUIRED and should not
-  be "corrected" or "held"». dom0 stacks every toast of the guest's stack, each exactly once (owner 2026-11-28, ADR-toasts
-  13 amended); nothing holds, gates, unmaps or crops a toast already shown. docs/ADR-toasts.md 13.
+  be "corrected" or "held"». dom0 stacks every toast of the guest's stack, each exactly once; nothing unmaps or crops a
+  toast already shown, and while a read names a new card dom0 keeps the shown toasts' last frame (R1) (owner
+  2026-11-28, ADR-toasts 13 amended, «all accepted»). docs/ADR-toasts.md 13.
 
 See .claude/skills/ for procedures. See findings/rules.md for incident history.

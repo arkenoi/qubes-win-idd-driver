@@ -703,16 +703,19 @@ agent's 60 s `QGANOTIFNOTREADY` ERROR stays for it (Jev 0.49 against 0.49, no ve
 properly stacks. so we just stack them if there is more than one at a time. just make sure there are no duplicates in
 this case, it matters even more.» Confirmed the same day («yes they may be combined», «ok, whatever» to the R1 option,
 «bridge death is serious error, recovery is secondary and mostly irrelevant task, we need it to be prevented, not
-worked around.»):
-- WITHDRAWN: «i want them to be stacked exactly like in non-seamless windows, just on dom0». dom0 does not reproduce
-  the guest banner's stack geometry.
-- When more than one toast is on screen at a time, dom0 stacks them, one under the other, at positions we choose.
-  Toasts the bridge does not take may stay combined in one surface; a bridged toast is never combined.
+worked around.»), and «all accepted» to options A-D and 1:
+- WITHDRAWN: «i want them to be stacked exactly like in non-seamless windows, just on dom0».
+- When more than one toast is on screen at a time, each is shown exactly once: a bridged toast as its own dom0
+  notification, the toasts the bridge does not take in one surface, in the guest's layout (A). A bridged toast is never
+  combined; where one sits between two shown toasts, its place stays as fill with the 2-pixel band and the shown cards
+  keep their guest positions (B).
 - A toast is shown exactly once: as the bridge's dom0 notification or in the stack, never both. A duplicate inside a
-  stack is the defect this section exists to prevent.
+  stack is the defect this section exists to prevent. Two toasts with identical text are two toasts, each with its own
+  record (D).
 - A toast waiting for its verdict does not unmap the toasts already shown.
-- When the read that names a new frame's cards fails, dom0 keeps the previous frame past 3 s and the agent logs an
-  ERROR (R1).
+- When the read that names a new frame's cards fails, dom0 keeps the previous frame of every toast in that surface
+  past 3 s and the agent logs an ERROR (R1, per surface: C). A new stack whose cards cannot yet be laid out waits for
+  that read, with the same ERROR at 3 s and no upper bound (1a).
 - The 2-pixel black band is the gap between two toasts dom0 stacks.
 - Bridge death is a serious error to PREVENT; recovering from it is secondary.
 - Kept unchanged below: «toast must show once», «dom0 shows every card in order of appearance», combining, «no
