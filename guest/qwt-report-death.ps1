@@ -7,7 +7,8 @@
 #   Application  1000 / 1001 (Application Error / Windows Error Reporting: a crash), .NET Runtime 1026
 #                (an unhandled managed exception), and ids 4001-4004 of our source "Qubes Windows Tools"
 #                (a supervisor's child exited unasked - the one death Windows cannot see; 4011-4014, the same
-#                children ended by the system with their session, are recorded there and not subscribed)
+#                children ended by the system with their session, are recorded there and not subscribed),
+#                and its 4021 / 4022 (not deaths: a degraded qrexec agent - QwtDeathDegradedIds below)
 #   System       7031 / 7034 / 7023 / 7024 (Service Control Manager: a service of ours ended)
 #   TaskScheduler/Operational  201 with a non-zero result other than 0x8007050B (an instance of ours the
 #                shutdown reaped - QwtShutdownResultCodes below), 203 (a task of ours failed to launch) and
@@ -315,6 +316,23 @@ function Get-QwtDeathUpdateReason {
 }
 # our own source: event id -> the supervisor that wrote it (include/deathevent.h)
 $script:QwtDeathSupervisorIds = @{ 4001 = 'the GUI agent watchdog'; 4002 = 'the GUI agent'; 4003 = 'the GUI agent'; 4004 = 'the GUI agent' }
+# OUR SOURCE'S TWO DEGRADED STATES (docs/ADR-qrexec.md 3, points 1 and 2; winutils include/log.h): not deaths. Each is
+# written ONCE PER BOOT by the process that met it, and sent to dom0 as an ACTION notice whose line 1 is the owner's words
+# (2026-11-28). Any program may write under this source, so nothing in the record reaches the notice unchecked: the writer
+# must be one this table names, and the detail must have that writer's own shape - ASCII digits, and one of the two
+# pipes the writers serve (core-agent qrexec-agent.h TRIGGER_PIPE_NAME, qubesdb.h QDB_DAEMON_LOCAL_PATH) - or it is
+# left out. A record forged with a named writer still takes that writer's notice for the boot. The notice id is
+# CONSTANT and the component is the writer, so the route's once-per-(component, id)-per-boot rule absorbs a second record
+# of one writer in a boot; the writer's once-per-process fallback (its per-boot key could not be made) can still give
+# one notice per writer - for 4022, at most one each from the qrexec agent and the QubesDB daemon.
+$script:QwtDeathDegradedIds = @{
+    4021 = @{ id = 'calls-untracked'; writers = @('qrexec-agent'); what = 'call table is full'
+              next = 'Calls are stuck and no longer tracked, and the qube should be restarted.'
+              detail = '^(?<v>[0-9]{1,4} of [0-9]{1,4} slots in use)$' }
+    4022 = @{ id = 'call-refused'; writers = @('qrexec-agent', 'qubesdb-daemon'); what = 'refused a call'
+              next = 'The qube is out of memory and refused a call made inside it.'
+              detail = '^pipe \\\\\.\\pipe\\(?<p>qrexec_trigger|qubesdb\.sock): (?<v>no (memory|thread) for the client''s handshake)$' }
+}
 
 # --- the code tables, ONE PER SOURCE (the meaning of a code depends on who reports it) --------------
 $script:QwtDeathCodeTables = @{
@@ -505,7 +523,7 @@ function Get-QwtDeathCodeMeaning {
     $c = [uint32]$Code
     if ($Source -eq 'service') { return '' }
     if ($Source -eq 'process' -and $Exe -and $script:QwtDeathExeCodes.ContainsKey($Exe) -and $script:QwtDeathExeCodes[$Exe].ContainsKey($c)) { return $script:QwtDeathExeCodes[$Exe][$c] }
-    $table = $script:QwtDeathCodeTables[$Source]   # GUARD:codetable
+    $table = $script:QwtDeathCodeTables[$Source]
     if ($Source -eq 'task' -and (Test-QwtDeathExceptionCode $c)) {
         $m = $script:QwtDeathCodeTables['process'][$c]
         if ($m) { return "program crashed: $m" }
@@ -859,6 +877,23 @@ function ConvertFrom-QwtDeathEvent {
             return $r
         }
         'Qubes Windows Tools' {
+            if ($script:QwtDeathDegradedIds.ContainsKey($eventId)) {
+                # %1 text, %2 the writer's module name, %3 its pid, %4 detail (winutils LogAppEventFirstInBoot)
+                $d = $script:QwtDeathDegradedIds[$eventId]
+                $mod = (& $pos 1).ToLowerInvariant()
+                # the record's own %2 is not echoed: it is any program's text, and qwt-deaths.log is read back by Test-QwtDeathLoggedRecord
+                if ($d.writers -notcontains $mod) { $r.reason = "event $eventId of our source names a writer that does not write it"; return $r }
+                $r.ours = $true; $r.kind = 'degraded'; $r.rec = 'degraded'; $r.exe = "$mod.exe"; $r.component = $mod
+                $r.pid = ConvertTo-QwtDeathUInt32 (& $pos 2)
+                $r.anchor = 'none'
+                $m = [regex]::Match((& $pos 3), $d.detail)
+                if ($m.Success) {
+                    $r.detail = $m.Groups['v'].Value
+                    if ($m.Groups['p'].Success) { $r.detail = "pipe $($m.Groups['p'].Value), $($r.detail)" }
+                }
+                $r.label = "$($script:QwtDeathHuman[$r.exe]) $($d.what)"
+                return $r
+            }
             if (-not $script:QwtDeathSupervisorIds.ContainsKey($eventId)) { $r.reason = "event $eventId of our source is not a death record"; return $r }
             $exe = & $pos 1
             if (-not (& $owned $exe '')) { $r.reason = "supervised child '$exe' is not in the table"; return $r }
@@ -969,7 +1004,7 @@ function ConvertFrom-QwtDeathEvent {
                 $r.exe = $script:QwtDeathHelperTasks[$task]; $r.component = $script:QwtDeathExes[$r.exe]; $r.anchor = 'join-only'   # GUARD:helperjoin
             } elseif ($task -in $script:QwtDeathScriptTasks) {
                 $r.exe = ("task:" + $task.TrimStart('\')).ToLowerInvariant(); $r.task = $task; $r.anchor = 'nopid'
-                $r.component = "$($script:QwtDeathTaskNames[$task].id)"   # GUARD:taskid
+                $r.component = "$($script:QwtDeathTaskNames[$task].id)"
                 if (-not $r.component) { $r.component = ($task.TrimStart('\').ToLowerInvariant() -replace '[^a-z0-9-]', '') }
             } else {
                 $r.reason = "task '$task' is not ours"; return $r
@@ -1240,7 +1275,7 @@ function Format-QwtDeathNotice {
             # the exception type is system text: rendered only when the route would accept it (a type named like a secret would
             # make the route refuse the whole notification - a silent death), else left to the event record
             $type = "$($Death.clrType)"
-            if ($type -and (Get-Command Get-QwtNotifyRedactReason -ErrorAction SilentlyContinue) -and (Get-QwtNotifyRedactReason $type)) { $type = '' }   # GUARD:redactfallback
+            if ($type -and (Get-Command Get-QwtNotifyRedactReason -ErrorAction SilentlyContinue) -and (Get-QwtNotifyRedactReason $type)) { $type = '' }
             if ($type) { $codeText = ".NET exception $type" }
             else { $codeText = '.NET exception, type in the event record' }
             $detail = 'Application log, .NET Runtime event 1026'
@@ -1381,12 +1416,47 @@ function Format-QwtDeathNotice {
 # Returns the route's status for a new death, 'enriched' for another record of a counted one,
 # 'not-ours' / 'ignored' otherwise.
 function Invoke-QwtDeathReport {
-    param([Parameter(Mandatory)][string]$XmlText)
+    param([Parameter(Mandatory)][string]$XmlText, [switch]$FromCatchUp)
     $ev = ConvertFrom-QwtDeathEvent -XmlText $XmlText
     if (-not $ev.ours) {
         if ($ev.ignore) { Write-QwtDeathLog 'INFO' "$($ev.origin) ignored: $($ev.reason)"; return 'ignored' }
         Write-QwtDeathLog 'INFO' "$($ev.origin) not ours: $($ev.reason)"
         return 'not-ours'
+    }
+    # A DEGRADED STATE IS NOT A DEATH (QwtDeathDegradedIds): no death number, no ledger, no join, and none of the 'death n
+    # this boot' count. Logged first, then sent under its constant id. ONLY ITS OWN TRIGGER SENDS IT, which fires for a
+    # record as it is written. The catch-up cannot tell this boot's record from an earlier boot's: the pass that scans
+    # (an unseeded one, after a live report stamped the watermark) starts at the previous boot's mark, and in an AppVM
+    # the log, the watermark and the route's markers on C: are its template's at every boot. Both states belong to the
+    # boot that met them, and a restart is what point 1 asks for.
+    # NOT RECORDED IN THE WATERMARK: the watermark exists for a death across a shutdown, which these are not, and a write
+    # of it stamps this boot's token over the previous boot's marks - early in a boot that lets the catch-up read the
+    # previous boot's whole backlog (Invoke-QwtDeathCatchUp, $seed).
+    # AHEAD OF THE ALREADY-REPORTED CHECK BELOW: that check knows deaths only. A degraded record is never put in the
+    # notified set nor written as a DEATH line, so there it could only match another boot's death at the same record id -
+    # an AppVM's Application log restarts from its template's at every boot, so its ids repeat. A second record of one
+    # writer in a boot is the route's per-boot marker's to answer.
+    if ($ev.kind -eq 'degraded') {
+        if ($FromCatchUp) {
+            Write-QwtDeathLog 'INFO' "$($ev.origin) is a degraded-state record - not sent by the catch-up, which cannot tell the boot that wrote it"
+            return 'not-a-death'
+        }
+        $d = $script:QwtDeathDegradedIds[[int]$ev.eventId]
+        $header = $ev.label.Substring(0, 1).ToUpperInvariant() + $ev.label.Substring(1)
+        $code = "Application log event $($ev.eventId)"
+        if ($ev.detail) { $code += ", $($ev.detail)" }
+        $tech = Format-QwtNotifyTechLine -Subject $ev.exe -ProcessId $ev.pid -Code $code -Count 'first this boot' -Evidence 'qwt-deaths.log'
+        Write-QwtDeathLog 'ERROR' "DEGRADED $($ev.origin): $header | $($d.next) | $tech"
+        if (-not (Get-Command Send-QwtError -ErrorAction SilentlyContinue)) {
+            Write-QwtDeathLog 'ERROR' "DEGRADED $($ev.origin) NOT notified: qwt-notify-error.ps1 is missing beside this script"
+            return 'failed:transport'
+        }
+        # not 'notified to dom0 as': the harness counts that phrase as one death row
+        $st = Send-QwtError -Component $ev.component -Id $d.id -Severity ACTION -Header $header -Next $d.next -Tech $tech
+        if ($st -eq 'send') { Write-QwtDeathLog 'INFO' "DEGRADED $($ev.origin): dom0 notice $($ev.component).$($d.id) handed to notifhost" }
+        elseif ($st -eq 'suppressed:duplicate') { Write-QwtDeathLog 'INFO' "DEGRADED $($ev.origin) not sent: the route already took $($ev.component).$($d.id) this boot" }
+        else { Write-QwtDeathLog 'ERROR' "DEGRADED $($ev.origin) NOT notified: route status $st" }
+        return $st
     }
     # ALREADY REPORTED? ASKED HERE, WHERE BOTH PATHS PASS (2026-10-29). These two predicates were
     # called from the catch-up ONLY, so they stopped the order they were written for - live first,
@@ -1758,7 +1828,7 @@ function Invoke-QwtDeathCatchUp {
                 # Invoke-QwtDeathReport decides itself whether a record is one of ours ('not-ours' / 'ignored') and
                 # dedupes per boot, so the catch-up hands it every new record and counts what it accepted. The
                 # subscription's XPath is not available here - this is a scan, and the classifier is the same one.
-                $verdict = Invoke-QwtDeathReport -XmlText $e.ToXml()
+                $verdict = Invoke-QwtDeathReport -XmlText $e.ToXml() -FromCatchUp
                 if ($verdict -notin @('not-ours', 'ignored', 'not-a-death', 'already-reported', 'quiet:scheduled')) {
                     Write-QwtDeathLog 'INFO' "catch-up: $ch record $rid was never reported (its trigger could not run) - reported now ($verdict)"
                     $r.reported++
@@ -1816,7 +1886,7 @@ function Invoke-QwtDeathCatchUp {
                     }
                     $r.scanned++
                     try {
-                        $verdict = Invoke-QwtDeathReport -XmlText $e.ToXml()
+                        $verdict = Invoke-QwtDeathReport -XmlText $e.ToXml() -FromCatchUp
                         if ($verdict -notin @('not-ours', 'ignored', 'not-a-death', 'already-reported', 'quiet:scheduled')) {
                             Write-QwtDeathLog 'INFO' "catch-up: $ch record $rid is OUR death record from before this boot (its trigger could not run - a shutdown refuses them) - reported now ($verdict)"
                             $r.reported++
