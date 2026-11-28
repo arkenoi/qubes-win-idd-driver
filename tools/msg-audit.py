@@ -1596,7 +1596,7 @@ def main():
             got = goingdown_reach_facts(under, a.reask)
             print("UNDER FLOOR %d; %d of them gained a measured teardown path from %s"
                   % (len(under), len(got), a.reask))
-            todo = got
+            todo = [i for i in got if i.get("gd_reach")]   # a matched entry with no how_reached adds nothing
             if not todo:
                 print("FAIL no under-floor site matched the census - the re-ask has no new evidence and "
                       "would be the same question in new words, which is forbidden", file=sys.stderr)

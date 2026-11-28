@@ -4362,6 +4362,7 @@ static int BridgeMain()
     } catch (...) { BLog(L"baseline read failed - will prime on the first good poll, forwarding nothing until then"); }
 
     bool connected = false;                        // a connection is up
+    bool lostInGoingDown = false;                  // the last connection died while the session was going down
     // Per-toast-id count of forward attempts REJECTED BY A LIVE SERVER (reply tag 1/2: ForwardText
     // returns false without marking the connection dead). Such a rejection is deterministic - the
     // center record persists, so unbounded retry would resend at 0.5 Hz forever. Transient failures
@@ -4487,6 +4488,7 @@ static int BridgeMain()
             if (connected)
             {
                 connected = false;
+                lostInGoingDown = HoldSeamlessGoingDown();
                 BLog(L"connection down - toasts take the window path until it is back");
             }
             static const DWORD bo[] = { 5000, 15000, 60000, 300000 };
@@ -4504,6 +4506,7 @@ static int BridgeMain()
             else if ((!allow.empty() || !owned.empty()) && now >= nextReconnect)
             {
                 reconnectHeld = false;
+                lostInGoingDown = false;   // a reconnect outside a going-down: the absence is no longer the going-down's
                 // A fresh connection must trigger an immediate listing pass: toasts left
                 // deliberately unseen while disconnected (fail-open retry) forward NOW,
                 // not at the next NotificationChanged / 30 s floor. Banners are held per toast by the agent (ADR-toasts
@@ -4830,8 +4833,10 @@ static int BridgeMain()
                     // the connection returns cannot double it. Nothing is turned window (ADR-toasts 13).
                     // While the seamless session is going down no relay is started (the reconnect above), so dom0 stays
                     // unreachable by the going-down's own order: information (ADR-supervision 7 item 6), and the
-                    // connection returns only if the end is cancelled.
-                    if (!fresh.empty() && HoldSeamlessGoingDown())
+                    // connection returns only if the end is cancelled. Only for a connection that DIED while the
+                    // going-down held: one that died before it, never came up, or failed to come back once an end was
+                    // cancelled is a fault the going-down did not ask for, and stays ERROR (ADR-supervision 1).
+                    if (!fresh.empty() && lostInGoingDown && HoldSeamlessGoingDown())
                         BLog(L"%u toast(s) claimed for dom0 while dom0 is unreachable - held unforwarded: the session is going "
                              L"down (seamless mode), forwarded only if the end is cancelled; their banners stay unmapped",
                              (UINT)fresh.size());
