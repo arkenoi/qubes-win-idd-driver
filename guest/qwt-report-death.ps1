@@ -447,8 +447,53 @@ function Get-QwtDeathLogDir {
     $script:QwtDeathLogDir = $dir
     return $dir
 }
+# A RECORD'S STRINGS ARE ANY PROGRAM'S TEXT (owner 2026-11-28: "sanitize writer names"). Three rules, each in one place:
+# - A name matched against one of this file's tables is carried as the TABLE's own string, picked by an exact comparison:
+#   printable ASCII only, then OrdinalIgnoreCase. Never by -contains / -in / -eq: those compare linguistically, where a soft
+#   hyphen or a zero-width character weighs nothing, so 'qrexec-ag<U+00AD>ent' -contains-matches 'qrexec-agent'.
+# - A record field rendered into a notice passes a case-sensitive (-cmatch) gate of explicit ASCII classes ending in \z:
+#   -match ignores case, and then [A-Za-z] takes U+212A KELVIN SIGN for 'k'; \d takes any script's digits.
+# - Every line Write-QwtDeathLog writes is printable ASCII: ConvertTo-QwtDeathPrintable writes every other UTF-16 code
+#   unit as \uXXXX and bounds the length. The notices are not escaped: their own text (an updater's localized error) is
+#   no record's, and the route measures what it is given.
+function Get-QwtDeathTableName {
+    param([string]$Name, [object[]]$Names)
+    if (-not $Name -or $Name -cnotmatch '^[\x20-\x7E]{1,260}\z') { return $null }   # \z: '$' also matches before a final LF
+    foreach ($n in $Names) { if ([string]::Equals([string]$n, $Name, [StringComparison]::OrdinalIgnoreCase)) { return [string]$n } }
+    return $null
+}
+# -Hash escapes '#' too. The bound counts output characters, and an escape is never split, so a text may end up to 5 over;
+# a text that is cut then gains its '...(+n chars)' trailer, 12 more plus the digits of n (13 to 22).
+function ConvertTo-QwtDeathPrintable {
+    param([string]$Text, [int]$Max = 4000, [switch]$Hash)
+    if (-not $Text) { return '' }
+    if ($Text.Length -le $Max -and $Text -cmatch '^[\x20-\x7E]*\z' -and -not ($Hash -and $Text.Contains('#'))) { return $Text }
+    $sb = New-Object System.Text.StringBuilder
+    $i = 0
+    while ($i -lt $Text.Length -and $sb.Length -lt $Max) {
+        $c = [int]$Text[$i]
+        if ($c -ge 0x20 -and $c -le 0x7E -and -not ($Hash -and $c -eq 0x23)) { [void]$sb.Append($Text[$i]) } else { [void]$sb.AppendFormat('\u{0:x4}', $c) }
+        $i++
+    }
+    if ($i -lt $Text.Length) { [void]$sb.AppendFormat('...(+{0} chars)', $Text.Length - $i) }
+    return $sb.ToString()
+}
+# A record's free text for a log line (a foreign name, a detail, an exception message that quotes the record): printable
+# ASCII as it is, except '#', escaped like everything else - record text must not be able to spell the 'DEATH #n NEW' and
+# 'DEATH #n notified' lines Test-QwtDeathLoggedRecord reads back, which it matches anywhere in a line.
+function Format-QwtDeathForeign {
+    param([string]$Text, [int]$Max = 64)
+    return (ConvertTo-QwtDeathPrintable $Text $Max -Hash)
+}
+# A writer our source's degraded records do not name: never its text, only its length and first 16 UTF-16 code units.
+function Format-QwtDeathCodePoints {
+    param([string]$Text)
+    $cps = @(); foreach ($ch in ([string]$Text).ToCharArray() | Select-Object -First 16) { $cps += ('U+{0:X4}' -f [int]$ch) }
+    return "length $(([string]$Text).Length): $($cps -join ' ')"
+}
 function Write-QwtDeathLog {
     param([string]$Level, [string]$Message)
+    $Message = ConvertTo-QwtDeathPrintable $Message
     $line = '{0} [{1}] {2}' -f ([DateTime]::UtcNow.ToString('yyyy-MM-dd HH:mm:ss')), $Level, $Message
     try { Write-Host $line } catch { }
     # TWO DESTINATIONS, TRIED IN ORDER, because the old single `try { } catch { }` wrapped the
@@ -820,9 +865,14 @@ function ConvertFrom-QwtDeathEvent {
     # record carries one, must be under our install directory (a foreign gui-agent.exe is not ours).
     $owned = {
         param([string]$exe, [string]$path)
-        $e = $exe.ToLowerInvariant()
-        if (-not $script:QwtDeathExes.ContainsKey($e)) { return $false }   # GUARD:ours
-        if ($path -and -not $path.ToLowerInvariant().StartsWith($script:QwtDeathInstallDir.ToLowerInvariant())) { return $false }
+        $e = "$exe"   # never folded first: U+212A KELVIN SIGN lowercases to 'k', ahead of the exact match
+        if (-not (Get-QwtDeathTableName $e @($script:QwtDeathExes.Keys))) { return $false }   # GUARD:ours
+        if ($path) {
+            # the same rule for the folder: an exact match, or printable ASCII equal ignoring case - the same on 5.1 and 7
+            $dir = "$script:QwtDeathInstallDir"
+            $head = ''; if ($path.Length -ge $dir.Length) { $head = $path.Substring(0, $dir.Length) }
+            if (-not ([string]::Equals($head, $dir, [StringComparison]::Ordinal) -or (Get-QwtDeathTableName $head @($dir)))) { return $false }
+        }
         return $true
     }
 
@@ -830,8 +880,8 @@ function ConvertFrom-QwtDeathEvent {
         'Application Error' {
             if ($eventId -ne 1000) { $r.reason = "Application Error $eventId is not a crash record"; return $r }
             $exe = & $pos 0; $path = & $pos 10
-            if (-not (& $owned $exe $path)) { $r.reason = "faulting application '$exe' ($path) is not ours"; return $r }
-            $r.ours = $true; $r.kind = 'crash'; $r.rec = 'crash'; $r.exe = $exe.ToLowerInvariant(); $r.component = $script:QwtDeathExes[$r.exe]
+            if (-not (& $owned $exe $path)) { $r.reason = "faulting application '$(Format-QwtDeathForeign $exe)' ($(Format-QwtDeathForeign $path 260)) is not ours"; return $r }
+            $r.ours = $true; $r.kind = 'crash'; $r.rec = 'crash'; $r.exe = [string](Get-QwtDeathTableName $exe @($script:QwtDeathExes.Keys)); $r.component = $script:QwtDeathExes[$r.exe]
             $r.pid = ConvertTo-QwtDeathUInt32 (& $pos 8) -Hex
             $r.code = ConvertTo-QwtDeathUInt32 (& $pos 6) -Hex
             $r.anchor = 'pid'
@@ -839,23 +889,23 @@ function ConvertFrom-QwtDeathEvent {
             if ($start -match '^(0x)?([0-9A-Fa-f]{1,16})$') {
                 try { $ft = [DateTime]::FromFileTimeUtc([Convert]::ToInt64($Matches[2], 16)); $ms = ($time - $ft).TotalMilliseconds; if ($ms -ge 0 -and $ms -lt 3.2e10) { $r.ranMs = [long]$ms } } catch { }
             }
-            $r.detail = "faulting module $(& $pos 3) at offset $(& $pos 7)"
+            $r.detail = "faulting module $(Format-QwtDeathForeign (& $pos 3) 260) at offset $(Format-QwtDeathForeign (& $pos 7) 32)"
             $r.label = "$($r.exe) crashed"
             return $r
         }
         'Windows Error Reporting' {
             if ($eventId -ne 1001) { $r.reason = "Windows Error Reporting $eventId is not a report record"; return $r }
             $exe = & $pos 5
-            if (-not (& $owned $exe '')) { $r.reason = "report for '$exe' is not ours"; return $r }
-            $r.ours = $true; $r.kind = 'wer'; $r.rec = 'wer'; $r.exe = $exe.ToLowerInvariant(); $r.component = $script:QwtDeathExes[$r.exe]
+            if (-not (& $owned $exe '')) { $r.reason = "report for '$(Format-QwtDeathForeign $exe)' is not ours"; return $r }
+            $r.ours = $true; $r.kind = 'wer'; $r.rec = 'wer'; $r.exe = [string](Get-QwtDeathTableName $exe @($script:QwtDeathExes.Keys)); $r.component = $script:QwtDeathExes[$r.exe]
             $r.code = ConvertTo-QwtDeathUInt32 (& $pos 11) -Hex
             # JOINS, NEVER OPENS: a 1001 carries no path, so it cannot prove the executable is OURS (a foreign autologon.exe's 1000 is
             # refused by its path - its 1001 must not then open a death of ours), and a 1001 alone is a report, e.g. a hang, not a death.
             $r.anchor = 'join-only'   # GUARD:werjoin
-            foreach ($p in $positional) { if ($p -match '\\WER\\Report(Queue|Archive)\\') { $r.evidence = $p.Trim(); break } }
+            foreach ($p in $positional) { if ($p -match '\\WER\\Report(Queue|Archive)\\') { $r.evidence = Format-QwtDeathForeign $p.Trim() 520; break } }
             # the WER event name is system text (APPCRASH, BEX64, AppHangB1 ...): rendered only if it is shaped so
             $werEvent = & $pos 2
-            if ($werEvent -notmatch '^[A-Za-z0-9]{1,24}$') { $werEvent = 'a report' }
+            if ($werEvent -cnotmatch '^[A-Za-z0-9]{1,24}\z') { $werEvent = 'a report' }
             $r.detail = "WER event $werEvent"
             $r.label = "$($r.exe): Windows Error Reporting recorded $werEvent"
             return $r
@@ -865,11 +915,11 @@ function ConvertFrom-QwtDeathEvent {
             $text = & $pos 0
             $exe = ''
             if ($text -match '(?m)^Application:\s*(\S+)') { $exe = $Matches[1] }
-            if (-not (& $owned $exe '') -or $script:QwtDeathManagedExes -notcontains $exe.ToLowerInvariant()) { $r.reason = "managed application '$exe' is not ours"; return $r }   # GUARD:managedonly
-            $r.ours = $true; $r.kind = 'clr'; $r.rec = 'clr'; $r.exe = $exe.ToLowerInvariant(); $r.component = $script:QwtDeathExes[$r.exe]
+            if (-not (& $owned $exe '') -or -not (Get-QwtDeathTableName $exe $script:QwtDeathManagedExes)) { $r.reason = "managed application '$(Format-QwtDeathForeign $exe)' is not ours"; return $r }   # GUARD:managedonly
+            $r.ours = $true; $r.kind = 'clr'; $r.rec = 'clr'; $r.exe = [string](Get-QwtDeathTableName $exe @($script:QwtDeathExes.Keys)); $r.component = $script:QwtDeathExes[$r.exe]
             $r.anchor = 'nopid-adoptable'
             $type = ''
-            if ($text -match '(?m)^Exception Info:\s*([A-Za-z0-9_.`+]+)') { $type = $Matches[1] }
+            if ($text -cmatch '(?m)^(?i:Exception Info:)\s*([A-Za-z0-9_.`+]+)') { $type = $Matches[1] }   # the class case-sensitive: U+212A is no 'k'
             $r.clrType = $type
             $r.detail = "exception type $type"
             $r.label = "$($r.exe) died of an unhandled .NET exception"
@@ -880,9 +930,9 @@ function ConvertFrom-QwtDeathEvent {
             if ($script:QwtDeathDegradedIds.ContainsKey($eventId)) {
                 # %1 text, %2 the writer's module name, %3 its pid, %4 detail (winutils LogAppEventFirstInBoot)
                 $d = $script:QwtDeathDegradedIds[$eventId]
-                $mod = (& $pos 1).ToLowerInvariant()
-                # the record's own %2 is not echoed: it is any program's text, and qwt-deaths.log is read back by Test-QwtDeathLoggedRecord
-                if ($d.writers -notcontains $mod) { $r.reason = "event $eventId of our source names a writer that does not write it"; return $r }
+                $writer = & $pos 1
+                $mod = Get-QwtDeathTableName $writer $d.writers   # the table's string from here on, never the record's
+                if (-not $mod) { $r.reason = "event $eventId of our source names a writer that does not write it ($(Format-QwtDeathCodePoints $writer))"; return $r }
                 $r.ours = $true; $r.kind = 'degraded'; $r.rec = 'degraded'; $r.exe = "$mod.exe"; $r.component = $mod
                 $r.pid = ConvertTo-QwtDeathUInt32 (& $pos 2)
                 $r.anchor = 'none'
@@ -896,8 +946,8 @@ function ConvertFrom-QwtDeathEvent {
             }
             if (-not $script:QwtDeathSupervisorIds.ContainsKey($eventId)) { $r.reason = "event $eventId of our source is not a death record"; return $r }
             $exe = & $pos 1
-            if (-not (& $owned $exe '')) { $r.reason = "supervised child '$exe' is not in the table"; return $r }
-            $r.ours = $true; $r.kind = 'supervisor'; $r.rec = 'supervisor'; $r.exe = $exe.ToLowerInvariant(); $r.component = $script:QwtDeathExes[$r.exe]
+            if (-not (& $owned $exe '')) { $r.reason = "supervised child '$(Format-QwtDeathForeign $exe)' is not in the table"; return $r }
+            $r.ours = $true; $r.kind = 'supervisor'; $r.rec = 'supervisor'; $r.exe = [string](Get-QwtDeathTableName $exe @($script:QwtDeathExes.Keys)); $r.component = $script:QwtDeathExes[$r.exe]
             $r.pid = ConvertTo-QwtDeathUInt32 (& $pos 2)
             # the exit-code field: a number, "unknown" (an exit nobody observed), or "hung" - the child was still running but
             # stopped answering and its supervisor ended it (include/deathevent.h DEATHEVENT_EXIT_HUNG); a hang is rendered as a hang
@@ -905,9 +955,9 @@ function ConvertFrom-QwtDeathEvent {
             if ($codeText -eq 'hung') { $r.hung = $true }   # GUARD:hang
             if ($codeText -notin 'hung', 'unknown') { $r.code = ConvertTo-QwtDeathUInt32 $codeText }
             $ran = & $pos 4
-            if ($ran -match '^\d{1,12}$') { $r.ranMs = [long]$ran }
+            if ($ran -cmatch '^[0-9]{1,12}\z') { $r.ranMs = [long]$ran }
             $r.anchor = 'pid'
-            $r.detail = (& $pos 5)
+            $r.detail = Format-QwtDeathForeign (& $pos 5) 1024
             if ($r.hung) { $r.label = "$($r.exe) stopped answering (a hang) and was ended by $($script:QwtDeathSupervisorIds[$eventId])" }
             else { $r.label = "$($r.exe) exited without being asked to" }
             # SUPPRESSED ON SHUTDOWN ONLY (owner 2026-10-10, over Jev's keep-the-escalation: "suppress only on shutdown"). A 4001-4004
@@ -933,7 +983,9 @@ function ConvertFrom-QwtDeathEvent {
         'Service Control Manager' {
             if ($eventId -notin 7031, 7034, 7023, 7024) { $r.reason = "Service Control Manager $eventId is not a service-death record"; return $r }
             $display = "$($named['param1'])"
-            if (-not $script:QwtDeathServices.ContainsKey($display)) { $r.reason = "service '$display' is not ours"; return $r }
+            $svc = Get-QwtDeathTableName $display @($script:QwtDeathServices.Keys)
+            if (-not $svc) { $r.reason = "service '$(Format-QwtDeathForeign $display)' is not ours"; return $r }
+            $display = $svc   # the table's string from here on
             # A SERVICE THE SHUTDOWN STOPPED IS NOT A FAILING SERVICE (owner 2026-10-10: the toast surface
             # is reduced to things that require attention, and "if we shut down the guest, none of its
             # components should complain about the fact"). At every shutdown the SCM stops these
@@ -955,11 +1007,11 @@ function ConvertFrom-QwtDeathEvent {
             if ($eventId -in 7023, 7024) { $r.rec = 'scm-error' } else { $r.rec = 'scm-unexpected' }
             # the SCM's own fields are rendered only through a number or a known phrase, never verbatim
             $count = "$($named['param2'])"
-            if ($count -notmatch '^\d{1,6}$') { $count = '?' }
+            if ($count -cnotmatch '^[0-9]{1,6}\z') { $count = '?' }
             $delay = "$($named['param3'])"
-            if ($delay -notmatch '^\d{1,9}$') { $delay = '?' }
+            if ($delay -cnotmatch '^[0-9]{1,9}\z') { $delay = '?' }
             $action = "$($named['param4'])"
-            if ($action -notmatch '^[A-Za-z ]{1,40}$') { $action = 'the configured action' }
+            if ($action -cnotmatch '^[A-Za-z ]{1,40}\z') { $action = 'the configured action' }
             $r.svcCount = $count; $r.svcDelay = $delay; $r.svcAction = $action
             switch ($eventId) {
                 7023 { $r.code = ConvertTo-QwtDeathUInt32 "$($named['param2'])"; $r.anchor = 'nopid'
@@ -996,6 +1048,9 @@ function ConvertFrom-QwtDeathEvent {
             # Microsoft-Windows-TaskScheduler, event 329 v0). ConvertTo-QwtDeathUInt32 of an absent
             # field yields $null, which is what every consumer below already handles.
             $code = ConvertTo-QwtDeathUInt32 "$($named['ResultCode'])"
+            $known = Get-QwtDeathTableName $task (@($script:QwtDeathHelperTasks.Keys) + @($script:QwtDeathScriptTasks))
+            if (-not $known) { $r.reason = "task '$(Format-QwtDeathForeign $task)' is not ours"; return $r }
+            $task = $known   # the table's string from here on
             $r.taskName = $task.TrimStart('\')
             if ($script:QwtDeathHelperTasks.ContainsKey($task)) {
                 # JOINS, NEVER OPENS: the agent supervises its helpers and writes 4002/4003 (pid, exit code) for every exit it did not
@@ -1006,8 +1061,6 @@ function ConvertFrom-QwtDeathEvent {
                 $r.exe = ("task:" + $task.TrimStart('\')).ToLowerInvariant(); $r.task = $task; $r.anchor = 'nopid'
                 $r.component = "$($script:QwtDeathTaskNames[$task].id)"
                 if (-not $r.component) { $r.component = ($task.TrimStart('\').ToLowerInvariant() -replace '[^a-z0-9-]', '') }
-            } else {
-                $r.reason = "task '$task' is not ours"; return $r
             }
             # A HANG OF OURS, STATED BY TASK SCHEDULER ITSELF, AND THE ONE RECORD THAT CAN SAY SO.
             # The 201 this same kill also writes carries ResultCode 2147943691 / LastTaskResult
@@ -1039,7 +1092,7 @@ function ConvertFrom-QwtDeathEvent {
                 # this 201 at all. [[SCANHANGINVISIBLEATTHESUBSCRIPTION]]
                 if ($code -eq 2147943691 -and (& $script:QwtTaskTimedOutProbe "$($named['TaskInstanceId'])")) {   # GUARD:timeoutdup
                     $r.ignore = $true
-                    $r.reason = ("task '$task' instance $($named['TaskInstanceId']) was terminated for exceeding its " +
+                    $r.reason = ("task '$task' instance $(Format-QwtDeathForeign $named['TaskInstanceId']) was terminated for exceeding its " +
                                  'execution time limit - event 329 is the record of that kill and is reported on its ' +
                                  "own; this 201's result code $code is what the stopped process left behind")
                     return $r
@@ -1060,7 +1113,7 @@ function ConvertFrom-QwtDeathEvent {
                 $ended = Test-QwtTaskEndedByShutdown "$($named['TaskInstanceId'])" $time $code   # GUARD:endedbyshutdown
                 if ($ended -eq 'shutdown') {
                     $r.ignore = $true
-                    $r.reason = ("task '$task' instance $($named['TaskInstanceId']) was ENDED by Task Scheduler (event 111) " +
+                    $r.reason = ("task '$task' instance $(Format-QwtDeathForeign $named['TaskInstanceId']) was ENDED by Task Scheduler (event 111) " +
                                  "while the system was shutting down - a stop that was asked for, not a death; its result " +
                                  "code $code is what the stopped process left behind")
                     return $r
@@ -1093,7 +1146,7 @@ function ConvertFrom-QwtDeathEvent {
             }
             return $r
         }
-        default { $r.reason = "provider '$provider' event $eventId is not in the subscription"; return $r }
+        default { $r.reason = "provider '$(Format-QwtDeathForeign $provider)' event $eventId is not in the subscription"; return $r }
     }
 }
 
@@ -1835,7 +1888,7 @@ function Invoke-QwtDeathCatchUp {
                 }
                 $newest = $rid      # handled: the mark may pass it
             } catch {
-                Write-QwtDeathLog 'WARN' "catch-up: $ch record $rid could not be read ($($_.Exception.Message)) - this channel's watermark stays at $newest and the next pass retries from there"
+                Write-QwtDeathLog 'WARN' "catch-up: $ch record $rid could not be read ($(Format-QwtDeathForeign $_.Exception.Message 1024)) - this channel's watermark stays at $newest and the next pass retries from there"
                 break               # do NOT advance past a record we could not read
             }
         }
@@ -1892,7 +1945,7 @@ function Invoke-QwtDeathCatchUp {
                             $r.reported++
                         }
                     } catch {
-                        Write-QwtDeathLog 'WARN' "catch-up: $ch record $rid (ours, pre-boot) could not be read ($($_.Exception.Message))"
+                        Write-QwtDeathLog 'WARN' "catch-up: $ch record $rid (ours, pre-boot) could not be read ($(Format-QwtDeathForeign $_.Exception.Message 1024))"
                     }
                 }
             }
@@ -1941,7 +1994,7 @@ if (-not $script:QwtDeathLibraryOnly) {
         }
         if ($xmlText) { [void](Invoke-QwtDeathReport -XmlText $xmlText) }
     } catch {
-        Write-QwtDeathLog 'ERROR' "reporter failed on $Channel record $RecordId : $($_.Exception.Message)"
+        Write-QwtDeathLog 'ERROR' "reporter failed on $Channel record $RecordId : $(Format-QwtDeathForeign $_.Exception.Message 1024)"
         $exitCode = 1
     }
     exit $exitCode
