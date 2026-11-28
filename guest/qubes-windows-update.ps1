@@ -264,7 +264,8 @@ if ($Action -eq 'hint') {
       if ($hintKey -and ($hintUnr -contains $hintKey)) { continue }
       $hintCount++
     }
-    & 'C:\Program Files\Qubes Tools\bin\qrexec-client-vm.exe' 'dom0|qubes.NotifyUpdates|user|cmd' '/c' 'echo' "$hintCount" 2>&1 | Out-Null
+    # SYSTEM, not 'user': see Report-Availability.
+    & 'C:\Program Files\Qubes Tools\bin\qrexec-client-vm.exe' 'dom0|qubes.NotifyUpdates|SYSTEM|cmd' '/c' 'echo' "$hintCount" 2>&1 | Out-Null
     Log ("hint: $hintClass - Windows' own scan finished at " + $hintScan.TimeCreated.ToString('s') +
          "; $hintAll offer(s) in its result, $hintCount reported to dom0 qubes.NotifyUpdates (exit $LASTEXITCODE)")
   } catch { Log "hint: $hintClass - Windows' own scan result could not be read or reported ($($_.Exception.Message)); nothing is reported" 'WARN' }
@@ -1057,7 +1058,9 @@ function Report-Availability($count){
   $script:St.count = [int]$count; Save
   $qr='C:\Program Files\Qubes Tools\bin\qrexec-client-vm.exe'
   if(-not(Test-Path $qr)){ Log 'qrexec-client-vm.exe not found - cannot report to dom0'; return }
-  try { & $qr 'dom0|qubes.NotifyUpdates|user|cmd' '/c' 'echo' "$count" 2>&1 | Out-Null
+  # The local program is an echo of the count, so it runs as SYSTEM, as qubes-updates-relay.cs:1167 runs the relay.
+  # A literal 'user' is refused where the account signed in has another name (ADR-windows 0, core-agent 04b6e6c).
+  try { & $qr 'dom0|qubes.NotifyUpdates|SYSTEM|cmd' '/c' 'echo' "$count" 2>&1 | Out-Null
         Log "reported $count update(s) to dom0 qubes.NotifyUpdates (exit $LASTEXITCODE)" }
   catch { Log "qubes.NotifyUpdates report failed: $($_.Exception.Message)" }
 }

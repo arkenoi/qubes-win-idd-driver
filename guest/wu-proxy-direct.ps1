@@ -40,7 +40,8 @@ for ($i = 1; $i -le $Repeats; $i++) {
     Remove-Item -LiteralPath $out, ($out + '.meta') -Force -EA SilentlyContinue
     # Pipe-delimited, UNQUOTED as a whole: qrexec-client-vm splits the RAW command line on '|' and
     # does not strip quotes, so wrapping it leaks a quote into the target field.
-    $argline = "$Target|qubes.UpdatesProxy|user|`"$probe`" `"$reqFile`" `"$out`""
+    # SYSTEM, as qubes-updates-relay.cs:1167: a literal 'user' is refused where the account has another name.
+    $argline = "$Target|qubes.UpdatesProxy|SYSTEM|`"$probe`" `"$reqFile`" `"$out`""
     $p = Start-Process -FilePath $qrx -ArgumentList $argline -NoNewWindow -Wait -PassThru
     Start-Sleep -Milliseconds 400
     if (Test-Path $out) {
