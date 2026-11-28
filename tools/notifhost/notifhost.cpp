@@ -4826,9 +4826,16 @@ static int BridgeMain()
                 };
                 if (fresh.empty() || g_connDead)
                 {
-                    if (!fresh.empty())
-                        // Every record here reads bridge and stays the bridge's: the agent never maps it, so forwarding it when
-                        // the connection returns cannot double it. Nothing is turned window (ADR-toasts 13).
+                    // Every record here reads bridge and stays the bridge's: the agent never maps it, so forwarding it when
+                    // the connection returns cannot double it. Nothing is turned window (ADR-toasts 13).
+                    // While the seamless session is going down no relay is started (the reconnect above), so dom0 stays
+                    // unreachable by the going-down's own order: information (ADR-supervision 7 item 6), and the
+                    // connection returns only if the end is cancelled.
+                    if (!fresh.empty() && HoldSeamlessGoingDown())
+                        BLog(L"%u toast(s) claimed for dom0 while dom0 is unreachable - held unforwarded: the session is going "
+                             L"down (seamless mode), forwarded only if the end is cancelled; their banners stay unmapped",
+                             (UINT)fresh.size());
+                    else if (!fresh.empty())
                         BLogE(L"%u toast(s) claimed for dom0 while dom0 is unreachable - held unforwarded (unseen, forwarded when the "
                               L"connection returns); their banners stay unmapped", (UINT)fresh.size());
                     // leave `fresh` UNSEEN so they forward once the connection returns

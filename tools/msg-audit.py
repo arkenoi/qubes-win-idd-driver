@@ -1482,15 +1482,17 @@ def goingdown_reach_facts(items, census_path):
     exactly that field. Attaching it is NEW EVIDENCE IN THE STATE, which is the only thing that licenses
     a re-ask; re-wording the question would not (jev-workflow: `degenerate_ab_ok` 0.51 re-shaped to 1.00
     is the receipt for why). Matched on file plus the NEAREST line within 30, because the census read the
-    tree before this patch moved lines. Returns how many items gained a fact."""
+    tree before this patch moved lines. Returns the items that gained a fact from THIS census - the only
+    ones the re-ask may ask again: a row that still carries an EARLIER census's fact has nothing new here,
+    and asking it again is the forbidden repeat (on 2026-11-28 that was 4 rows outside the 21 asked for)."""
     try:
         census = json.load(open(os.path.join(ROOT, census_path), encoding="utf-8"))
     except (OSError, ValueError):
-        return 0
+        return []
     by_file = {}
     for c in census:
         by_file.setdefault(c.get("file"), []).append(c)
-    n = 0
+    gained = []
     for it in items:
         cands = by_file.get(it["file"]) or []
         near = [c for c in cands if abs((c.get("line") or 0) - (it.get("line") or 0)) <= 30]
@@ -1499,8 +1501,8 @@ def goingdown_reach_facts(items, census_path):
         c = min(near, key=lambda x: abs((x.get("line") or 0) - (it.get("line") or 0)))
         it["gd_reach"] = c.get("how_reached") or ""
         it["gd_guard"] = c.get("existing_guard") or "none"
-        n += 1
-    return n
+        gained.append(it)
+    return gained
 
 
 def goingdown_enforce(judged, window=8, floor=0.70):
@@ -1593,8 +1595,8 @@ def main():
             under = [i for i in judged if (i.get("confidence") or 0) < 0.70]
             got = goingdown_reach_facts(under, a.reask)
             print("UNDER FLOOR %d; %d of them gained a measured teardown path from %s"
-                  % (len(under), got, a.reask))
-            todo = [i for i in under if i.get("gd_reach")]
+                  % (len(under), len(got), a.reask))
+            todo = got
             if not todo:
                 print("FAIL no under-floor site matched the census - the re-ask has no new evidence and "
                       "would be the same question in new words, which is forbidden", file=sys.stderr)
