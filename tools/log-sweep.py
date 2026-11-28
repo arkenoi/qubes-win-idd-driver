@@ -5059,24 +5059,19 @@ def cmd_analyze(a):
     # trusted (LOUDNESSUNREADABLE, DOM0LOUDNEVERFIRES), which is worse than it being noisy.
     # DECLARING IS NOT A FREE PASS: declared_errors_unmatched already fails a declaration that
     # matches nothing, so a run that claims a notification it did not fire is itself a finding.
-    _decl_rx = []
-    for _d in (st.get("context") or {}).get("declared_errors", []):
-        _p = _d.get("pattern") if isinstance(_d, dict) else None
-        if _p:
-            try:
-                _decl_rx.append(re.compile(_p))
-            except re.error:
-                pass   # malformed declarations are already counted by declared_errors_unmatched
-    def _declared_line(raw):
-        return any(rx.search(raw) for rx in _decl_rx)
+    # The declarations compute_metrics (above) compiled and scoped, read through _decl_covers as _run_declared reads
+    # them, so one scoped away from a file ("not_in_file") does not cover that file's lines here either.
+    def _declared_line(fname, raw):
+        _ln = argparse.Namespace(file=fname, raw=raw)
+        return any(_decl_covers(_rx, _ln) for _rx in globals().get("_RUN_DECL_RE") or [])
     # THE SAME SCOPE THE METRICS USE. Recomputed rather than threaded through compute_metrics
     # so there is one factory and no second implementation; module_builds is O(lines).
     # COMPUTED BEFORE THE TWO P1 METRICS BELOW, not after. It sat after them until 2026-10-19, which
     # is the whole defect: the signatures were build-scoped and these were not.
     _sig_prior = build_scope(files, getattr(a, "build", None)).prior   # by NAME: see BuildScope
-    _loud = [x for x in dom0_loud(files, _sig_prior) if not _declared_line(x[2])]
+    _loud = [x for x in dom0_loud(files, _sig_prior) if not _declared_line(x[0], x[2])]
     metrics["dom0_loud_failures"] = len(_loud)
-    _lost = [x for x in dom0_lost(files, _sig_prior) if not _declared_line(x[2])]
+    _lost = [x for x in dom0_lost(files, _sig_prior) if not _declared_line(x[0], x[2])]
     metrics["notifications_lost"] = len(_lost)
     # THESE TWO ARE COUNTED HERE, NOT IN compute_metrics, so they need their lines threaded here or
     # they reach the judge as a bare number like the other ten did. Both line lists are already in

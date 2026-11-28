@@ -46,7 +46,7 @@ BUILD="${BUILD:-}"   # the package_version under test; empty leaves the analyzer
 
 VM="${1:-}"; SINCE="${2:-}"; OUT="${3:-}"
 if [ -z "$VM" ] || [ -z "$SINCE" ] || [ -z "$OUT" ]; then
-  echo "usage: $0 <vm> <since-utc e.g. 2026-10-07T08:00:00Z> <outdir> [--fault-injection] [--marker FILE]... [--declare-error <regex> <why>]... [--tolerate-error <regex> <why>]..." >&2; exit 2
+  echo "usage: $0 <vm> <since-utc e.g. 2026-10-07T08:00:00Z> <outdir> [--fault-injection] [--marker FILE]... [--declare-error <regex> <why>]... [--tolerate-error <regex> <why>]... [--tolerate-error-outside <file-regex> <regex> <why>]..." >&2; exit 2
 fi
 shift 3
 DECL_PAT=(); DECL_WHY=(); DECL_TOL=(); DECL_NOTIN=(); FI_DECLARED=""; MARKERS=()

@@ -3780,6 +3780,7 @@ if [ -x tools/sweep-gate.sh ]; then
     # along with its receipt (Jev on that reason: caused 0.91 conf 0.86). Two instruments grading
     # one campaign must carry the same dispositions. (The suite that asserted they stay in step was
     # DELETED 2026-10-26 with the tally it pinned; the per-cell sweep's own receipt is what stands.)
+    # DIVERGES on 0xe8: the per-cell sweep scopes it away from qrexec-wrapper (--tolerate-error-outside); this gate pools messages with no file, so its 0xe8 here and error-ledger row 47 cover the wrapper's line too.
     --declare-caused-rare 'SetupNetwork: Failed to get qubes-ip|QioWriteBuffer: WriteFile failed with error 0xe8|send_command_to_daemon: write to daemon failed with error 0xe8|wmain: open agent pipe failed with error 0x2'
     'CAUSED by this campaign: every cell subject is given an EMPTY netvm (CLAUDE.md - only a guest that TESTS PV networking gets one), so /qubes-ip legitimately does not exist and the qubesdb client reports a missing pipe or a closed write. Declared for the per-cell sweep since 2026-10-17 with the same receipt; a cell WITH a netvm would not produce these.'
     --declare-caused-rare 'RecreateDuplication: .*BUT THE GEOMETRY CHANGED'
