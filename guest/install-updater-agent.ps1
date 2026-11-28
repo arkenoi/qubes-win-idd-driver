@@ -450,12 +450,24 @@ trap { if ($haveUpdMutex -and $updMutex) { try { $updMutex.ReleaseMutex() } catc
 # THE PERMANENT RELAY IS ENDED THROUGH ITS TASK (ADR-updater 12.4 point 6): on a template it runs from boot and holds the exe open,
 # so an upgrade ends it the way it was started - schtasks /end on QubesUpdatesRelay, never by name or by port - and the wait below
 # then sees the port free. The task is registered and started again after the new exe is in place (step 7b).
+# THE END IS SKIPPED ONLY WHERE THE TASK IS ABSENT. Until 2026-11-28 it ran only on 'Running', so a guest without the
+# ScheduledTasks cmdlets (Get-UpdTaskState reads 'unreadable' there; Set-UpdTaskState says why schtasks is used) skipped it,
+# and the live relay was then ended by its pid below, where the death reporter may read its task's non-zero 201 as a death
+# (Mythos wf_d5074b9e-847 F1; not measured on a guest). Owner: «find the way to track its pid and shut it down properly» -
+# its task is how it was started and how it is ended. No state read here is taken as "nothing runs": the gating above has
+# already DISABLED this task, and /disable does not stop a running instance (UPDTASKPRESTOP, Install-QwtImproved.ps1), so
+# 'Disabled' is read with one alive or not. UPDTASKPRESTOP runs /end on every task it finds for the same reason, and its
+# logged ended+disabled on update tasks with no instance says /end then returns 0 (on an ENABLED task; on a disabled one it
+# is not measured). The exit code is logged either way.
 $relayTask = Get-UpdTaskState 'QubesUpdatesRelay'
-if ($relayTask.state -eq 'Running') {
+if ($relayTask.state -ne 'absent') {
     $prev = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
     try { $o = & schtasks /end /tn QubesUpdatesRelay 2>&1 } finally { $ErrorActionPreference = $prev }
-    Log ("the permanent relay's task QubesUpdatesRelay was running - ended through its task so this deploy can replace the exe (schtasks /end rc=$LASTEXITCODE : " + ($o -join ' ') + ")")
-} else { Log ("the permanent relay's task QubesUpdatesRelay is '" + $relayTask.state + "' - nothing to end") }
+    $endRc = $LASTEXITCODE
+    Log ("the permanent relay's task QubesUpdatesRelay is '" + $relayTask.state + "' - " +
+         $(if ($endRc -eq 0) { 'ended through its task so this deploy can replace the exe' } else { 'schtasks /end did not end it; the wait below decides' }) +
+         " (schtasks /end rc=$endRc : " + ($o -join ' ') + ")")
+} else { Log "the permanent relay's task QubesUpdatesRelay is 'absent' - nothing to end" }
 # ---- WU-INSTALLER-RELAY-WAIT-BEGIN   (tools/tests/wu-installer-relay-test.ps1 extracts this region by these markers)
 # THE RELAY IS NOT KILLED (docs/ADR-updater.md 12.4, 2026-10-03). Until that day this read
 #     Get-Process -Name 'qubes-updates-relay' | Stop-Process -Force
