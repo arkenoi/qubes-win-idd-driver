@@ -648,6 +648,10 @@ honours the timeout; in the list on one that keeps notifications).
 **Status:** ACCEPTED (owner, 2026-11-13; Jev accept 0.95); built (`83b146b3`, agent `8225f30`); measured on
 25H2 with 4.3.43 (Evidence).
 
+**Extended by the owner, 2026-11-28:** «if bridge cannot forward, it shold emit an error and shut down, then we go for
+normal guest toasts indeed.» A Deny made while the bridge runs takes the same stand-down, logged at ERROR, and
+toasts go to guest windows. BUILT: not yet (bridge-prevention build, 2026-11-28).
+
 **Context.** The bridge reads every toast, so Windows' notification-access consent governs it. The consent is a
 `Value` under `...\CapabilityAccessManager\ConsentStore\userNotificationListener`, set per user and per device.
 `EnsureConsent` (`tools/notifhost/notifhost.cpp`) writes `Allow` only when the value is unset. Otherwise it logs
@@ -718,6 +722,8 @@ worked around.»), and «all accepted» to options A-D and 1:
   that read, with the same ERROR at 3 s and no upper bound (1a).
 - The 2-pixel black band is the gap between two toasts dom0 stacks.
 - Bridge death is a serious error to PREVENT; recovering from it is secondary.
+- A bridge that cannot forward emits an ERROR and shuts down; toasts then go to guest windows («if bridge cannot
+  forward, it shold emit an error and shut down, then we go for normal guest toasts indeed.»).
 - Kept unchanged below: «toast must show once», «dom0 shows every card in order of appearance», combining, «no
   doubles», the 3 s rule, a frame waits for a read naming its cards, "Claim, no timer", «if it is lost or double it
   is not tolerated».
